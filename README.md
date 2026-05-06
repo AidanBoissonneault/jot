@@ -1,14 +1,15 @@
 # Jot
 
-Jot is a Chrome MV3 side panel extension for capturing web context into
-structured Notion projects without breaking flow.
+Jot is a Chrome MV3 side panel extension for turning web context into editable
+project pages without breaking flow.
 
-## Phase 0 Stack
+## Stack
 
 - WXT
 - Vue 3
 - TypeScript
 - Pinia
+- Tiptap
 - PostCSS
 - Custom Pico.css-inspired CSS variables
 
@@ -21,5 +22,6 @@ corepack pnpm compile
 corepack pnpm build
 ```
 
-The Phase 0 Notion client is a typed in-memory stub. OAuth and real Notion REST
-calls are intentionally deferred.
+The current storage client is a typed local stub backed by extension storage.
+OAuth and real Notion REST calls are intentionally deferred until the document
+page model is stable.

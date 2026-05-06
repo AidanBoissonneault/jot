@@ -1,306 +1,216 @@
-# Jot — BUILD_PLAN.md
+# Jot - BUILD_PLAN.md
 
 ## Product Definition
 
-Jot is a browser side tab that lets users highlight or drag content from the web directly into structured Notion projects.
+Jot is a browser side panel that gives each project a large editable page for
+capturing and shaping web context without breaking flow.
 
 Core Principle:
-Capture without breaking flow.
+Capture into a living document, not a fixed database.
 
 ---
 
-## Core Features
+## Core Experience
 
-### Sidebar (Persistent UI)
-- Project selector
-- Quick note input
-- Sectioned drop zones:
-  - Notes
-  - Tasks
-  - Ideas
-  - Links
-- Chronological activity feed
-
----
+### Project Page
+- Each project opens into one rich editable page.
+- Users can type, paste, format, rearrange, and refine content directly.
+- Saved highlights and future drops become editable page content.
+- The page is the primary workspace; sectioned capture buckets are no longer the
+  main model.
 
 ### Highlight Capture
-- User selects text on page
-- Mini capture UI appears
-- Options:
-  - Save instantly
-  - Add note
-  - Drag to sidebar
+- User selects text on a web page.
+- A compact inline Save button appears.
+- Saving inserts the selected text into the current project page.
+- Captures include a compact citation line with page title and URL.
 
----
+### Drag and Drop
+- Highlighted or selected web content can later be dragged into the side panel.
+- Drops insert at the visible editor position.
+- The page reacts as a document surface, not a set of category zones.
 
-### Drag and Drop (Signature Feature)
-- Drag highlighted text into sidebar
-- Drop into section to classify:
-  - Notes → Quote
-  - Tasks → Checkbox
-  - Ideas → Tagged note
-  - Links → URL capture
-
----
-
-### Notion Integration
-- Notion is the source of truth
-- All captures stored in Notion databases
-- Sidebar reads and writes via API
+### Project Switching
+- Project selector remains available in the side panel.
+- Each project has separate stored page content.
+- The first version starts with one page per project.
 
 ---
 
 ## UX Flows
 
-### Flow A — Quick Save
-1. Highlight text  
-2. Click save  
-3. Added to current project  
+### Flow A - Write Freely
+1. Open Jot.
+2. Select a project.
+3. Type directly into the project page.
+4. Content saves locally.
 
-### Flow B — Drag Save
-1. Highlight text  
-2. Drag to sidebar  
-3. Drop into section  
-4. Saved to Notion  
+### Flow B - Save Highlight
+1. Highlight text on a web page.
+2. Click Save.
+3. If the side panel editor has focus, insert at the cursor.
+4. Otherwise append to the end of the current project page.
 
-### Flow C — Return to Context
-1. Open sidebar  
-2. Click capture  
-3. Page opens  
-4. Highlight restored  
+### Flow C - Drag Into Page
+1. Highlight or select content on a web page.
+2. Drag into Jot.
+3. Drop at the intended document position.
+4. Jot inserts source-aware editable content.
 
----
-
-## Sidebar Structure
-
-[ Project ▼ ]
-
-[ + Quick note... ]
-
--------------------
-
-Notes
-  - quote
-  - quote
-
-Tasks
-  - checkbox
-  - checkbox
-
-Ideas
-  - idea
-
-Links
-  - link
-
--------------------
-
-Recent Activity
-  - mixed chronological feed
+### Flow D - Return to Source
+1. Click a source citation or restored source affordance.
+2. Open the original page.
+3. Later versions attempt highlight restoration.
+4. Fallback opens the source URL only.
 
 ---
 
-## Drag Interaction Design
+## Side Panel Structure
 
-Step 1 — Highlight  
-User selects text
+[ Project selector ]        [ Save state ]
 
-Step 2 — Drag Start  
-Floating preview appears with selected text
+[ Editor toolbar ]
 
-Step 3 — Sidebar Reaction  
-Sidebar expands if closed  
-Drop zones highlight on hover
+------------------------------------------------
 
-Step 4 — Drop Behavior  
-Notes → Quote block  
-Tasks → Checkbox  
-Ideas → Tagged note  
-Links → URL only  
+Editable project page
 
-Step 5 — Save  
-Immediately pushed to Notion  
-Appears in sidebar
+------------------------------------------------
 
 ---
 
 ## Data Model
 
-### Capture
+### Project
 
-type Capture = {
+```ts
+type Project = {
+  id: string
+  name: string
+  status: 'active' | 'archived'
+  tags: string[]
+}
+```
+
+### ProjectPage
+
+```ts
+type ProjectPage = {
   id: string
   projectId: string
-
-  type: 'quote' | 'task' | 'idea' | 'link'
-
-  content: string
-  note?: string
-
-  sourceUrl: string
-  pageTitle: string
-
-  highlightMeta?: {
-    text: string
-    xpath?: string
-    offset?: number
-  }
-
+  title: string
+  content: DocumentContent
   createdAt: string
+  updatedAt: string
 }
+```
 
----
+### DocumentContent
 
-## Deep Linking System
-
-Stored Data:
-- URL
-- Highlight text
-- Optional DOM selector
-
-Restore Logic:
-1. Open page
-2. Inject script
-3. Locate closest text match
-4. Scroll and highlight
-
-Fallback:
-- Open page only
-
----
-
-## Repository Structure
-
-jot/
-├── apps/
-│   ├── extension/
-│   │   ├── background/
-│   │   ├── content/
-│   │   ├── sidebar/
-│   │   └── popup/
-│   └── web/
-├── packages/
-│   ├── notion-client/
-│   ├── capture-engine/
-│   ├── drag-system/
-│   ├── ui/
-│   └── types/
-├── config/
-└── docs/
+Tiptap JSON is the canonical local document format. It stores editable rich text
+content and can later carry hidden source metadata through custom nodes or marks.
 
 ---
 
 ## Extension Architecture
 
 Content Script:
-- Detects text selection
-- Shows mini capture UI
-- Handles drag start
-- Extracts text, DOM metadata, URL
+- Detects text selection.
+- Shows inline Save UI.
+- Sends selected text and source metadata to the background script.
+- Later handles drag start and richer source metadata.
 
-Sidebar App:
-- Displays project data
-- Handles drop zones
-- Sends capture events
+Side Panel App:
+- Displays project selector and rich page editor.
+- Persists editor content locally.
+- Handles live highlight insertion when the editor is open.
+- Later handles drag/drop insertion previews.
 
 Background Script:
-- Handles Notion OAuth
-- Sends API requests
-- Maintains local cache
+- Receives capture messages.
+- Attempts live insertion into the side panel.
+- Falls back to appending into stored project page content.
+- Later handles Notion auth and sync.
 
 Data Flow:
 
-User Action → Content Script → Background Script → Notion API → Sidebar Update
+User Action -> Content Script -> Background Script -> Side Panel Editor or Local
+Storage -> Future Notion Sync
 
 ---
 
-## Notion Setup
+## Notion Direction
 
-Database: Captures
+Notion integration is deferred until the local document model is stable.
 
-Properties:
-- Name (title)
-- Project (relation)
-- Type (select)
-- URL (url)
-- Page Title (text)
-- Content (rich text)
-- Note (rich text)
-- Created (date)
-- Done (checkbox)
+Likely mapping:
+- Jot projects map to Notion pages or project records.
+- Jot project pages map to Notion page blocks.
+- Source citations can become links, callouts, or synced metadata.
 
-Database: Projects
-
-Properties:
-- Name
-- Status
-- Tags
-
----
-
-## Notion Integration
-
-Requirements:
-- OAuth authentication
-- REST API usage
-
-Core Operations:
-- Create page (capture)
-- Query database (sidebar)
-- Update page (tasks, notes)
+Avoid designing around a capture database until the document-page workflow is
+proven.
 
 ---
 
 ## Build Plan
 
-Phase 0 — Setup (1–2 days)
-- Initialize extension scaffold
-- Setup Notion API client
-- Basic sidebar UI
+### Phase 0 - Setup
+- WXT, Vue 3, TypeScript, Pinia, and side panel shell.
+- Storage-backed local project/page stub.
 
-Phase 1 — Capture MVP (3–5 days)
-- Detect text selection
-- Implement save button
-- Push capture to Notion
-- Display captures in sidebar
+### Phase 1 - Rich Project Page MVP
+- Add Tiptap editor.
+- Replace sectioned zones with one rich editable page.
+- Persist one page per project in local storage.
+- Insert highlighted web text into the page with compact citations.
+- Migrate existing mock captures into starter page content once.
 
-Phase 2 — Drag System (3–4 days)
-- Drag from highlighted text
-- Sidebar drop zones
-- Capture classification
+### Phase 2 - Drag Into Editor
+- Drag highlighted web content into Jot.
+- Show editor insertion preview.
+- Insert source-aware blocks at drop position.
 
-Phase 3 — Deep Linking (3–5 days)
-- Store highlight metadata
-- Restore highlight on revisit
-- Scroll and highlight
+### Phase 3 - Page Management
+- Create, rename, switch, and archive pages inside a project.
+- Keep one active page per project.
+- Preserve local storage compatibility.
 
-Phase 4 — Polish (ongoing)
-- UI and UX improvements
-- Animation smoothing
-- Error handling
-- Loading states
+### Phase 4 - Deep Linking
+- Store source URL, text, and optional DOM metadata.
+- Reopen source pages.
+- Attempt text restoration and scroll-to-highlight.
+- Fallback to opening the source URL.
+
+### Phase 5 - Notion Sync
+- Add OAuth.
+- Map Jot project pages to Notion pages or blocks.
+- Sync local edits and captured source content.
+- Add conflict handling only after the sync shape is proven.
 
 ---
 
 ## Risks and Considerations
 
-Notion API Latency:
-- Mitigation: optimistic UI updates
+Editor Complexity:
+- Tiptap gives strong document behavior but adds dependency and schema concerns.
 
-Highlight Restoration Reliability:
-- Mitigation: fallback to URL
+Source Metadata:
+- Compact visible citations are the first version.
+- Hidden metadata can become a later setting after the capture format is proven.
 
-Drag UX Complexity:
-- Requires careful polish
+Notion Sync:
+- Defer until the page model is stable to avoid locking Jot into the wrong
+  storage shape.
 
 ---
 
 ## Final Positioning
 
 Jot is not:
-- a notes app
+- a capture database
 - a task manager
-- a Notion replacement
+- a rigid Notion schema
 
 Jot is:
-The fastest way to move ideas from the web into Notion projects.
+The fastest way to turn web context into a living project page.
