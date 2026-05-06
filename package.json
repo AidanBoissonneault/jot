@@ -1,0 +1,25 @@
+{
+  "name": "jot",
+  "description": "Capture web highlights into structured Notion projects without breaking flow.",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "wxt",
+    "build": "wxt build",
+    "zip": "wxt zip",
+    "compile": "vue-tsc --noEmit",
+    "postinstall": "wxt prepare"
+  },
+  "dependencies": {
+    "pinia": "^3.0.4",
+    "vue": "^3.5.29"
+  },
+  "devDependencies": {
+    "@wxt-dev/module-vue": "^1.0.3",
+    "postcss": "^8.5.6",
+    "typescript": "^5.9.3",
+    "vue-tsc": "^3.2.5",
+    "wxt": "^0.20.25"
+  }
+}
