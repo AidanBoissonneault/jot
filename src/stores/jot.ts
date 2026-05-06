@@ -68,9 +68,68 @@ export const useJotStore = defineStore('jot', () => {
   }
 
   async function selectProject(projectId: string) {
+    if (projectId === currentProjectId.value) {
+      return;
+    }
+
     currentProjectId.value = projectId;
     await notionClient.setCurrentProjectId(projectId);
     await loadCurrentPage();
+  }
+
+  async function createProject(name: string) {
+    saveStatus.value = 'saving';
+
+    try {
+      const project = await notionClient.createProject(name);
+      projects.value = await notionClient.listProjects();
+      currentProjectId.value = project.id;
+      await loadCurrentPage();
+    } catch (error) {
+      errorMessage.value =
+        error instanceof Error ? error.message : 'Unable to create this project.';
+      saveStatus.value = 'error';
+    }
+  }
+
+  async function renameCurrentProject(name: string) {
+    if (!currentProjectId.value) {
+      return;
+    }
+
+    saveStatus.value = 'saving';
+
+    try {
+      const project = await notionClient.renameProject(currentProjectId.value, name);
+      projects.value = projects.value.map((storedProject) =>
+        storedProject.id === project.id ? project : storedProject,
+      );
+      saveStatus.value = 'saved';
+      errorMessage.value = '';
+    } catch (error) {
+      errorMessage.value =
+        error instanceof Error ? error.message : 'Unable to rename this project.';
+      saveStatus.value = 'error';
+    }
+  }
+
+  async function archiveCurrentProject() {
+    if (!currentProjectId.value) {
+      return;
+    }
+
+    saveStatus.value = 'saving';
+
+    try {
+      const result = await notionClient.archiveProject(currentProjectId.value);
+      projects.value = await notionClient.listProjects();
+      currentProjectId.value = result.currentProjectId;
+      await loadCurrentPage();
+    } catch (error) {
+      errorMessage.value =
+        error instanceof Error ? error.message : 'Unable to archive this project.';
+      saveStatus.value = 'error';
+    }
   }
 
   async function selectPage(pageId: string) {
@@ -349,7 +408,9 @@ export const useJotStore = defineStore('jot', () => {
   }
 
   return {
+    archiveCurrentProject,
     archiveCurrentPage,
+    createProject,
     createPage,
     currentPage,
     currentProject,
@@ -366,6 +427,7 @@ export const useJotStore = defineStore('jot', () => {
     pages,
     projects,
     registerCaptureInsertHandler,
+    renameCurrentProject,
     renameCurrentPage,
     refreshSyncSession,
     saveCurrentPageContent,

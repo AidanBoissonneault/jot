@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "node src/server.js",
     "start": "node src/server.js",
-    "test": "node test/managedBlocks.test.js"
+    "test": "node test/managedBlocks.test.js && node test/projectSync.test.js"
   },
   "dependencies": {
     "@fastify/cors": "^11.2.0",

@@ -64,6 +64,7 @@ const highlightColors = [
 const store = useJotStore();
 const saveTimer = ref<number>();
 const pageTitleDraft = ref('');
+const projectNameDraft = ref('');
 const isSigningIn = ref(false);
 const editorStateVersion = ref(0);
 let activePageId = '';
@@ -176,6 +177,13 @@ const currentPageModel = computed({
   get: () => store.currentPage?.id ?? '',
   set: (pageId: string) => {
     void selectPage(pageId);
+  },
+});
+
+const currentProjectModel = computed({
+  get: () => store.currentProjectId,
+  set: (projectId: string) => {
+    void selectProject(projectId);
   },
 });
 
@@ -321,6 +329,14 @@ watch(
   },
 );
 
+watch(
+  () => store.currentProject?.name,
+  (name) => {
+    projectNameDraft.value = name ?? '';
+  },
+  { immediate: true },
+);
+
 async function initializePanel() {
   await store.initialize();
 }
@@ -346,6 +362,51 @@ async function selectPage(pageId: string) {
 
   await flushEditorContent();
   await store.selectPage(pageId);
+}
+
+async function selectProject(projectId: string) {
+  if (!projectId || projectId === store.currentProjectId) {
+    return;
+  }
+
+  await flushEditorContent();
+  await store.selectProject(projectId);
+}
+
+async function createProject() {
+  await flushEditorContent();
+
+  const name = window.prompt('Project name', 'Untitled Project');
+
+  if (name === null) {
+    return;
+  }
+
+  await store.createProject(name);
+}
+
+async function renameProject() {
+  if (!store.currentProject || projectNameDraft.value === store.currentProject.name) {
+    return;
+  }
+
+  await flushEditorContent();
+  await store.renameCurrentProject(projectNameDraft.value);
+}
+
+async function archiveProject() {
+  if (!store.currentProject) {
+    return;
+  }
+
+  const shouldArchive = window.confirm(`Archive project "${store.currentProject.name}"?`);
+
+  if (!shouldArchive) {
+    return;
+  }
+
+  await flushEditorContent();
+  await store.archiveCurrentProject();
 }
 
 async function createPage() {
@@ -659,6 +720,52 @@ function kebabCase(value: string) {
 
     <section v-if="canUseEditor" class="editor-shell" aria-label="Project page">
       <header class="editor-header">
+        <div class="project-controls">
+          <select
+            v-model="currentProjectModel"
+            aria-label="Project"
+            :disabled="store.isLoading || store.projects.length === 0"
+          >
+            <option
+              v-for="project in store.projects"
+              :key="project.id"
+              :value="project.id"
+            >
+              {{ project.name }}
+            </option>
+          </select>
+
+          <button
+            type="button"
+            class="icon-button"
+            :disabled="store.isLoading"
+            title="New project"
+            @click="createProject"
+          >
+            +
+          </button>
+
+          <button
+            type="button"
+            class="archive-button"
+            :disabled="store.isLoading || !store.currentProject"
+            title="Archive project"
+            @click="archiveProject"
+          >
+            Archive
+          </button>
+        </div>
+
+        <div class="project-title">
+          <input
+            v-model="projectNameDraft"
+            aria-label="Project name"
+            :disabled="store.isLoading || !store.currentProject"
+            @blur="renameProject"
+            @keydown.enter="blurTitleInput"
+          >
+        </div>
+
         <div class="page-controls">
           <select
             v-model="currentPageModel"
@@ -1026,6 +1133,7 @@ function kebabCase(value: string) {
 }
 
 .page-title input,
+.project-title input,
 .editor-header p {
   margin: 0;
 }
@@ -1093,22 +1201,39 @@ function kebabCase(value: string) {
   gap: 6px;
 }
 
-.page-title {
+.project-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 6px;
+}
+
+.page-title,
+.project-title {
   display: grid;
   gap: 3px;
 }
 
-.page-title input {
+.page-title input,
+.project-title input {
   width: 100%;
   min-width: 0;
   border: 0;
   background: transparent;
   color: var(--jot-text);
+}
+
+.project-title input {
+  font-size: 0.9rem;
+  font-weight: 750;
+}
+
+.page-title input {
   font-size: 1rem;
   font-weight: 700;
 }
 
-.page-title input:focus {
+.page-title input:focus,
+.project-title input:focus {
   outline: 2px solid color-mix(in srgb, var(--jot-accent) 34%, transparent);
   outline-offset: 2px;
 }
@@ -1147,6 +1272,7 @@ function kebabCase(value: string) {
 
 .toolbar button,
 .page-controls button,
+.project-controls button,
 .toolbar-select {
   min-width: 30px;
   min-height: 30px;

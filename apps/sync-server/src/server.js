@@ -9,6 +9,7 @@ import path from 'node:path';
 import process from 'node:process';
 import mysql from 'mysql2/promise';
 import { replaceManagedBlocks as replaceManagedBlocksWithDependencies } from './managedBlocks.js';
+import { syncProjectFolder } from './projectSync.js';
 
 loadEnvFile(path.join(process.cwd(), '.env'));
 loadEnvFile(path.join(process.cwd(), 'apps', 'sync-server', '.env'));
@@ -306,6 +307,47 @@ fastify.post('/sync/push', async (request) => {
     }),
   );
 });
+
+fastify.post('/sync/project', async (request) => {
+  const { project, selectedParentPageId } = request.body ?? {};
+
+  if (!project?.id) {
+    return {
+      status: 'error',
+      message: 'Missing project.',
+    };
+  }
+
+  return enqueuePageSync(`project:${project.id}`, () =>
+    syncProjectToNotion({
+      request,
+      project,
+      selectedParentPageId,
+    }),
+  );
+});
+
+async function syncProjectToNotion({
+  request,
+  project,
+  selectedParentPageId,
+}) {
+  const store = await requireConnectedStore(request);
+  const response = await syncProjectFolder({
+    store,
+    project,
+    selectedParentPageId,
+    ensureJotRootPage,
+    ensureProjectRootPage,
+    archiveProjectRootPage,
+    pageSummary,
+  });
+
+  appendLog(store, project.status === 'archived' ? 'project_archived' : 'project_synced', project.name);
+  await writeStore(store);
+
+  return response;
+}
 
 async function pushPageToNotion({
   request,
@@ -1232,6 +1274,15 @@ async function updateChildNotePage(store, pageId, page) {
   return notionRequest(store, `/pages/${pageId}`, {
     method: 'PATCH',
     body,
+  });
+}
+
+async function archiveProjectRootPage(store, pageId) {
+  return notionRequest(store, `/pages/${pageId}`, {
+    method: 'PATCH',
+    body: {
+      archived: true,
+    },
   });
 }
 
