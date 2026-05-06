@@ -8,6 +8,7 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import path from 'node:path';
 import process from 'node:process';
 import mysql from 'mysql2/promise';
+import { replaceManagedBlocks as replaceManagedBlocksWithDependencies } from './managedBlocks.js';
 
 loadEnvFile(path.join(process.cwd(), '.env'));
 loadEnvFile(path.join(process.cwd(), 'apps', 'sync-server', '.env'));
@@ -1235,31 +1236,24 @@ async function updateChildNotePage(store, pageId, page) {
 }
 
 async function replaceManagedBlocks(store, localPageId, notionPageId, content) {
-  const notionBlocks = tiptapDocumentToNotionBlocks(content);
-  const existingBlocks = await listAllBlockChildren(store, notionPageId);
-
-  for (const block of existingBlocks) {
-    await archiveManagedBlock(store, block.id);
-  }
-
-  const createdBlocks = await appendManagedBlocks(store, notionPageId, notionBlocks);
-
-  store.blockMappings[localPageId] = createdBlocks.map((block, index) => ({
+  return replaceManagedBlocksWithDependencies({
+    store,
     localPageId,
-    localNodeId: `block-${index}`,
-    notionBlockId: block.id,
-    kind: kindFromNotionBlock(notionBlocks[index]),
-    lastSyncedHash: hash(JSON.stringify(notionBlocks[index] ?? {})),
-  }));
+    notionPageId,
+    content,
+    listAllBlockChildren,
+    deleteManagedBlock,
+    appendManagedBlocks,
+    tiptapDocumentToNotionBlocks,
+    kindFromNotionBlock,
+    hash,
+  });
 }
 
-async function archiveManagedBlock(store, blockId) {
-  await notionRequest(store, `/blocks/${blockId}`, {
-    method: 'PATCH',
-    body: {
-      archived: true,
-    },
-  }).catch((error) => appendLog(store, 'block_archive_error', error.message));
+async function deleteManagedBlock(store, blockId) {
+  return notionRequest(store, `/blocks/${blockId}`, {
+    method: 'DELETE',
+  });
 }
 
 async function appendManagedBlocks(store, notionPageId, notionBlocks) {

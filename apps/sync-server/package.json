@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "node src/server.js",
-    "start": "node src/server.js"
+    "start": "node src/server.js",
+    "test": "node test/managedBlocks.test.js"
   },
   "dependencies": {
     "@fastify/cors": "^11.2.0",
