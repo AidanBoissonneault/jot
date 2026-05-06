@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { EditorContent, useEditor } from '@tiptap/vue-3';
 import { TextSelection } from '@tiptap/pm/state';
+import type { EditorView } from '@tiptap/pm/view';
 import StarterKit from '@tiptap/starter-kit';
 import {
   decodeJotSource,
@@ -17,6 +18,7 @@ import { useJotStore } from '@/src/stores/jot';
 import type { DocumentContent } from '@/src/types/capture';
 import type {
   CaptureSelectionPayload,
+  ConsumeHeadingDragMessage,
   OpenSourceRequestMessage,
 } from '@/src/types/messages';
 
@@ -62,9 +64,16 @@ const highlightColors = [
 const store = useJotStore();
 const saveTimer = ref<number>();
 const pageTitleDraft = ref('');
+const isSigningIn = ref(false);
 const editorStateVersion = ref(0);
 let activePageId = '';
 let isApplyingStoredContent = false;
+let lastAppliedContent = '';
+let pendingSaveVersion = 0;
+let shouldSkipNextUpdateSave = false;
+let isEditorSaveInFlight = false;
+let shouldSaveAgainAfterCurrentSave = false;
+let sessionPollTimer: number | undefined;
 
 const editor = useEditor({
   extensions: [
@@ -113,7 +122,13 @@ const editor = useEditor({
     handleDrop: (view, event) => {
       const payload = readHeadingDropPayload(event);
 
-      if (!payload) {
+      if (payload) {
+        event.preventDefault();
+        insertLinkedHeadingAtDrop(view, event, payload);
+        return true;
+      }
+
+      if (!isLikelyHeadingDrop(event)) {
         return false;
       }
 
@@ -124,23 +139,13 @@ const editor = useEditor({
 
       event.preventDefault();
 
-      if (dropPosition) {
-        view.dispatch(
-          view.state.tr.setSelection(
-            TextSelection.near(view.state.doc.resolve(dropPosition.pos)),
-          ),
-        );
-      }
+      void consumeHeadingDropPayload(event).then((dragPayload) => {
+        if (!dragPayload) {
+          return;
+        }
 
-      editor.value
-        ?.chain()
-        .focus()
-        .insertContent(createLinkedHeadingContent(payload))
-        .run();
-
-      if (editor.value) {
-        void store.saveCurrentPageContent(editor.value.getJSON() as DocumentContent);
-      }
+        insertLinkedHeadingAtDrop(view, event, dragPayload, dropPosition?.pos);
+      });
 
       return true;
     },
@@ -152,20 +157,18 @@ const editor = useEditor({
       return;
     }
 
+    if (shouldSkipNextUpdateSave) {
+      shouldSkipNextUpdateSave = false;
+      return;
+    }
+
     window.clearTimeout(saveTimer.value);
     saveTimer.value = window.setTimeout(() => {
-      void store.saveCurrentPageContent(editor.getJSON() as DocumentContent);
+      void saveEditorContentOptimistically();
     }, 450);
   },
   onSelectionUpdate: () => {
     editorStateVersion.value += 1;
-  },
-});
-
-const currentProjectModel = computed({
-  get: () => store.currentProjectId,
-  set: (projectId: string) => {
-    void selectProject(projectId);
   },
 });
 
@@ -189,8 +192,44 @@ const saveLabel = computed(() => {
     return 'Save failed';
   }
 
+  if (store.saveStatus === 'stale') {
+    return 'Stale';
+  }
+
   return 'Saved';
 });
+
+const syncBadgeTitle = computed(() => {
+  if (store.errorMessage) {
+    return store.errorMessage;
+  }
+
+  if (!store.syncConfig.connected) {
+    return 'Log in with Notion to sync across devices.';
+  }
+
+  if (!store.syncConfig.selectedParentPageId) {
+    return 'Jot will create a root Notion page with project folders on first sync.';
+  }
+
+  return store.syncConfig.selectedParentPageTitle
+    ? `Synced inside ${store.syncConfig.selectedParentPageTitle}`
+    : saveLabel.value;
+});
+
+const syncBadgeClass = computed(() => ({
+  'sync-badge': true,
+  error: store.saveStatus === 'error',
+  stale:
+    store.saveStatus === 'stale' ||
+    !store.syncConfig.connected,
+  saving: store.saveStatus === 'saving' || store.isLoading,
+  saved:
+    store.saveStatus === 'saved' &&
+    store.syncConfig.connected,
+}));
+
+const canUseEditor = computed(() => store.syncConfig.connected);
 
 const activeBlockType = computed(() => {
   editorStateVersion.value;
@@ -234,13 +273,14 @@ const activeHighlightColor = computed(() => {
 onMounted(() => {
   store.startRuntimeListener();
   store.registerCaptureInsertHandler(insertCaptureAtCursor);
-  void store.initialize();
+  void initializePanel();
 });
 
 onBeforeUnmount(() => {
   window.clearTimeout(saveTimer.value);
+  window.clearInterval(sessionPollTimer);
   if (editor.value && store.currentPage) {
-    void store.saveCurrentPageContent(editor.value.getJSON() as DocumentContent);
+    void saveEditorContentOptimistically();
   }
   editor.value?.destroy();
 });
@@ -262,6 +302,12 @@ watch(
 
     activePageId = page.id;
     pageTitleDraft.value = page.title;
+
+    if (!isPageChange) {
+      return;
+    }
+
+    lastAppliedContent = storedContent;
     isApplyingStoredContent = true;
     editor.value.commands.setContent(page.content, { emitUpdate: false });
     isApplyingStoredContent = false;
@@ -275,19 +321,22 @@ watch(
   },
 );
 
+async function initializePanel() {
+  await store.initialize();
+}
+
 async function insertCaptureAtCursor(payload: CaptureSelectionPayload) {
   if (!editor.value || !store.currentPage) {
     return false;
   }
 
+  shouldSkipNextUpdateSave = true;
   editor.value.chain().focus().insertContent(createCapturedContent(payload)).run();
-  await store.saveCurrentPageContent(editor.value.getJSON() as DocumentContent);
+  queueMicrotask(() => {
+    shouldSkipNextUpdateSave = false;
+  });
+  await saveEditorContentOptimistically();
   return true;
-}
-
-async function selectProject(projectId: string) {
-  await flushEditorContent();
-  await store.selectProject(projectId);
 }
 
 async function selectPage(pageId: string) {
@@ -326,6 +375,33 @@ async function archivePage() {
 
   await flushEditorContent();
   await store.archiveCurrentPage();
+}
+
+async function loginWithNotion() {
+  isSigningIn.value = true;
+  await browser.tabs.create({ active: true, url: store.getSyncLoginUrl() });
+  startSessionPolling();
+}
+
+async function logout() {
+  window.clearInterval(sessionPollTimer);
+  isSigningIn.value = false;
+  await store.logout();
+}
+
+function startSessionPolling() {
+  window.clearInterval(sessionPollTimer);
+  let attempts = 0;
+
+  sessionPollTimer = window.setInterval(() => {
+    attempts += 1;
+    void store.refreshSyncSession().then(() => {
+      if (store.syncConfig.connected || attempts >= 30) {
+        window.clearInterval(sessionPollTimer);
+        isSigningIn.value = false;
+      }
+    });
+  }, 2000);
 }
 
 function blurTitleInput(event: Event) {
@@ -426,8 +502,39 @@ function clearFormatting() {
 async function flushEditorContent() {
   window.clearTimeout(saveTimer.value);
 
-  if (editor.value && store.currentPage) {
-    await store.saveCurrentPageContent(editor.value.getJSON() as DocumentContent);
+  await saveEditorContentOptimistically();
+}
+
+async function saveEditorContentOptimistically() {
+  if (!editor.value || !store.currentPage) {
+    return;
+  }
+
+  if (isEditorSaveInFlight) {
+    shouldSaveAgainAfterCurrentSave = true;
+    return;
+  }
+
+  isEditorSaveInFlight = true;
+
+  const saveVersion = ++pendingSaveVersion;
+
+  try {
+    do {
+      shouldSaveAgainAfterCurrentSave = false;
+      const content = editor.value.getJSON() as DocumentContent;
+      lastAppliedContent = JSON.stringify(content);
+      await store.saveCurrentPageContent(content, {
+        preserveLocalContent: true,
+      });
+    } while (
+      shouldSaveAgainAfterCurrentSave &&
+      editor.value &&
+      store.currentPage &&
+      saveVersion === pendingSaveVersion
+    );
+  } finally {
+    isEditorSaveInFlight = false;
   }
 }
 
@@ -446,6 +553,67 @@ function readHeadingDropPayload(event: DragEvent) {
   }
 }
 
+function isLikelyHeadingDrop(event: DragEvent) {
+  const html = event.dataTransfer?.getData('text/html') ?? '';
+
+  return /<h[1-6](\s|>)/i.test(html);
+}
+
+async function consumeHeadingDropPayload(event: DragEvent) {
+  const text = event.dataTransfer?.getData('text/plain')?.replace(/\s+/g, ' ').trim();
+
+  return browser.runtime
+    .sendMessage({
+      type: 'jot.consumeHeadingDrag',
+      payload: {
+        text,
+      },
+    } satisfies ConsumeHeadingDragMessage)
+    .then((payload: unknown) => {
+      const dragPayload = payload as CaptureSelectionPayload | null;
+
+      return dragPayload?.highlightMeta?.isHeading ? dragPayload : null;
+    })
+    .catch(() => null);
+}
+
+function insertLinkedHeadingAtDrop(
+  view: EditorView,
+  event: DragEvent,
+  payload: CaptureSelectionPayload,
+  resolvedDropPosition?: number,
+) {
+  const dropPosition =
+    typeof resolvedDropPosition === 'number'
+      ? resolvedDropPosition
+      : view.posAtCoords({
+          left: event.clientX,
+          top: event.clientY,
+        })?.pos;
+
+  if (typeof dropPosition === 'number') {
+    view.dispatch(
+      view.state.tr.setSelection(
+        TextSelection.near(view.state.doc.resolve(dropPosition)),
+      ),
+    );
+  }
+
+  shouldSkipNextUpdateSave = true;
+  editor.value
+    ?.chain()
+    .focus()
+    .insertContent(createLinkedHeadingContent(payload))
+    .run();
+  queueMicrotask(() => {
+    shouldSkipNextUpdateSave = false;
+  });
+
+  if (editor.value) {
+    void saveEditorContentOptimistically();
+  }
+}
+
 function kebabCase(value: string) {
   return value.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`);
 }
@@ -454,29 +622,42 @@ function kebabCase(value: string) {
 <template>
   <main class="shell">
     <header class="topbar">
-      <div class="title">
-        <h1>Jot</h1>
-        <p>{{ store.currentProject?.name ?? 'Loading project' }}</p>
+      <div
+        :class="syncBadgeClass"
+        :title="syncBadgeTitle"
+      >
+        <span aria-hidden="true" />
+        {{ saveLabel }}
       </div>
 
-      <select
-        v-model="currentProjectModel"
-        aria-label="Project"
-        :disabled="store.isLoading || store.projects.length === 0"
+      <button
+        v-if="store.syncConfig.connected"
+        type="button"
+        class="secondary-button"
+        @click="logout"
       >
-        <option
-          v-for="project in store.projects"
-          :key="project.id"
-          :value="project.id"
-        >
-          {{ project.name }}
-        </option>
-      </select>
+        Logout
+      </button>
     </header>
+
+    <section
+      v-if="!store.syncConfig.connected"
+      class="auth-gate"
+      aria-label="Notion login"
+    >
+      <h2>Log in with Notion</h2>
+      <button
+        type="button"
+        :disabled="isSigningIn"
+        @click="loginWithNotion"
+      >
+        {{ isSigningIn ? 'Connecting...' : 'Continue with Notion' }}
+      </button>
+    </section>
 
     <p v-if="store.errorMessage" class="error">{{ store.errorMessage }}</p>
 
-    <section class="editor-shell" aria-label="Project page">
+    <section v-if="canUseEditor" class="editor-shell" aria-label="Project page">
       <header class="editor-header">
         <div class="page-controls">
           <select
@@ -769,25 +950,86 @@ function kebabCase(value: string) {
 
 .topbar {
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 10px;
+  align-items: center;
   padding-bottom: 12px;
   border-bottom: 1px solid var(--jot-border);
 }
 
-.title h1,
-.title p,
+.sync-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-self: start;
+  gap: 6px;
+  min-height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--jot-border);
+  border-radius: 999px;
+  background: var(--jot-surface-muted);
+  color: var(--jot-text);
+  font-size: 0.82rem;
+  font-weight: 750;
+}
+
+.sync-badge span {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--jot-muted);
+}
+
+.sync-badge.error {
+  border-color: #dc2626;
+  background: #fef2f2;
+  color: #991b1b;
+}
+
+.sync-badge.error span {
+  background: #dc2626;
+}
+
+.sync-badge.stale {
+  border-color: #f59e0b;
+  background: #fffbeb;
+  color: #92400e;
+}
+
+.sync-badge.stale span {
+  background: #f59e0b;
+}
+
+.sync-badge.saving {
+  border-color: #2563eb;
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.sync-badge.saving span {
+  background: #2563eb;
+}
+
+.sync-badge.saved {
+  border-color: #16a34a;
+  background: #f0fdf4;
+  color: #166534;
+}
+
+.sync-badge.saved span {
+  background: #16a34a;
+}
+
+.secondary-button {
+  border-color: var(--jot-border);
+  background: var(--jot-surface-muted);
+  color: var(--jot-text);
+}
+
 .page-title input,
 .editor-header p {
   margin: 0;
 }
 
-.title h1 {
-  font-size: 1.25rem;
-  font-weight: 750;
-}
-
-.title p,
 .editor-header p {
   color: var(--jot-muted);
 }
@@ -795,6 +1037,36 @@ function kebabCase(value: string) {
 .error {
   margin: 10px 0 0;
   color: var(--jot-warning);
+}
+
+.auth-gate {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+  margin-top: 12px;
+  padding: 14px;
+  border: 1px solid var(--jot-border);
+  border-radius: var(--jot-radius);
+  background: var(--jot-surface);
+  box-shadow: var(--jot-shadow);
+}
+
+.auth-gate h2,
+.auth-gate p {
+  margin: 0;
+}
+
+.auth-gate h2 {
+  font-size: 1rem;
+}
+
+.auth-gate p {
+  color: var(--jot-muted);
+}
+
+.auth-actions {
+  display: grid;
+  gap: 8px;
 }
 
 .editor-shell {

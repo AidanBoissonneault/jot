@@ -35,6 +35,18 @@ export type InsertCaptureRequestMessage = {
   payload: CaptureSelectionPayload;
 };
 
+export type HeadingDragStartedMessage = {
+  type: 'jot.headingDragStarted';
+  payload: CaptureSelectionPayload;
+};
+
+export type ConsumeHeadingDragMessage = {
+  type: 'jot.consumeHeadingDrag';
+  payload?: {
+    text?: string;
+  };
+};
+
 export type ProjectPageUpdatedMessage = {
   type: 'jot.projectPageUpdated';
   payload: {
@@ -54,6 +66,8 @@ export type RestoreHighlightMessage = {
 
 export type JotRuntimeMessage =
   | CaptureSelectionMessage
+  | ConsumeHeadingDragMessage
+  | HeadingDragStartedMessage
   | InsertCaptureRequestMessage
   | ProjectPageUpdatedMessage
   | OpenSourceRequestMessage

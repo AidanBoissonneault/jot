@@ -8,6 +8,14 @@ pnpm-debug.log*
 lerna-debug.log*
 
 node_modules
+.env
+.env.*
+!.env.example
+.data
+apps/sync-server/.data
+apps/sync-server/.env
+apps/sync-server/.env.*
+!apps/sync-server/.env.example
 .output
 stats.html
 stats-*.json
@@ -24,3 +32,5 @@ web-ext.config.ts
 *.njsproj
 *.sln
 *.sw?
+
+.env

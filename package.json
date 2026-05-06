@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "dev": "wxt",
+    "dev:server": "pnpm --filter @jot/sync-server dev",
     "build": "wxt build",
     "zip": "wxt zip",
     "compile": "vue-tsc --noEmit",

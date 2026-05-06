@@ -48,6 +48,7 @@ textarea {
 
 button,
 select,
+input,
 textarea {
   border-radius: var(--jot-radius);
 }
@@ -65,14 +66,18 @@ button:disabled {
 }
 
 select,
+input,
 textarea {
   width: 100%;
   border: 1px solid var(--jot-border);
   background: var(--jot-surface);
   color: var(--jot-text);
+  min-height: 32px;
+  padding: 0 9px;
 }
 
 select:focus,
+input:focus,
 textarea:focus,
 button:focus-visible {
   outline: 2px solid color-mix(in srgb, var(--jot-accent) 34%, transparent);

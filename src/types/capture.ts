@@ -1,4 +1,5 @@
 export type CaptureType = 'quote' | 'task' | 'idea' | 'link';
+export type SaveStatus = 'idle' | 'saving' | 'saved' | 'stale' | 'error';
 
 export type HighlightMeta = {
   text: string;
@@ -44,13 +45,54 @@ export type DocumentContent = {
 export type ProjectPage = {
   id: string;
   projectId: string;
+  kind?: 'page' | 'project';
   title: string;
   status?: 'active' | 'archived';
   content: DocumentContent;
   createdAt: string;
   updatedAt: string;
+  notionPageId?: string;
+  notionDatabaseId?: string;
+  notionDataSourceId?: string;
+  notionParentPageId?: string;
+  notionLastEditedTime?: string;
+  localRevision?: string;
+  remoteRevision?: string;
+  syncMessage?: string;
+  syncState?: SaveStatus;
 };
 
 export type CreateCaptureInput = Omit<Capture, 'id' | 'createdAt'> & {
   createdAt?: string;
+};
+
+export type NotionBlockMapping = {
+  localPageId: string;
+  localNodeId?: string;
+  captureId?: string;
+  notionBlockId: string;
+  kind: 'page-title' | 'paragraph' | 'heading' | 'quote' | 'task' | 'source';
+  lastSyncedHash: string;
+};
+
+export type SyncConfig = {
+  serverUrl: string;
+  authenticated?: boolean;
+  userName?: string;
+  userEmail?: string;
+  workspaceId?: string;
+  workspaceName?: string;
+  selectedDatabaseId?: string;
+  selectedDatabaseTitle?: string;
+  selectedDataSourceId?: string;
+  selectedParentPageId?: string;
+  selectedParentPageTitle?: string;
+  connected: boolean;
+};
+
+export type NotionParentPage = {
+  id: string;
+  parentPageId?: string;
+  title: string;
+  url?: string;
 };

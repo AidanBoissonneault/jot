@@ -1,11 +1,13 @@
 import type {
   CaptureSelectionMessage,
+  HeadingDragStartedMessage,
   JotRuntimeMessage,
   RestoreHighlightMessage,
 } from '@/src/types/messages';
 
 const BUTTON_ID = 'jot-inline-save';
 const JOT_DRAG_MIME = 'application/x-jot-capture';
+const JOT_SOURCE_DATA_ATTR = 'data-jot-source';
 const LARGE_TEXT_PX = 22;
 type HeadingLevel = 1 | 2 | 3 | 4 | 5 | 6;
 
@@ -50,8 +52,15 @@ export default defineContentScript({
       button.style.display = 'none';
     }
 
-    function buildSourceLink(text: string) {
+    function buildSourceLink(text: string, targetElement?: Element | null) {
       const url = new URL(window.location.href);
+      const elementId = targetElement?.id?.trim();
+
+      if (elementId) {
+        url.hash = elementId;
+        return url.toString();
+      }
+
       const textFragment = encodeURIComponent(text.replace(/\s+/g, ' ').trim());
 
       if (!textFragment) {
@@ -151,13 +160,56 @@ export default defineContentScript({
         : node.parentElement;
     }
 
-    function getHeadingLevel(selection: Selection): HeadingLevel | undefined {
-      const element = getSelectionElement(selection);
-
-      if (!element) {
-        return undefined;
+    function getElementFromNode(node: Node | null) {
+      if (!node) {
+        return null;
       }
 
+      return node.nodeType === Node.ELEMENT_NODE
+        ? (node as Element)
+        : node.parentElement;
+    }
+
+    function getHtmlHeadingElement(element: Element | null) {
+      return element?.closest('h1,h2,h3,h4,h5,h6') ?? null;
+    }
+
+    function getHtmlHeadingLevel(element: Element): HeadingLevel | undefined {
+      return /^H[1-6]$/.test(element.tagName)
+        ? (Number(element.tagName.slice(1)) as HeadingLevel)
+        : undefined;
+    }
+
+    function getSelectionHtmlHeading(selection: Selection) {
+      const range = selection.rangeCount ? selection.getRangeAt(0) : null;
+      const anchorHeading = getHtmlHeadingElement(getElementFromNode(selection.anchorNode));
+
+      if (anchorHeading) {
+        return anchorHeading;
+      }
+
+      return getHtmlHeadingElement(
+        getElementFromNode(range?.commonAncestorContainer ?? null),
+      );
+    }
+
+    function getHeadingElement(element: Element) {
+      const heading = element.closest('h1,h2,h3,h4,h5,h6');
+
+      if (heading) {
+        return heading;
+      }
+
+      const roleHeading = element.closest('[role="heading"]');
+
+      if (roleHeading) {
+        return roleHeading;
+      }
+
+      return element;
+    }
+
+    function getHeadingLevelFromElement(element: Element): HeadingLevel | undefined {
       const heading = element.closest('h1,h2,h3,h4,h5,h6');
 
       if (heading) {
@@ -185,11 +237,32 @@ export default defineContentScript({
         : undefined;
     }
 
+    function getHeadingLevel(selection: Selection): HeadingLevel | undefined {
+      const element = getSelectionElement(selection);
+
+      return element ? getHeadingLevelFromElement(element) : undefined;
+    }
+
+    function getFirstTextNode(element: Element) {
+      const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT, {
+        acceptNode: (node) =>
+          node.textContent?.trim()
+            ? NodeFilter.FILTER_ACCEPT
+            : NodeFilter.FILTER_REJECT,
+      });
+
+      return walker.nextNode() as Text | null;
+    }
+
     function buildCapturePayload(
       selection: Selection,
       text: string,
       includeHeadingMetadata = false,
     ) {
+      const selectionElement = getSelectionElement(selection);
+      const headingElement = selectionElement
+        ? getHeadingElement(selectionElement)
+        : null;
       const headingLevel = getHeadingLevel(selection);
       const range = selection.rangeCount ? selection.getRangeAt(0) : null;
       const textNode = range ? getSelectionTextNode(range) : null;
@@ -201,7 +274,10 @@ export default defineContentScript({
         textNode && typeof offset === 'number' && offset >= 0
           ? getContext(textNode, offset, text.length)
           : {};
-      const sourceLink = buildSourceLink(text);
+      const sourceLink = buildSourceLink(
+        text,
+        headingLevel ? headingElement : null,
+      );
 
       return {
         text,
@@ -219,6 +295,96 @@ export default defineContentScript({
       } satisfies CaptureSelectionMessage['payload'];
     }
 
+    function buildHeadingDragPayload(event: DragEvent) {
+      const selection = window.getSelection();
+      const selectedText = selection?.toString().trim();
+      const selectedHeading = selection
+        ? getSelectionHtmlHeading(selection)
+        : null;
+
+      if (selection && selectedText && selectedHeading) {
+        return buildHtmlHeadingPayload(selectedHeading, selectedText);
+      }
+
+      const target = event.target instanceof Node
+        ? getElementFromNode(event.target)
+        : null;
+      const headingElement = getHtmlHeadingElement(target);
+
+      if (!headingElement) {
+        return null;
+      }
+
+      return buildHtmlHeadingPayload(headingElement);
+    }
+
+    function buildHtmlHeadingPayload(
+      headingElement: Element,
+      selectedText?: string,
+    ) {
+      const headingLevel = headingElement
+        ? getHtmlHeadingLevel(headingElement)
+        : undefined;
+      const text = (selectedText || headingElement.textContent || '')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+      if (!headingElement || !headingLevel || !text) {
+        return null;
+      }
+
+      const textNode = getFirstTextNode(headingElement);
+      const context = textNode ? getContext(textNode, 0, text.length) : {};
+
+      return {
+        text,
+        sourceUrl: window.location.href,
+        pageTitle: document.title,
+        highlightMeta: {
+          text,
+          sourceLink: buildSourceLink(text, headingElement),
+          xpath: textNode ? getNodeXPath(textNode) : undefined,
+          offset: textNode ? 0 : undefined,
+          ...context,
+          isHeading: true,
+          headingLevel,
+        },
+      } satisfies CaptureSelectionMessage['payload'];
+    }
+
+    function sourceOpenPayloadFromCapture(
+      payload: CaptureSelectionMessage['payload'],
+    ) {
+      return {
+        sourceUrl: payload.sourceUrl,
+        pageTitle: payload.pageTitle,
+        highlightMeta: {
+          text: payload.highlightMeta.text,
+          sourceLink: payload.highlightMeta.sourceLink,
+          xpath: payload.highlightMeta.xpath,
+          offset: payload.highlightMeta.offset,
+          prefix: payload.highlightMeta.prefix,
+          suffix: payload.highlightMeta.suffix,
+        },
+      };
+    }
+
+    function htmlEscape(value: string) {
+      return value
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;');
+    }
+
+    function linkedHeadingHtml(payload: CaptureSelectionMessage['payload']) {
+      const level = payload.highlightMeta.headingLevel ?? 2;
+      const href = payload.highlightMeta.sourceLink || payload.sourceUrl;
+      const sourcePayload = JSON.stringify(sourceOpenPayloadFromCapture(payload));
+
+      return `<h${level}><a href="${htmlEscape(href)}" ${JOT_SOURCE_DATA_ATTR}="${htmlEscape(sourcePayload)}">${htmlEscape(payload.text)}</a></h${level}>`;
+    }
+
     function showButton(selection: Selection, text: string) {
       const range = selection.rangeCount ? selection.getRangeAt(0) : null;
 
@@ -234,7 +400,7 @@ export default defineContentScript({
         return;
       }
 
-      selectedPayload = buildCapturePayload(selection, text);
+      selectedPayload = buildCapturePayload(selection, text, true);
 
       button.style.left = `${Math.max(8, rect.left + window.scrollX)}px`;
       button.style.top = `${Math.max(8, rect.bottom + window.scrollY + 8)}px`;
@@ -284,22 +450,24 @@ export default defineContentScript({
     document.addEventListener(
       'dragstart',
       (event) => {
-        const selection = window.getSelection();
-        const selectedText = selection?.toString().trim();
-
-        if (!event.dataTransfer || !selection || !selectedText) {
+        if (!event.dataTransfer) {
           return;
         }
 
-        const payload = buildCapturePayload(selection, selectedText, true);
+        const payload = buildHeadingDragPayload(event);
 
-        if (!payload.highlightMeta.isHeading) {
+        if (!payload) {
           return;
         }
 
         event.dataTransfer.setData(JOT_DRAG_MIME, JSON.stringify(payload));
-        event.dataTransfer.setData('text/plain', selectedText);
-        event.dataTransfer.effectAllowed = 'copy';
+        event.dataTransfer.setData('text/html', linkedHeadingHtml(payload));
+        void browser.runtime
+          .sendMessage({
+            type: 'jot.headingDragStarted',
+            payload,
+          } satisfies HeadingDragStartedMessage)
+          .catch(() => undefined);
       },
       true,
     );
