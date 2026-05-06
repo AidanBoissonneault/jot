@@ -4,23 +4,79 @@ import { EditorContent, useEditor } from '@tiptap/vue-3';
 import { TextSelection } from '@tiptap/pm/state';
 import StarterKit from '@tiptap/starter-kit';
 import {
+  decodeJotSource,
+  JOT_SOURCE_ATTR,
+  JotLink,
+} from '@/src/extensions/jotLink';
+import { PortableTextEditingKit } from '@/src/extensions/textFormatting';
+import {
   createCapturedContent,
   createLinkedHeadingContent,
 } from '@/src/services/notionClient';
 import { useJotStore } from '@/src/stores/jot';
 import type { DocumentContent } from '@/src/types/capture';
-import type { CaptureSelectionPayload } from '@/src/types/messages';
+import type {
+  CaptureSelectionPayload,
+  OpenSourceRequestMessage,
+} from '@/src/types/messages';
 
 const JOT_DRAG_MIME = 'application/x-jot-capture';
+const blockTypes = [
+  { label: 'Paragraph', value: 'paragraph' },
+  { label: 'Heading 1', value: 'heading-1' },
+  { label: 'Heading 2', value: 'heading-2' },
+  { label: 'Heading 3', value: 'heading-3' },
+  { label: 'Heading 4', value: 'heading-4' },
+  { label: 'Heading 5', value: 'heading-5' },
+  { label: 'Heading 6', value: 'heading-6' },
+  { label: 'Quote', value: 'blockquote' },
+  { label: 'Code block', value: 'codeBlock' },
+] as const;
+const fontSizes = [
+  { label: 'Default', value: '' },
+  { label: '12', value: '12px' },
+  { label: '14', value: '14px' },
+  { label: '16', value: '16px' },
+  { label: '18', value: '18px' },
+  { label: '24', value: '24px' },
+  { label: '32', value: '32px' },
+] as const;
+const textColors = [
+  { label: 'Default', value: '' },
+  { label: 'Gray', value: '#6b6f76' },
+  { label: 'Red', value: '#c2410c' },
+  { label: 'Yellow', value: '#a16207' },
+  { label: 'Green', value: '#15803d' },
+  { label: 'Blue', value: '#173494' },
+  { label: 'Purple', value: '#7e22ce' },
+] as const;
+const highlightColors = [
+  { label: 'None', value: '' },
+  { label: 'Yellow', value: '#fef08a' },
+  { label: 'Green', value: '#bbf7d0' },
+  { label: 'Blue', value: '#bfdbfe' },
+  { label: 'Pink', value: '#fbcfe8' },
+  { label: 'Gray', value: '#e4e4e7' },
+] as const;
 
 const store = useJotStore();
 const saveTimer = ref<number>();
 const pageTitleDraft = ref('');
+const editorStateVersion = ref(0);
 let activePageId = '';
 let isApplyingStoredContent = false;
 
 const editor = useEditor({
-  extensions: [StarterKit],
+  extensions: [
+    StarterKit.configure({
+      heading: {
+        levels: [1, 2, 3, 4, 5, 6],
+      },
+      link: false,
+    }),
+    JotLink,
+    PortableTextEditingKit,
+  ],
   content: {
     type: 'doc',
     content: [{ type: 'paragraph' }],
@@ -28,6 +84,31 @@ const editor = useEditor({
   editorProps: {
     attributes: {
       'aria-label': 'Project page editor',
+    },
+    handleClick: (_view, _pos, event) => {
+      const anchor =
+        event.target instanceof Element ? event.target.closest('a') : null;
+
+      if (!anchor?.href) {
+        return false;
+      }
+
+      event.preventDefault();
+
+      const sourcePayload = decodeJotSource(
+        anchor.getAttribute(`data-${kebabCase(JOT_SOURCE_ATTR)}`),
+      );
+
+      if (sourcePayload) {
+        void browser.runtime.sendMessage({
+          type: 'jot.openSourceRequest',
+          payload: sourcePayload,
+        } satisfies OpenSourceRequestMessage);
+        return true;
+      }
+
+      void browser.tabs.create({ active: true, url: anchor.href });
+      return true;
     },
     handleDrop: (view, event) => {
       const payload = readHeadingDropPayload(event);
@@ -65,6 +146,8 @@ const editor = useEditor({
     },
   },
   onUpdate: ({ editor }) => {
+    editorStateVersion.value += 1;
+
     if (isApplyingStoredContent) {
       return;
     }
@@ -73,6 +156,9 @@ const editor = useEditor({
     saveTimer.value = window.setTimeout(() => {
       void store.saveCurrentPageContent(editor.getJSON() as DocumentContent);
     }, 450);
+  },
+  onSelectionUpdate: () => {
+    editorStateVersion.value += 1;
   },
 });
 
@@ -104,6 +190,45 @@ const saveLabel = computed(() => {
   }
 
   return 'Saved';
+});
+
+const activeBlockType = computed(() => {
+  editorStateVersion.value;
+
+  if (!editor.value) {
+    return 'paragraph';
+  }
+
+  for (const level of [1, 2, 3, 4, 5, 6]) {
+    if (editor.value.isActive('heading', { level })) {
+      return `heading-${level}`;
+    }
+  }
+
+  if (editor.value.isActive('blockquote')) {
+    return 'blockquote';
+  }
+
+  if (editor.value.isActive('codeBlock')) {
+    return 'codeBlock';
+  }
+
+  return 'paragraph';
+});
+
+const activeFontSize = computed(() => {
+  editorStateVersion.value;
+  return String(editor.value?.getAttributes('textStyle').fontSize ?? '');
+});
+
+const activeTextColor = computed(() => {
+  editorStateVersion.value;
+  return String(editor.value?.getAttributes('textStyle').color ?? '');
+});
+
+const activeHighlightColor = computed(() => {
+  editorStateVersion.value;
+  return String(editor.value?.getAttributes('textStyle').backgroundColor ?? '');
 });
 
 onMounted(() => {
@@ -207,6 +332,97 @@ function blurTitleInput(event: Event) {
   (event.target as HTMLInputElement).blur();
 }
 
+function setBlockType(event: Event) {
+  const value = (event.target as HTMLSelectElement).value;
+  const chain = editor.value?.chain().focus();
+
+  if (!chain) {
+    return;
+  }
+
+  if (value === 'paragraph') {
+    chain.setParagraph().run();
+    return;
+  }
+
+  if (value.startsWith('heading-')) {
+    chain
+      .toggleHeading({ level: Number(value.replace('heading-', '')) as 1 | 2 | 3 | 4 | 5 | 6 })
+      .run();
+    return;
+  }
+
+  if (value === 'blockquote') {
+    chain.toggleBlockquote().run();
+    return;
+  }
+
+  if (value === 'codeBlock') {
+    chain.toggleCodeBlock().run();
+  }
+}
+
+function setFontSize(event: Event) {
+  const value = (event.target as HTMLSelectElement).value;
+
+  if (value) {
+    editor.value?.chain().focus().setFontSize(value).run();
+  } else {
+    editor.value?.chain().focus().unsetFontSize().run();
+  }
+}
+
+function setTextColor(event: Event) {
+  const value = (event.target as HTMLSelectElement).value;
+
+  if (value) {
+    editor.value?.chain().focus().setTextColor(value).run();
+  } else {
+    editor.value?.chain().focus().unsetTextColor().run();
+  }
+}
+
+function setHighlightColor(event: Event) {
+  const value = (event.target as HTMLSelectElement).value;
+
+  if (value) {
+    editor.value?.chain().focus().setHighlightColor(value).run();
+  } else {
+    editor.value?.chain().focus().unsetHighlightColor().run();
+  }
+}
+
+function setLink() {
+  if (!editor.value) {
+    return;
+  }
+
+  const existingHref = editor.value.getAttributes('link').href;
+  const href = window.prompt('Paste link URL', existingHref ?? '');
+
+  if (href === null) {
+    return;
+  }
+
+  const trimmedHref = href.trim();
+
+  if (!trimmedHref) {
+    editor.value.chain().focus().extendMarkRange('link').unsetLink().run();
+    return;
+  }
+
+  editor.value
+    .chain()
+    .focus()
+    .extendMarkRange('link')
+    .setLink({ href: trimmedHref })
+    .run();
+}
+
+function clearFormatting() {
+  editor.value?.chain().focus().unsetAllMarks().clearNodes().run();
+}
+
 async function flushEditorContent() {
   window.clearTimeout(saveTimer.value);
 
@@ -228,6 +444,10 @@ function readHeadingDropPayload(event: DragEvent) {
   } catch {
     return null;
   }
+}
+
+function kebabCase(value: string) {
+  return value.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`);
 }
 </script>
 
@@ -306,85 +526,231 @@ function readHeadingDropPayload(event: DragEvent) {
         </div>
 
         <div class="toolbar" aria-label="Editor toolbar">
-          <button
-            type="button"
-            :class="{ active: editor?.isActive('paragraph') }"
-            :disabled="!editor"
-            title="Paragraph"
-            @click="editor?.chain().focus().setParagraph().run()"
-          >
-            P
-          </button>
-          <button
-            type="button"
-            :class="{ active: editor?.isActive('heading', { level: 1 }) }"
-            :disabled="!editor"
-            title="Heading"
-            @click="editor?.chain().focus().toggleHeading({ level: 1 }).run()"
-          >
-            H
-          </button>
-          <button
-            type="button"
-            :class="{ active: editor?.isActive('bold') }"
-            :disabled="!editor"
-            title="Bold"
-            @click="editor?.chain().focus().toggleBold().run()"
-          >
-            B
-          </button>
-          <button
-            type="button"
-            :class="{ active: editor?.isActive('italic') }"
-            :disabled="!editor"
-            title="Italic"
-            @click="editor?.chain().focus().toggleItalic().run()"
-          >
-            I
-          </button>
-          <button
-            type="button"
-            :class="{ active: editor?.isActive('bulletList') }"
-            :disabled="!editor"
-            title="Bullet list"
-            @click="editor?.chain().focus().toggleBulletList().run()"
-          >
-            -
-          </button>
-          <button
-            type="button"
-            :class="{ active: editor?.isActive('orderedList') }"
-            :disabled="!editor"
-            title="Ordered list"
-            @click="editor?.chain().focus().toggleOrderedList().run()"
-          >
-            1.
-          </button>
-          <button
-            type="button"
-            :class="{ active: editor?.isActive('blockquote') }"
-            :disabled="!editor"
-            title="Quote"
-            @click="editor?.chain().focus().toggleBlockquote().run()"
-          >
-            "
-          </button>
-          <button
-            type="button"
-            :disabled="!editor"
-            title="Undo"
-            @click="editor?.chain().focus().undo().run()"
-          >
-            U
-          </button>
-          <button
-            type="button"
-            :disabled="!editor"
-            title="Redo"
-            @click="editor?.chain().focus().redo().run()"
-          >
-            R
-          </button>
+          <div class="toolbar-group block-group" aria-label="Block style">
+            <select
+              class="toolbar-select block-select"
+              aria-label="Block type"
+              :disabled="!editor"
+              :value="activeBlockType"
+              @change="setBlockType"
+            >
+              <option
+                v-for="blockType in blockTypes"
+                :key="blockType.value"
+                :value="blockType.value"
+              >
+                {{ blockType.label }}
+              </option>
+            </select>
+
+            <select
+              class="toolbar-select compact-select"
+              aria-label="Font size"
+              :disabled="!editor"
+              :value="activeFontSize"
+              @change="setFontSize"
+            >
+              <option
+                v-for="fontSize in fontSizes"
+                :key="fontSize.value"
+                :value="fontSize.value"
+              >
+                {{ fontSize.label }}
+              </option>
+            </select>
+          </div>
+
+          <div class="toolbar-group" aria-label="Inline formatting">
+            <button
+              type="button"
+              :class="{ active: editor?.isActive('bold') }"
+              :disabled="!editor"
+              title="Bold"
+              @click="editor?.chain().focus().toggleBold().run()"
+            >
+              B
+            </button>
+            <button
+              type="button"
+              :class="{ active: editor?.isActive('italic') }"
+              :disabled="!editor"
+              title="Italic"
+              @click="editor?.chain().focus().toggleItalic().run()"
+            >
+              I
+            </button>
+            <button
+              type="button"
+              :class="{ active: editor?.isActive('underline') }"
+              :disabled="!editor"
+              title="Underline"
+              @click="editor?.chain().focus().toggleUnderline().run()"
+            >
+              U
+            </button>
+            <button
+              type="button"
+              :class="{ active: editor?.isActive('strike') }"
+              :disabled="!editor"
+              title="Strikethrough"
+              @click="editor?.chain().focus().toggleStrike().run()"
+            >
+              S
+            </button>
+            <button
+              type="button"
+              :class="{ active: editor?.isActive('code') }"
+              :disabled="!editor"
+              title="Inline code"
+              @click="editor?.chain().focus().toggleCode().run()"
+            >
+              &lt;/&gt;
+            </button>
+            <button
+              type="button"
+              :class="{ active: editor?.isActive('superscript') }"
+              :disabled="!editor"
+              title="Superscript"
+              @click="editor?.chain().focus().toggleSuperscript().run()"
+            >
+              x2
+            </button>
+            <button
+              type="button"
+              :class="{ active: editor?.isActive('subscript') }"
+              :disabled="!editor"
+              title="Subscript"
+              @click="editor?.chain().focus().toggleSubscript().run()"
+            >
+              x2
+            </button>
+          </div>
+
+          <div class="toolbar-group color-group" aria-label="Color">
+            <select
+              class="toolbar-select compact-select"
+              aria-label="Text color"
+              :disabled="!editor"
+              :value="activeTextColor"
+              @change="setTextColor"
+            >
+              <option
+                v-for="color in textColors"
+                :key="color.value"
+                :value="color.value"
+              >
+                {{ color.label }}
+              </option>
+            </select>
+
+            <select
+              class="toolbar-select compact-select"
+              aria-label="Highlight"
+              :disabled="!editor"
+              :value="activeHighlightColor"
+              @change="setHighlightColor"
+            >
+              <option
+                v-for="color in highlightColors"
+                :key="color.value"
+                :value="color.value"
+              >
+                {{ color.label }}
+              </option>
+            </select>
+          </div>
+
+          <div class="toolbar-group" aria-label="Lists and inserts">
+            <button
+              type="button"
+              :class="{ active: editor?.isActive('link') }"
+              :disabled="!editor"
+              title="Link"
+              @click="setLink"
+            >
+              Link
+            </button>
+            <button
+              type="button"
+              :class="{ active: editor?.isActive('bulletList') }"
+              :disabled="!editor"
+              title="Bullet list"
+              @click="editor?.chain().focus().toggleBulletList().run()"
+            >
+              -
+            </button>
+            <button
+              type="button"
+              :class="{ active: editor?.isActive('orderedList') }"
+              :disabled="!editor"
+              title="Ordered list"
+              @click="editor?.chain().focus().toggleOrderedList().run()"
+            >
+              1.
+            </button>
+            <button
+              type="button"
+              :class="{ active: editor?.isActive('taskList') }"
+              :disabled="!editor"
+              title="Task list"
+              @click="editor?.chain().focus().toggleTaskList().run()"
+            >
+              []
+            </button>
+            <button
+              type="button"
+              :class="{ active: editor?.isActive('blockquote') }"
+              :disabled="!editor"
+              title="Quote"
+              @click="editor?.chain().focus().toggleBlockquote().run()"
+            >
+              "
+            </button>
+            <button
+              type="button"
+              :class="{ active: editor?.isActive('codeBlock') }"
+              :disabled="!editor"
+              title="Code block"
+              @click="editor?.chain().focus().toggleCodeBlock().run()"
+            >
+              Code
+            </button>
+            <button
+              type="button"
+              :disabled="!editor"
+              title="Divider"
+              @click="editor?.chain().focus().setHorizontalRule().run()"
+            >
+              HR
+            </button>
+          </div>
+
+          <div class="toolbar-group utility-group" aria-label="History and cleanup">
+            <button
+              type="button"
+              :disabled="!editor"
+              title="Clear formatting"
+              @click="clearFormatting"
+            >
+              Tx
+            </button>
+            <button
+              type="button"
+              :disabled="!editor"
+              title="Undo"
+              @click="editor?.chain().focus().undo().run()"
+            >
+              Undo
+            </button>
+            <button
+              type="button"
+              :disabled="!editor"
+              title="Redo"
+              @click="editor?.chain().focus().redo().run()"
+            >
+              Redo
+            </button>
+          </div>
         </div>
       </header>
 
@@ -478,11 +844,38 @@ function readHeadingDropPayload(event: DragEvent) {
 .toolbar {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
+  gap: 6px;
+  align-items: stretch;
+}
+
+.toolbar-group {
+  display: inline-flex;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  gap: 3px;
+  align-items: center;
+  min-width: 0;
+  padding-right: 6px;
+  border-right: 1px solid var(--jot-border);
+}
+
+.toolbar-group:last-child {
+  padding-right: 0;
+  border-right: 0;
+}
+
+.block-group {
+  flex: 1 1 214px;
+}
+
+.color-group,
+.utility-group {
+  flex: 0 1 auto;
 }
 
 .toolbar button,
-.page-controls button {
+.page-controls button,
+.toolbar-select {
   min-width: 30px;
   min-height: 30px;
   padding: 0 8px;
@@ -490,6 +883,21 @@ function readHeadingDropPayload(event: DragEvent) {
   background: var(--jot-surface-muted);
   color: var(--jot-text);
   font-weight: 700;
+}
+
+.toolbar-select {
+  width: auto;
+  max-width: 100%;
+}
+
+.block-select {
+  flex: 1 1 126px;
+  min-width: 126px;
+}
+
+.compact-select {
+  flex: 0 1 88px;
+  min-width: 78px;
 }
 
 .page-controls .archive-button {
@@ -523,14 +931,100 @@ function readHeadingDropPayload(event: DragEvent) {
 .editor :deep(.tiptap p),
 .editor :deep(.tiptap blockquote),
 .editor :deep(.tiptap ul),
-.editor :deep(.tiptap ol) {
+.editor :deep(.tiptap ol),
+.editor :deep(.tiptap pre) {
   margin: 0 0 0.85rem;
 }
 
+.editor :deep(.tiptap h1),
+.editor :deep(.tiptap h2),
+.editor :deep(.tiptap h3),
+.editor :deep(.tiptap h4),
+.editor :deep(.tiptap h5),
+.editor :deep(.tiptap h6) {
+  margin: 0 0 0.75rem;
+  line-height: 1.22;
+}
+
 .editor :deep(.tiptap h1) {
-  margin: 0 0 0.9rem;
-  font-size: 1.45rem;
-  line-height: 1.2;
+  font-size: 1.8rem;
+}
+
+.editor :deep(.tiptap h2) {
+  font-size: 1.55rem;
+}
+
+.editor :deep(.tiptap h3) {
+  font-size: 1.32rem;
+}
+
+.editor :deep(.tiptap h4) {
+  font-size: 1.14rem;
+}
+
+.editor :deep(.tiptap h5) {
+  font-size: 1rem;
+}
+
+.editor :deep(.tiptap h6) {
+  color: var(--jot-muted);
+  font-size: 0.9rem;
+  text-transform: uppercase;
+}
+
+.editor :deep(.tiptap ul),
+.editor :deep(.tiptap ol) {
+  padding-left: 1.35rem;
+}
+
+.editor :deep(.tiptap ul[data-type="taskList"]) {
+  padding-left: 0;
+  list-style: none;
+}
+
+.editor :deep(.tiptap li[data-type="taskItem"]) {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: 4px;
+  align-items: start;
+}
+
+.editor :deep(.tiptap li[data-type="taskItem"] > label) {
+  display: grid;
+  place-items: center;
+  min-height: 1.45em;
+}
+
+.editor :deep(.tiptap li[data-type="taskItem"] input) {
+  margin: 0;
+}
+
+.editor :deep(.tiptap code) {
+  border-radius: 4px;
+  background: var(--jot-surface-muted);
+  padding: 0.1em 0.28em;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 0.9em;
+}
+
+.editor :deep(.tiptap pre) {
+  overflow: auto;
+  border-radius: 6px;
+  background: #111113;
+  color: #f4f4f5;
+  padding: 12px;
+}
+
+.editor :deep(.tiptap pre code) {
+  background: transparent;
+  color: inherit;
+  padding: 0;
+}
+
+.editor :deep(.tiptap hr) {
+  margin: 1.1rem 0;
+  border: 0;
+  border-top: 1px solid var(--jot-border-strong);
 }
 
 .editor :deep(.tiptap blockquote) {

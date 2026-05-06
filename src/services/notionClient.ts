@@ -4,7 +4,11 @@ import type {
   Project,
   ProjectPage,
 } from '@/src/types/capture';
-import type { CaptureSelectionPayload } from '@/src/types/messages';
+import { encodeJotSource, JOT_SOURCE_ATTR } from '@/src/extensions/jotLink';
+import type {
+  CaptureSelectionPayload,
+  SourceOpenPayload,
+} from '@/src/types/messages';
 
 type JotStorage = {
   activePageIdsByProject?: Record<string, string>;
@@ -98,6 +102,31 @@ function textParagraph(text: string, marks?: DocumentContent['marks']): Document
   };
 }
 
+function sourcePayloadFromCapture(payload: CaptureSelectionPayload): SourceOpenPayload {
+  return {
+    sourceUrl: payload.sourceUrl,
+    pageTitle: payload.pageTitle,
+    highlightMeta: {
+      text: payload.highlightMeta.text || payload.text,
+      sourceLink: payload.highlightMeta.sourceLink,
+      xpath: payload.highlightMeta.xpath,
+      offset: payload.highlightMeta.offset,
+      prefix: payload.highlightMeta.prefix,
+      suffix: payload.highlightMeta.suffix,
+    },
+  };
+}
+
+function sourceLinkAttrs(payload: CaptureSelectionPayload) {
+  return {
+    href: payload.highlightMeta.sourceLink || payload.sourceUrl,
+    target: '_blank',
+    rel: 'noopener noreferrer nofollow',
+    class: null,
+    [JOT_SOURCE_ATTR]: encodeJotSource(sourcePayloadFromCapture(payload)),
+  };
+}
+
 export function createCapturedContent(payload: CaptureSelectionPayload): DocumentContent[] {
   if (payload.highlightMeta.isHeading) {
     return createLinkedHeadingContent(payload);
@@ -111,12 +140,7 @@ export function createCapturedContent(payload: CaptureSelectionPayload): Documen
     textParagraph(`Source: ${payload.pageTitle || 'Untitled page'} - ${payload.sourceUrl}`, [
       {
         type: 'link',
-        attrs: {
-          href: payload.sourceUrl,
-          target: '_blank',
-          rel: 'noopener noreferrer nofollow',
-          class: null,
-        },
+        attrs: sourceLinkAttrs(payload),
       },
     ]),
     {
@@ -128,13 +152,13 @@ export function createCapturedContent(payload: CaptureSelectionPayload): Documen
 export function createLinkedHeadingContent(
   payload: CaptureSelectionPayload,
 ): DocumentContent[] {
-  const href = payload.highlightMeta.sourceLink || payload.sourceUrl;
+  const level = payload.highlightMeta.headingLevel ?? 2;
 
   return [
     {
       type: 'heading',
       attrs: {
-        level: 2,
+        level,
       },
       content: [
         {
@@ -143,12 +167,7 @@ export function createLinkedHeadingContent(
           marks: [
             {
               type: 'link',
-              attrs: {
-                href,
-                target: '_blank',
-                rel: 'noopener noreferrer nofollow',
-                class: null,
-              },
+              attrs: sourceLinkAttrs(payload),
             },
           ],
         },

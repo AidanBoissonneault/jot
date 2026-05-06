@@ -8,7 +8,7 @@ export default defineConfig({
     description:
       'Capture web highlights into structured Notion projects without breaking flow.',
     version: '0.0.0',
-    permissions: ['storage', 'activeTab', 'sidePanel'],
+    permissions: ['storage', 'activeTab', 'sidePanel', 'tabs'],
     host_permissions: ['<all_urls>'],
     action: {
       default_title: 'Open Jot',
