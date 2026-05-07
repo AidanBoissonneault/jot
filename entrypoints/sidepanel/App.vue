@@ -368,7 +368,7 @@ async function selectPage(pageId: string) {
     return;
   }
 
-  await flushEditorContent();
+  saveEditorContentInBackground();
   await store.selectPage(pageId);
 }
 
@@ -377,7 +377,7 @@ async function selectProject(projectId: string) {
     return;
   }
 
-  await flushEditorContent();
+  saveEditorContentInBackground();
   await store.selectProject(projectId);
 }
 
@@ -579,6 +579,24 @@ async function flushEditorContent() {
   window.clearTimeout(saveTimer.value);
 
   await saveEditorContentOptimistically();
+}
+
+function saveEditorContentInBackground() {
+  window.clearTimeout(saveTimer.value);
+
+  if (!editor.value || !store.currentPage) {
+    return;
+  }
+
+  const page = { ...store.currentPage };
+  const content = editor.value.getJSON() as DocumentContent;
+  const title = pageTitleDraft.value;
+
+  lastAppliedContent = JSON.stringify(content);
+  void store.savePageContentSnapshot(page, content, {
+    preserveLocalContent: true,
+    title,
+  });
 }
 
 async function saveEditorContentOptimistically() {

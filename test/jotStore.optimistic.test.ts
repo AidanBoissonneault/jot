@@ -218,10 +218,102 @@ describe('page title and content saves', () => {
   });
 });
 
-async function seedStore(store: ReturnType<typeof useJotStore>) {
+describe('project page caching', () => {
+  test('selecting a cached page returns immediately and refreshes it in the background', async () => {
+    const pagePull = deferred<Response>();
+    const fetchMock = vi.fn(() => pagePull.promise);
+    vi.stubGlobal('fetch', fetchMock);
+    const pageTwo = {
+      ...basePage,
+      id: 'page-two',
+      title: 'Cached Page',
+      content: docWithText('cached body'),
+      notionPageId: 'notion-page-two',
+      remoteRevision: 'rev-1',
+    };
+    const store = useJotStore();
+    resetBrowserStorage({
+      activePageIdsByProject: { 'project-jot': 'page-jot' },
+      currentProjectId: 'project-jot',
+      hasMigratedCapturesToPages: true,
+      pages: [basePage, pageTwo],
+      projects: [baseProject],
+      syncConfig: connectedConfig,
+    });
+    await seedStore(store, [basePage, pageTwo]);
+
+    await store.selectPage('page-two');
+
+    expect(store.currentPage?.content).toEqual(docWithText('cached body'));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+
+    pagePull.resolve(jsonResponse({
+      status: 'saved',
+      page: {
+        ...pageTwo,
+        content: docWithText('fresh body'),
+        remoteRevision: 'rev-2',
+        syncState: 'saved',
+      },
+    }));
+
+    await waitFor(() =>
+      expect(store.currentPage?.content).toEqual(docWithText('fresh body')),
+    );
+  });
+
+  test('background snapshot saves do not overwrite a newly selected page', async () => {
+    const saveRequest = deferred<Response>();
+    vi.stubGlobal('fetch', vi.fn(() => saveRequest.promise));
+    const pageTwo = {
+      ...basePage,
+      id: 'page-two',
+      title: 'Second Page',
+      content: docWithText('second body'),
+    };
+    const store = useJotStore();
+
+    resetBrowserStorage({
+      activePageIdsByProject: { 'project-jot': 'page-jot' },
+      currentProjectId: 'project-jot',
+      hasMigratedCapturesToPages: true,
+      pages: [basePage, pageTwo],
+      projects: [baseProject],
+      syncConfig: connectedConfig,
+    });
+    await seedStore(store, [basePage, pageTwo]);
+
+    const savePromise = store.savePageContentSnapshot(
+      basePage,
+      docWithText('old page edit'),
+      { preserveLocalContent: true },
+    );
+    store.currentPage = pageTwo;
+
+    saveRequest.resolve(jsonResponse({
+      status: 'saved',
+      page: {
+        ...basePage,
+        content: docWithText('old page edit'),
+        syncState: 'saved',
+      },
+    }));
+    await savePromise;
+
+    expect(store.currentPage?.id).toBe('page-two');
+    expect(store.currentPage?.content).toEqual(docWithText('second body'));
+    expect(store.pages.find((page) => page.id === 'page-jot')?.content)
+      .toEqual(docWithText('old page edit'));
+  });
+});
+
+async function seedStore(
+  store: ReturnType<typeof useJotStore>,
+  pages = [basePage],
+) {
   store.syncConfig = connectedConfig;
   store.projects = [baseProject];
-  store.pages = [basePage];
+  store.pages = pages;
   store.currentProjectId = 'project-jot';
   store.currentPage = basePage;
   await nextTick();

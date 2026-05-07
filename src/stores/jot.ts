@@ -173,6 +173,7 @@ export const useJotStore = defineStore('jot', () => {
     currentPage.value = page;
     await loadProjectPages();
     applyPageSyncState(page);
+    void refreshSelectedPage(page.id);
   }
 
   async function loadCurrentPage() {
@@ -186,6 +187,10 @@ export const useJotStore = defineStore('jot', () => {
     currentPage.value = await notionClient.getProjectPage(currentProjectId.value);
     if (currentPage.value) {
       applyPageSyncState(currentPage.value);
+      void notionClient.prefetchProjectPages(
+        currentProjectId.value,
+        currentPage.value.id,
+      );
     } else {
       saveStatus.value = 'idle';
     }
@@ -238,6 +243,58 @@ export const useJotStore = defineStore('jot', () => {
         : savedPage;
       applyPageSyncState(savedPage);
     } catch (error) {
+      errorMessage.value =
+        error instanceof Error ? error.message : 'Unable to save this page.';
+      saveStatus.value = 'error';
+    }
+  }
+
+  async function savePageContentSnapshot(
+    page: ProjectPage,
+    content: DocumentContent,
+    options: SaveOptions = {},
+  ) {
+    const activePageId = page.id;
+    const optimisticPage = {
+      ...page,
+      content,
+      title: options.title ?? page.title,
+      updatedAt: new Date().toISOString(),
+      syncState: 'saving' as const,
+    };
+
+    pages.value = pages.value.map((storedPage) =>
+      storedPage.id === activePageId ? optimisticPage : storedPage,
+    );
+
+    if (currentPage.value?.id === activePageId) {
+      currentPage.value = optimisticPage;
+      saveStatus.value = 'saving';
+    }
+
+    try {
+      const savedPage = await notionClient.updateProjectPage(optimisticPage);
+      const nextPage = options.preserveLocalContent
+        ? {
+            ...savedPage,
+            content: optimisticPage.content,
+            title: optimisticPage.title,
+          }
+        : savedPage;
+
+      pages.value = pages.value.map((storedPage) =>
+        storedPage.id === activePageId ? nextPage : storedPage,
+      );
+
+      if (currentPage.value?.id === activePageId) {
+        currentPage.value = nextPage;
+        applyPageSyncState(nextPage);
+      }
+    } catch (error) {
+      if (currentPage.value?.id !== activePageId) {
+        return;
+      }
+
       errorMessage.value =
         error instanceof Error ? error.message : 'Unable to save this page.';
       saveStatus.value = 'error';
@@ -461,6 +518,18 @@ export const useJotStore = defineStore('jot', () => {
         : '';
   }
 
+  async function refreshSelectedPage(pageId: string) {
+    const syncedPage = await notionClient.syncProjectPage(pageId);
+
+    if (!syncedPage || currentPage.value?.id !== pageId) {
+      return;
+    }
+
+    currentPage.value = syncedPage;
+    await loadProjectPages();
+    applyPageSyncState(syncedPage);
+  }
+
   function nextPageTitle() {
     const nextNumber = pages.value.length + 1;
     return `Page ${nextNumber}`;
@@ -489,6 +558,7 @@ export const useJotStore = defineStore('jot', () => {
     renameCurrentProject,
     renameCurrentPage,
     refreshSyncSession,
+    savePageContentSnapshot,
     saveCurrentPageContent,
     saveStatus,
     selectPage,

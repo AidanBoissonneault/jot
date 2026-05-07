@@ -940,6 +940,42 @@ export const notionClient = {
     return syncedPage;
   },
 
+  async syncProjectPage(pageId: string): Promise<ProjectPage | undefined> {
+    const { pages } = await readStorage();
+    const page = pages.find((storedPage) => storedPage.id === pageId);
+
+    if (!page || page.status === 'archived') {
+      return undefined;
+    }
+
+    const syncedPage = isTempPage(page) ? page : await syncPullPage(page);
+
+    if (syncedPage !== page) {
+      await persistPage(syncedPage);
+    }
+
+    return syncedPage;
+  },
+
+  async prefetchProjectPages(projectId: string, excludePageId?: string): Promise<void> {
+    const { pages } = await readStorage();
+    const projectPages = pages.filter(
+      (page) =>
+        page.projectId === projectId &&
+        page.status !== 'archived' &&
+        page.id !== excludePageId &&
+        !isTempPage(page),
+    );
+
+    for (const page of projectPages) {
+      const syncedPage = await syncPullPage(page);
+
+      if (syncedPage !== page) {
+        await persistPage(syncedPage);
+      }
+    }
+  },
+
   async listProjectPages(projectId: string): Promise<ProjectPage[]> {
     await waitForStub();
     const { pages } = await readStorage();
@@ -966,9 +1002,7 @@ export const notionClient = {
       },
     });
 
-    const syncedPage = isTempPage(page) ? page : await syncPullPage(page);
-    await persistPage(syncedPage);
-    return syncedPage;
+    return page;
   },
 
   async createProjectPage(
