@@ -82,6 +82,32 @@ const store = useJotStore();
 const saveTimer = ref<number>();
 const pageTitleDraft = ref('');
 const projectNameDraft = ref('');
+const newProjectNameDraft = ref('');
+const linkUrlDraft = ref('');
+const imageUrlDraft = ref('');
+const videoUrlDraft = ref('');
+const audioUrlDraft = ref('');
+const serverUrlDraft = ref('');
+const parentPageSearchDraft = ref('');
+const parentPageTitleDraft = ref('');
+const uiMessage = ref('');
+const activeTab = ref<'editor' | 'projects' | 'media' | 'sync'>('editor');
+const editorToolbarMode = ref<'style' | 'insert' | 'controls'>('style');
+const activeEditorMenu = ref<
+  | 'type'
+  | 'marks'
+  | 'color'
+  | 'link'
+  | 'lists'
+  | 'blocks'
+  | 'history'
+  | null
+>(null);
+const archiveTarget = ref<{
+  kind: 'project' | 'page';
+  id: string;
+  title: string;
+} | null>(null);
 const isSigningIn = ref(false);
 const editorStateVersion = ref(0);
 const isRecordingAudio = ref(false);
@@ -316,6 +342,66 @@ const syncBadgeClass = computed(() => ({
 
 const canUseEditor = computed(() => store.syncConfig.connected);
 
+const tabs = [
+  { id: 'editor', label: 'Editor', icon: ['far', 'pen-to-square'] },
+  { id: 'projects', label: 'Projects', icon: ['fas', 'folder-tree'] },
+  { id: 'media', label: 'Media', icon: ['fas', 'photo-film'] },
+  { id: 'sync', label: 'Sync', icon: ['fas', 'cloud-arrow-up'] },
+] as const;
+
+const editorToolbarModes = [
+  { id: 'style', label: 'Style', icon: ['fas', 'wand-magic-sparkles'] },
+  { id: 'insert', label: 'Insert', icon: ['fas', 'plus'] },
+  { id: 'controls', label: 'Controls', icon: ['fas', 'sliders'] },
+] as const;
+
+const activeToolbarItems = computed(() => {
+  if (editorToolbarMode.value === 'insert') {
+    return [
+      { id: 'link', label: 'Link', icon: ['fas', 'link'], title: 'Link' },
+      { id: 'lists', label: 'Lists', icon: ['fas', 'list-ul'], title: 'Lists' },
+      { id: 'blocks', label: 'Blocks', icon: ['fas', 'quote-left'], title: 'Blocks and divider' },
+    ] as const;
+  }
+
+  if (editorToolbarMode.value === 'controls') {
+    return [
+      { id: 'history', label: 'History', icon: ['fas', 'rotate-left'], title: 'Undo, redo, clear formatting' },
+    ] as const;
+  }
+
+  return [
+    { id: 'type', label: 'Type', icon: ['fas', 'heading'], title: 'Block type and size' },
+    { id: 'marks', label: 'Marks', icon: ['fas', 'bold'], title: 'Inline formatting' },
+    { id: 'color', label: 'Color', icon: ['fas', 'palette'], title: 'Text and highlight color' },
+  ] as const;
+});
+
+const accountLabel = computed(() =>
+  store.syncConfig.userEmail ||
+  store.syncConfig.userName ||
+  (store.syncConfig.connected ? 'Connected' : 'Signed out'),
+);
+
+const workspaceLabel = computed(() =>
+  store.syncConfig.workspaceName
+    ? `Workspace: ${store.syncConfig.workspaceName}`
+    : 'No workspace selected',
+);
+
+const contextLabel = computed(() => {
+  const project = store.currentProject?.name ?? 'No project';
+  const page = store.currentPage?.title ?? 'No page';
+  return `${project} / ${page}`;
+});
+
+const parentPageLabel = computed(() =>
+  store.syncConfig.selectedParentPageTitle ||
+  (store.syncConfig.selectedParentPageId ? 'Selected Notion page' : 'Default Jot root page'),
+);
+
+const hasInlineMessage = computed(() => Boolean(uiMessage.value || store.errorMessage));
+
 const activeBlockType = computed(() => {
   editorStateVersion.value;
 
@@ -411,6 +497,32 @@ watch(
   { immediate: true },
 );
 
+watch(
+  () => store.syncConfig.serverUrl,
+  (serverUrl) => {
+    serverUrlDraft.value = serverUrl;
+  },
+  { immediate: true },
+);
+
+watch(
+  () => store.syncConfig.connected,
+  (connected) => {
+    if (connected && activeTab.value === 'sync') {
+      activeTab.value = 'editor';
+    }
+  },
+);
+
+watch(
+  activeTab,
+  (tab) => {
+    if (tab === 'sync' && store.syncConfig.connected) {
+      void store.loadNotionParentPages(parentPageSearchDraft.value);
+    }
+  },
+);
+
 async function initializePanel() {
   await store.initialize();
 }
@@ -449,14 +561,10 @@ async function selectProject(projectId: string) {
 
 async function createProject() {
   await flushEditorContent();
-
-  const name = window.prompt('Project name', 'Untitled Project');
-
-  if (name === null) {
-    return;
-  }
-
+  const name = newProjectNameDraft.value.trim() || 'Untitled Project';
   await store.createProject(name);
+  newProjectNameDraft.value = '';
+  activeTab.value = 'editor';
 }
 
 async function renameProject() {
@@ -473,14 +581,11 @@ async function archiveProject() {
     return;
   }
 
-  const shouldArchive = window.confirm(`Archive project "${store.currentProject.name}"?`);
-
-  if (!shouldArchive) {
-    return;
-  }
-
-  await flushEditorContent();
-  await store.archiveCurrentProject();
+  archiveTarget.value = {
+    kind: 'project',
+    id: store.currentProject.id,
+    title: store.currentProject.name,
+  };
 }
 
 async function createPage() {
@@ -509,14 +614,34 @@ async function archivePage() {
     return;
   }
 
-  const shouldArchive = window.confirm(`Archive "${store.currentPage.title}"?`);
+  archiveTarget.value = {
+    kind: 'page',
+    id: store.currentPage.id,
+    title: store.currentPage.title,
+  };
+}
 
-  if (!shouldArchive) {
+async function confirmArchive() {
+  if (!archiveTarget.value) {
     return;
   }
 
+  const target = archiveTarget.value;
+  archiveTarget.value = null;
   await flushEditorContent();
-  await store.archiveCurrentPage();
+
+  if (target.kind === 'project' && store.currentProject?.id === target.id) {
+    await store.archiveCurrentProject();
+    return;
+  }
+
+  if (target.kind === 'page' && store.currentPage?.id === target.id) {
+    await store.archiveCurrentPage();
+  }
+}
+
+function cancelArchive() {
+  archiveTarget.value = null;
 }
 
 async function resync() {
@@ -537,6 +662,63 @@ async function logout() {
   window.clearInterval(sessionPollTimer);
   isSigningIn.value = false;
   await store.logout();
+  activeTab.value = 'sync';
+}
+
+function openLinkTools() {
+  linkUrlDraft.value = String(editor.value?.getAttributes('link').href ?? '');
+}
+
+function setEditorToolbarMode(mode: typeof editorToolbarModes[number]['id']) {
+  editorToolbarMode.value = mode;
+  activeEditorMenu.value =
+    mode === 'insert' ? 'link' : mode === 'controls' ? 'history' : 'type';
+}
+
+function showEditorMenu(menu: NonNullable<typeof activeEditorMenu.value>) {
+  activeEditorMenu.value = menu;
+
+  if (menu === 'link') {
+    openLinkTools();
+  }
+}
+
+function toggleEditorMenu(menu: NonNullable<typeof activeEditorMenu.value>) {
+  activeEditorMenu.value = activeEditorMenu.value === menu ? null : menu;
+
+  if (activeEditorMenu.value === 'link') {
+    openLinkTools();
+  }
+}
+
+function closeEditorMenu() {
+  activeEditorMenu.value = null;
+}
+
+async function saveServerUrl() {
+  const serverUrl = serverUrlDraft.value.trim();
+
+  if (!serverUrl) {
+    uiMessage.value = 'Enter a sync server URL.';
+    return;
+  }
+
+  await store.updateServerUrl(serverUrl);
+  uiMessage.value = '';
+}
+
+async function searchParentPages() {
+  await store.loadNotionParentPages(parentPageSearchDraft.value);
+}
+
+async function createParentPage() {
+  const title = parentPageTitleDraft.value.trim() || 'Jot';
+  await store.createNotionParentPage(title);
+  parentPageTitleDraft.value = '';
+}
+
+async function selectParentPage(pageId: string) {
+  await store.selectNotionParentPage(pageId);
 }
 
 function startSessionPolling() {
@@ -623,17 +805,11 @@ function setLink() {
     return;
   }
 
-  const existingHref = editor.value.getAttributes('link').href;
-  const href = window.prompt('Paste link URL', existingHref ?? '');
-
-  if (href === null) {
-    return;
-  }
-
-  const trimmedHref = href.trim();
+  const trimmedHref = linkUrlDraft.value.trim();
 
   if (!trimmedHref) {
     editor.value.chain().focus().extendMarkRange('link').unsetLink().run();
+    linkUrlDraft.value = '';
     return;
   }
 
@@ -643,31 +819,49 @@ function setLink() {
     .extendMarkRange('link')
     .setLink({ href: trimmedHref })
     .run();
+  linkUrlDraft.value = '';
 }
 
 function insertImage() {
-  const src = window.prompt('Image URL')?.trim();
-  if (src) editor.value?.chain().focus().setImage({ src }).run();
+  const src = imageUrlDraft.value.trim();
+  if (!src) {
+    return;
+  }
+
+  editor.value?.chain().focus().setImage({ src }).run();
+  imageUrlDraft.value = '';
+  activeTab.value = 'editor';
+  void saveEditorContentOptimistically();
 }
 
 function insertVideo() {
-  const src = window.prompt('Video or YouTube URL')?.trim();
-  if (src) editor.value?.chain().focus().setYoutubeVideo({ src }).run();
+  const src = videoUrlDraft.value.trim();
+  if (!src) {
+    return;
+  }
+
+  editor.value?.chain().focus().setYoutubeVideo({ src }).run();
+  videoUrlDraft.value = '';
+  activeTab.value = 'editor';
+  void saveEditorContentOptimistically();
 }
 
 function insertAudio() {
-  const src = window.prompt('MP3 or audio URL')?.trim();
+  const src = audioUrlDraft.value.trim();
 
   if (!src) {
     return;
   }
 
   if (!isHttpAudioUrl(src)) {
-    window.alert('Paste a public http(s) URL to an MP3 or audio file.');
+    uiMessage.value = 'Paste a public http(s) URL to an MP3 or audio file.';
     return;
   }
 
   editor.value?.chain().focus().setAudio({ src }).run();
+  audioUrlDraft.value = '';
+  uiMessage.value = '';
+  activeTab.value = 'editor';
   void saveEditorContentOptimistically();
 }
 
@@ -686,7 +880,7 @@ async function startAudioRecording() {
   }
 
   if (!navigator.mediaDevices?.getUserMedia) {
-    window.alert('Audio recording is not available in this browser.');
+    uiMessage.value = 'Audio recording is not available in this browser.';
     return;
   }
 
@@ -727,7 +921,7 @@ async function startAudioRecording() {
     audioRecorder.start();
     isRecordingAudio.value = true;
   } catch (error) {
-    store.errorMessage =
+    uiMessage.value =
       error instanceof Error ? error.message : 'Unable to start audio recording.';
     stopAudioStream();
   } finally {
@@ -836,7 +1030,7 @@ async function handleUploadableImageDrop(info: { kind: 'file'; file: File }): Pr
   const { file } = info;
 
   if (!isUploadableImageFile(file)) {
-    window.alert(`Images must be ${Math.floor(IMAGE_UPLOAD_MAX_BYTES / 1024 / 1024)} MB or smaller.`);
+    uiMessage.value = `Images must be ${Math.floor(IMAGE_UPLOAD_MAX_BYTES / 1024 / 1024)} MB or smaller.`;
     return;
   }
 
@@ -853,7 +1047,7 @@ async function handleUploadableImageDrop(info: { kind: 'file'; file: File }): Pr
   try {
     fileUploadId = await notionClient.uploadMedia(file, file.type, file.name);
   } catch (error) {
-    store.errorMessage =
+    uiMessage.value =
       error instanceof Error ? error.message : 'Unable to upload this image to Notion.';
   }
 
@@ -890,7 +1084,7 @@ async function handleUploadableAudioDrop(info: { kind: 'file'; file: File }): Pr
 
 async function handleUploadableAudioFile(file: File): Promise<void> {
   if (!isUploadableAudioFile(file)) {
-    window.alert(`Audio files must be ${Math.floor(AUDIO_UPLOAD_MAX_BYTES / 1024 / 1024)} MB or smaller.`);
+    uiMessage.value = `Audio files must be ${Math.floor(AUDIO_UPLOAD_MAX_BYTES / 1024 / 1024)} MB or smaller.`;
     return;
   }
 
@@ -911,7 +1105,7 @@ async function handleUploadableAudioFile(file: File): Promise<void> {
   try {
     fileUploadId = await notionClient.uploadMedia(file, file.type, file.name);
   } catch (error) {
-    store.errorMessage =
+    uiMessage.value =
       error instanceof Error ? error.message : 'Unable to upload this audio to Notion.';
   }
 
@@ -1058,33 +1252,118 @@ function kebabCase(value: string) {
 <template>
   <main class="shell">
     <header class="topbar">
-      <div
-        :class="syncBadgeClass"
-        :title="syncBadgeTitle"
-      >
-        <span aria-hidden="true" />
-        {{ saveLabel }}
+      <div class="topbar-status">
+        <div
+          :class="syncBadgeClass"
+          :title="syncBadgeTitle"
+        >
+          <span aria-hidden="true" />
+          {{ saveLabel }}
+        </div>
+        <div class="topbar-meta">
+          <strong>{{ contextLabel }}</strong>
+          <small>{{ accountLabel }} / {{ workspaceLabel }}</small>
+        </div>
       </div>
 
-      <div v-if="store.syncConfig.connected" class="topbar-actions">
-        <button
-          type="button"
-          class="secondary-button"
-          :disabled="store.isLoading"
-          title="Resync with Notion"
-          @click="resync"
+      <div class="topbar-actions">
+        <select
+          v-if="store.syncConfig.connected"
+          v-model="currentProjectModel"
+          aria-label="Quick project"
+          :disabled="store.isLoading || store.projects.length === 0"
         >
-          ↻
+          <option
+            v-for="project in store.projects"
+            :key="project.id"
+            :value="project.id"
+          >
+            {{ project.name }}
+          </option>
+        </select>
+
+        <select
+          v-if="store.syncConfig.connected"
+          v-model="currentPageModel"
+          aria-label="Quick page"
+          :disabled="store.isLoading || store.pages.length === 0"
+        >
+          <option
+            v-for="page in store.pages"
+            :key="page.id"
+            :value="page.id"
+          >
+            {{ page.title }}
+          </option>
+        </select>
+
+        <button
+          v-if="store.syncConfig.connected"
+          type="button"
+          class="icon-label-button secondary-button"
+          :disabled="store.isLoading"
+          title="New project"
+          aria-label="New project"
+          @click="activeTab = 'projects'"
+        >
+          <font-awesome-icon :icon="['fas', 'folder-plus']" fixed-width />
+          <span>New project</span>
+        </button>
+
+        <button
+          v-if="store.syncConfig.connected"
+          type="button"
+          class="icon-label-button"
+          :disabled="store.isLoading || !store.currentProjectId"
+          title="New page"
+          aria-label="New page"
+          @click="createPage"
+        >
+          <font-awesome-icon :icon="['fas', 'file-circle-plus']" fixed-width />
+          <span>New page</span>
         </button>
         <button
+          v-if="store.syncConfig.connected"
           type="button"
-          class="secondary-button"
+          class="icon-label-button secondary-button"
+          :disabled="store.isLoading"
+          title="Resync with Notion"
+          aria-label="Resync with Notion"
+          @click="resync"
+        >
+          <font-awesome-icon :icon="['fas', 'rotate']" fixed-width />
+          <span>Sync</span>
+        </button>
+        <button
+          v-if="store.syncConfig.connected"
+          type="button"
+          class="icon-label-button secondary-button"
+          title="Logout"
+          aria-label="Logout"
           @click="logout"
         >
-          Logout
+          <font-awesome-icon :icon="['fas', 'right-from-bracket']" fixed-width />
+          <span>Logout</span>
         </button>
       </div>
     </header>
+
+    <nav class="tabs" aria-label="Side panel sections">
+      <button
+        v-for="tab in tabs"
+        :key="tab.id"
+        type="button"
+        class="icon-label-button tab-button"
+        :class="{ active: activeTab === tab.id }"
+        :aria-current="activeTab === tab.id ? 'page' : undefined"
+        :title="tab.label"
+        :aria-label="tab.label"
+        @click="activeTab = tab.id"
+      >
+        <font-awesome-icon :icon="tab.icon" fixed-width />
+        <span>{{ tab.label }}</span>
+      </button>
+    </nav>
 
     <section
       v-if="!store.syncConfig.connected"
@@ -1094,18 +1373,457 @@ function kebabCase(value: string) {
       <h2>Log in with Notion</h2>
       <button
         type="button"
+        class="icon-label-button"
         :disabled="isSigningIn"
+        :title="isSigningIn ? 'Connecting' : 'Continue with Notion'"
+        :aria-label="isSigningIn ? 'Connecting' : 'Continue with Notion'"
         @click="loginWithNotion"
       >
-        {{ isSigningIn ? 'Connecting...' : 'Continue with Notion' }}
+        <font-awesome-icon :icon="['fas', 'cloud-arrow-up']" fixed-width />
+        <span>{{ isSigningIn ? 'Connecting...' : 'Continue with Notion' }}</span>
       </button>
     </section>
 
-    <p v-if="store.errorMessage" class="error">{{ store.errorMessage }}</p>
+    <p v-if="hasInlineMessage" class="error">
+      {{ uiMessage || store.errorMessage }}
+    </p>
 
-    <section v-if="canUseEditor" class="editor-shell" aria-label="Project page">
+    <section
+      v-if="canUseEditor && activeTab === 'editor'"
+      class="editor-shell"
+      aria-label="Project page"
+    >
       <header class="editor-header">
-        <div class="project-controls">
+        <div class="editor-title-row">
+          <div class="page-title">
+            <input
+              v-model="pageTitleDraft"
+              aria-label="Page title"
+              :disabled="store.isLoading || !store.currentPage"
+              @blur="renamePage"
+              @keydown.enter="blurTitleInput"
+            >
+            <p>{{ store.currentProject?.name || 'Project' }} / {{ saveLabel }}</p>
+          </div>
+          <button
+            type="button"
+            class="icon-label-button secondary-button"
+            :disabled="store.isLoading || !store.currentPage"
+            title="Manage projects and pages"
+            aria-label="Manage projects and pages"
+            @click="activeTab = 'projects'"
+          >
+            <font-awesome-icon :icon="['fas', 'folder-tree']" fixed-width />
+            <span>Manage</span>
+          </button>
+        </div>
+
+        <div
+          class="editor-tools"
+          aria-label="Editor toolbar"
+          @mouseleave="closeEditorMenu"
+        >
+          <div class="editor-tool-tabs" role="tablist" aria-label="Editor tool groups">
+            <button
+              v-for="mode in editorToolbarModes"
+              :key="mode.id"
+              type="button"
+              role="tab"
+              class="icon-label-button"
+              :aria-selected="editorToolbarMode === mode.id"
+              :class="{ active: editorToolbarMode === mode.id }"
+              :title="mode.label"
+              :aria-label="mode.label"
+              @click="setEditorToolbarMode(mode.id)"
+              @mouseenter="setEditorToolbarMode(mode.id)"
+            >
+              <font-awesome-icon :icon="mode.icon" fixed-width />
+              <span>{{ mode.label }}</span>
+            </button>
+          </div>
+
+          <div class="editor-quickbar" aria-label="Editor actions">
+            <button
+              v-for="item in activeToolbarItems"
+              :key="item.id"
+              type="button"
+              class="tool-icon-button"
+              :class="{ active: activeEditorMenu === item.id }"
+              :disabled="!editor"
+              :title="item.title"
+              :aria-label="item.title"
+              @click="toggleEditorMenu(item.id)"
+              @mouseenter="showEditorMenu(item.id)"
+            >
+              <font-awesome-icon :icon="item.icon" fixed-width />
+              <span>{{ item.label }}</span>
+            </button>
+          </div>
+
+          <div v-if="activeEditorMenu" class="tool-popover">
+            <div v-if="activeEditorMenu === 'type'" class="tool-panel">
+              <label class="field-label">
+                Block
+                <select
+                  class="toolbar-select"
+                  aria-label="Block type"
+                  :disabled="!editor"
+                  :value="activeBlockType"
+                  @change="setBlockType"
+                >
+                  <option
+                    v-for="blockType in blockTypes"
+                    :key="blockType.value"
+                    :value="blockType.value"
+                  >
+                    {{ blockType.label }}
+                  </option>
+                </select>
+              </label>
+
+              <label class="field-label">
+                Size
+                <select
+                  class="toolbar-select"
+                  aria-label="Font size"
+                  :disabled="!editor"
+                  :value="activeFontSize"
+                  @change="setFontSize"
+                >
+                  <option
+                    v-for="fontSize in fontSizes"
+                    :key="fontSize.value"
+                    :value="fontSize.value"
+                  >
+                    {{ fontSize.label }}
+                  </option>
+                </select>
+              </label>
+            </div>
+
+            <div v-else-if="activeEditorMenu === 'marks'" class="tool-panel button-grid">
+              <button
+                type="button"
+                class="icon-label-button"
+                :class="{ active: editor?.isActive('bold') }"
+                :disabled="!editor"
+                title="Bold"
+                aria-label="Bold"
+                @click="editor?.chain().focus().toggleBold().run()"
+              >
+                <font-awesome-icon :icon="['fas', 'bold']" fixed-width />
+                <span>Bold</span>
+              </button>
+              <button
+                type="button"
+                class="icon-label-button"
+                :class="{ active: editor?.isActive('italic') }"
+                :disabled="!editor"
+                title="Italic"
+                aria-label="Italic"
+                @click="editor?.chain().focus().toggleItalic().run()"
+              >
+                <font-awesome-icon :icon="['fas', 'italic']" fixed-width />
+                <span>Italic</span>
+              </button>
+              <button
+                type="button"
+                class="icon-label-button"
+                :class="{ active: editor?.isActive('underline') }"
+                :disabled="!editor"
+                title="Underline"
+                aria-label="Underline"
+                @click="editor?.chain().focus().toggleUnderline().run()"
+              >
+                <font-awesome-icon :icon="['fas', 'underline']" fixed-width />
+                <span>Underline</span>
+              </button>
+              <button
+                type="button"
+                class="icon-label-button"
+                :class="{ active: editor?.isActive('strike') }"
+                :disabled="!editor"
+                title="Strikethrough"
+                aria-label="Strikethrough"
+                @click="editor?.chain().focus().toggleStrike().run()"
+              >
+                <font-awesome-icon :icon="['fas', 'strikethrough']" fixed-width />
+                <span>Strike</span>
+              </button>
+              <button
+                type="button"
+                class="icon-label-button"
+                :class="{ active: editor?.isActive('code') }"
+                :disabled="!editor"
+                title="Inline code"
+                aria-label="Inline code"
+                @click="editor?.chain().focus().toggleCode().run()"
+              >
+                <font-awesome-icon :icon="['fas', 'code']" fixed-width />
+                <span>Code</span>
+              </button>
+              <button
+                type="button"
+                class="icon-label-button"
+                :class="{ active: editor?.isActive('superscript') }"
+                :disabled="!editor"
+                title="Superscript"
+                aria-label="Superscript"
+                @click="editor?.chain().focus().toggleSuperscript().run()"
+              >
+                <span aria-hidden="true" class="text-icon">x2</span>
+                <span>Super</span>
+              </button>
+              <button
+                type="button"
+                class="icon-label-button"
+                :class="{ active: editor?.isActive('subscript') }"
+                :disabled="!editor"
+                title="Subscript"
+                aria-label="Subscript"
+                @click="editor?.chain().focus().toggleSubscript().run()"
+              >
+                <span aria-hidden="true" class="text-icon">x_2</span>
+                <span>Sub</span>
+              </button>
+            </div>
+
+            <div v-else-if="activeEditorMenu === 'color'" class="tool-panel">
+              <label class="field-label">
+                Text color
+                <select
+                  class="toolbar-select"
+                  aria-label="Text color"
+                  :disabled="!editor"
+                  :value="activeTextColor"
+                  @change="setTextColor"
+                >
+                  <option
+                    v-for="color in textColors"
+                    :key="color.value"
+                    :value="color.value"
+                  >
+                    {{ color.label }}
+                  </option>
+                </select>
+              </label>
+
+              <label class="field-label">
+                Highlight
+                <select
+                  class="toolbar-select"
+                  aria-label="Highlight"
+                  :disabled="!editor"
+                  :value="activeHighlightColor"
+                  @change="setHighlightColor"
+                >
+                  <option
+                    v-for="color in highlightColors"
+                    :key="color.value"
+                    :value="color.value"
+                  >
+                    {{ color.label }}
+                  </option>
+                </select>
+              </label>
+            </div>
+
+            <form
+              v-else-if="activeEditorMenu === 'link'"
+              class="tool-panel link-form"
+              aria-label="Link editor"
+              @submit.prevent="setLink"
+            >
+              <input
+                v-model="linkUrlDraft"
+                type="url"
+                aria-label="Link URL"
+                placeholder="Paste link URL"
+                :disabled="!editor"
+                @focus="openLinkTools"
+              >
+              <button
+                type="submit"
+                class="icon-label-button"
+                :disabled="!editor"
+                title="Apply link"
+                aria-label="Apply link"
+              >
+                <font-awesome-icon :icon="['fas', 'check']" fixed-width />
+                <span>Apply</span>
+              </button>
+              <button
+                type="button"
+                class="icon-label-button secondary-button"
+                :disabled="!editor"
+                title="Remove link"
+                aria-label="Remove link"
+                @click="linkUrlDraft = ''; setLink()"
+              >
+                <font-awesome-icon :icon="['fas', 'xmark']" fixed-width />
+                <span>Remove</span>
+              </button>
+            </form>
+
+            <div v-else-if="activeEditorMenu === 'lists'" class="tool-panel button-grid">
+              <button
+                type="button"
+                class="icon-label-button"
+                :class="{ active: editor?.isActive('bulletList') }"
+                :disabled="!editor"
+                title="Bullet list"
+                aria-label="Bullet list"
+                @click="editor?.chain().focus().toggleBulletList().run()"
+              >
+                <font-awesome-icon :icon="['fas', 'list-ul']" fixed-width />
+                <span>Bullet</span>
+              </button>
+              <button
+                type="button"
+                class="icon-label-button"
+                :class="{ active: editor?.isActive('orderedList') }"
+                :disabled="!editor"
+                title="Ordered list"
+                aria-label="Ordered list"
+                @click="editor?.chain().focus().toggleOrderedList().run()"
+              >
+                <font-awesome-icon :icon="['fas', 'list-ol']" fixed-width />
+                <span>Number</span>
+              </button>
+              <button
+                type="button"
+                class="icon-label-button"
+                :class="{ active: editor?.isActive('taskList') }"
+                :disabled="!editor"
+                title="Task list"
+                aria-label="Task list"
+                @click="editor?.chain().focus().toggleTaskList().run()"
+              >
+                <font-awesome-icon :icon="['fas', 'list-check']" fixed-width />
+                <span>Task</span>
+              </button>
+            </div>
+
+            <div v-else-if="activeEditorMenu === 'blocks'" class="tool-panel button-grid">
+              <button
+                type="button"
+                class="icon-label-button"
+                :class="{ active: editor?.isActive('blockquote') }"
+                :disabled="!editor"
+                title="Quote"
+                aria-label="Quote"
+                @click="editor?.chain().focus().toggleBlockquote().run()"
+              >
+                <font-awesome-icon :icon="['fas', 'quote-left']" fixed-width />
+                <span>Quote</span>
+              </button>
+              <button
+                type="button"
+                class="icon-label-button"
+                :class="{ active: editor?.isActive('codeBlock') }"
+                :disabled="!editor"
+                title="Code block"
+                aria-label="Code block"
+                @click="editor?.chain().focus().toggleCodeBlock().run()"
+              >
+                <font-awesome-icon :icon="['fas', 'code']" fixed-width />
+                <span>Code block</span>
+              </button>
+              <button
+                type="button"
+                class="icon-label-button"
+                :disabled="!editor"
+                title="Divider"
+                aria-label="Divider"
+                @click="editor?.chain().focus().setHorizontalRule().run()"
+              >
+                <font-awesome-icon :icon="['fas', 'grip-lines']" fixed-width />
+                <span>Divider</span>
+              </button>
+            </div>
+
+            <div v-else-if="activeEditorMenu === 'history'" class="tool-panel button-grid">
+              <button
+                type="button"
+                class="icon-label-button"
+                :disabled="!editor"
+                title="Undo"
+                aria-label="Undo"
+                @click="editor?.chain().focus().undo().run()"
+              >
+                <font-awesome-icon :icon="['fas', 'rotate-left']" fixed-width />
+                <span>Undo</span>
+              </button>
+              <button
+                type="button"
+                class="icon-label-button"
+                :disabled="!editor"
+                title="Redo"
+                aria-label="Redo"
+                @click="editor?.chain().focus().redo().run()"
+              >
+                <font-awesome-icon :icon="['fas', 'rotate-right']" fixed-width />
+                <span>Redo</span>
+              </button>
+              <button
+                type="button"
+                class="icon-label-button"
+                :disabled="!editor"
+                title="Clear formatting"
+                aria-label="Clear formatting"
+                @click="clearFormatting"
+              >
+                <font-awesome-icon :icon="['fas', 'eraser']" fixed-width />
+                <span>Clear</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <editor-content v-if="editor" class="editor" :editor="editor" />
+    </section>
+
+    <section
+      v-if="canUseEditor && activeTab === 'projects'"
+      class="tab-panel"
+      aria-label="Projects and pages"
+    >
+      <div class="panel-section">
+        <div class="section-heading">
+          <h2>Projects</h2>
+          <button
+            type="button"
+            class="icon-label-button secondary-button"
+            title="Editor"
+            aria-label="Editor"
+            @click="activeTab = 'editor'"
+          >
+            <font-awesome-icon :icon="['far', 'pen-to-square']" fixed-width />
+            <span>Editor</span>
+          </button>
+        </div>
+
+        <form class="inline-form" @submit.prevent="createProject">
+          <input
+            v-model="newProjectNameDraft"
+            aria-label="New project name"
+            placeholder="New project name"
+            :disabled="store.isLoading"
+          >
+          <button
+            type="submit"
+            class="icon-label-button"
+            :disabled="store.isLoading"
+            title="Create project"
+            aria-label="Create project"
+          >
+            <font-awesome-icon :icon="['fas', 'folder-plus']" fixed-width />
+            <span>Create</span>
+          </button>
+        </form>
+
+        <div class="manage-row">
           <select
             v-model="currentProjectModel"
             aria-label="Project"
@@ -1119,29 +1837,21 @@ function kebabCase(value: string) {
               {{ project.name }}
             </option>
           </select>
-
           <button
             type="button"
-            class="icon-button"
-            :disabled="store.isLoading"
-            title="New project"
-            @click="createProject"
-          >
-            +
-          </button>
-
-          <button
-            type="button"
-            class="archive-button"
+            class="icon-label-button secondary-button danger-button"
             :disabled="store.isLoading || !store.currentProject"
             title="Archive project"
+            aria-label="Archive project"
             @click="archiveProject"
           >
-            Archive
+            <font-awesome-icon :icon="['fas', 'trash-can']" fixed-width />
+            <span>Archive</span>
           </button>
         </div>
 
-        <div class="project-title">
+        <label class="field-label">
+          Project name
           <input
             v-model="projectNameDraft"
             aria-label="Project name"
@@ -1149,9 +1859,40 @@ function kebabCase(value: string) {
             @blur="renameProject"
             @keydown.enter="blurTitleInput"
           >
+        </label>
+
+        <div class="item-list">
+          <button
+            v-for="project in store.projects"
+            :key="project.id"
+            type="button"
+            class="item-row"
+            :class="{ active: project.id === store.currentProjectId }"
+            @click="selectProject(project.id)"
+          >
+            <span>{{ project.name }}</span>
+            <small>{{ project.syncState || 'saved' }}</small>
+          </button>
+        </div>
+      </div>
+
+      <div class="panel-section">
+        <div class="section-heading">
+          <h2>Pages</h2>
+          <button
+            type="button"
+            class="icon-label-button"
+            :disabled="store.isLoading || !store.currentProjectId"
+            title="New page"
+            aria-label="New page"
+            @click="createPage"
+          >
+            <font-awesome-icon :icon="['fas', 'file-circle-plus']" fixed-width />
+            <span>New page</span>
+          </button>
         </div>
 
-        <div class="page-controls">
+        <div class="manage-row">
           <select
             v-model="currentPageModel"
             aria-label="Page"
@@ -1165,29 +1906,21 @@ function kebabCase(value: string) {
               {{ page.title }}
             </option>
           </select>
-
           <button
             type="button"
-            class="icon-button"
-            :disabled="store.isLoading || !store.currentProjectId"
-            title="New page"
-            @click="createPage"
-          >
-            +
-          </button>
-
-          <button
-            type="button"
-            class="archive-button"
+            class="icon-label-button secondary-button danger-button"
             :disabled="store.isLoading || !store.currentPage"
             title="Archive page"
+            aria-label="Archive page"
             @click="archivePage"
           >
-            Archive
+            <font-awesome-icon :icon="['fas', 'trash-can']" fixed-width />
+            <span>Archive</span>
           </button>
         </div>
 
-        <div class="page-title">
+        <label class="field-label">
+          Page title
           <input
             v-model="pageTitleDraft"
             aria-label="Page title"
@@ -1195,294 +1928,352 @@ function kebabCase(value: string) {
             @blur="renamePage"
             @keydown.enter="blurTitleInput"
           >
-          <p>{{ saveLabel }}</p>
+        </label>
+
+        <div class="item-list">
+          <button
+            v-for="page in store.pages"
+            :key="page.id"
+            type="button"
+            class="item-row"
+            :class="{ active: page.id === store.currentPage?.id }"
+            @click="selectPage(page.id)"
+          >
+            <span>{{ page.title }}</span>
+            <small>{{ page.syncState || 'saved' }}</small>
+          </button>
         </div>
-
-        <div class="toolbar" aria-label="Editor toolbar">
-          <div class="toolbar-group block-group" aria-label="Block style">
-            <select
-              class="toolbar-select block-select"
-              aria-label="Block type"
-              :disabled="!editor"
-              :value="activeBlockType"
-              @change="setBlockType"
-            >
-              <option
-                v-for="blockType in blockTypes"
-                :key="blockType.value"
-                :value="blockType.value"
-              >
-                {{ blockType.label }}
-              </option>
-            </select>
-
-            <select
-              class="toolbar-select compact-select"
-              aria-label="Font size"
-              :disabled="!editor"
-              :value="activeFontSize"
-              @change="setFontSize"
-            >
-              <option
-                v-for="fontSize in fontSizes"
-                :key="fontSize.value"
-                :value="fontSize.value"
-              >
-                {{ fontSize.label }}
-              </option>
-            </select>
-          </div>
-
-          <div class="toolbar-group" aria-label="Inline formatting">
-            <button
-              type="button"
-              :class="{ active: editor?.isActive('bold') }"
-              :disabled="!editor"
-              title="Bold"
-              @click="editor?.chain().focus().toggleBold().run()"
-            >
-              B
-            </button>
-            <button
-              type="button"
-              :class="{ active: editor?.isActive('italic') }"
-              :disabled="!editor"
-              title="Italic"
-              @click="editor?.chain().focus().toggleItalic().run()"
-            >
-              I
-            </button>
-            <button
-              type="button"
-              :class="{ active: editor?.isActive('underline') }"
-              :disabled="!editor"
-              title="Underline"
-              @click="editor?.chain().focus().toggleUnderline().run()"
-            >
-              U
-            </button>
-            <button
-              type="button"
-              :class="{ active: editor?.isActive('strike') }"
-              :disabled="!editor"
-              title="Strikethrough"
-              @click="editor?.chain().focus().toggleStrike().run()"
-            >
-              S
-            </button>
-            <button
-              type="button"
-              :class="{ active: editor?.isActive('code') }"
-              :disabled="!editor"
-              title="Inline code"
-              @click="editor?.chain().focus().toggleCode().run()"
-            >
-              &lt;/&gt;
-            </button>
-            <button
-              type="button"
-              :class="{ active: editor?.isActive('superscript') }"
-              :disabled="!editor"
-              title="Superscript"
-              @click="editor?.chain().focus().toggleSuperscript().run()"
-            >
-              x2
-            </button>
-            <button
-              type="button"
-              :class="{ active: editor?.isActive('subscript') }"
-              :disabled="!editor"
-              title="Subscript"
-              @click="editor?.chain().focus().toggleSubscript().run()"
-            >
-              x2
-            </button>
-          </div>
-
-          <div class="toolbar-group color-group" aria-label="Color">
-            <select
-              class="toolbar-select compact-select"
-              aria-label="Text color"
-              :disabled="!editor"
-              :value="activeTextColor"
-              @change="setTextColor"
-            >
-              <option
-                v-for="color in textColors"
-                :key="color.value"
-                :value="color.value"
-              >
-                {{ color.label }}
-              </option>
-            </select>
-
-            <select
-              class="toolbar-select compact-select"
-              aria-label="Highlight"
-              :disabled="!editor"
-              :value="activeHighlightColor"
-              @change="setHighlightColor"
-            >
-              <option
-                v-for="color in highlightColors"
-                :key="color.value"
-                :value="color.value"
-              >
-                {{ color.label }}
-              </option>
-            </select>
-          </div>
-
-          <div class="toolbar-group" aria-label="Lists and inserts">
-            <button
-              type="button"
-              :class="{ active: editor?.isActive('link') }"
-              :disabled="!editor"
-              title="Link"
-              @click="setLink"
-            >
-              Link
-            </button>
-            <button
-              type="button"
-              :class="{ active: editor?.isActive('bulletList') }"
-              :disabled="!editor"
-              title="Bullet list"
-              @click="editor?.chain().focus().toggleBulletList().run()"
-            >
-              -
-            </button>
-            <button
-              type="button"
-              :class="{ active: editor?.isActive('orderedList') }"
-              :disabled="!editor"
-              title="Ordered list"
-              @click="editor?.chain().focus().toggleOrderedList().run()"
-            >
-              1.
-            </button>
-            <button
-              type="button"
-              :class="{ active: editor?.isActive('taskList') }"
-              :disabled="!editor"
-              title="Task list"
-              @click="editor?.chain().focus().toggleTaskList().run()"
-            >
-              []
-            </button>
-            <button
-              type="button"
-              :class="{ active: editor?.isActive('blockquote') }"
-              :disabled="!editor"
-              title="Quote"
-              @click="editor?.chain().focus().toggleBlockquote().run()"
-            >
-              "
-            </button>
-            <button
-              type="button"
-              :class="{ active: editor?.isActive('codeBlock') }"
-              :disabled="!editor"
-              title="Code block"
-              @click="editor?.chain().focus().toggleCodeBlock().run()"
-            >
-              Code
-            </button>
-            <button
-              type="button"
-              :disabled="!editor"
-              title="Divider"
-              @click="editor?.chain().focus().setHorizontalRule().run()"
-            >
-              HR
-            </button>
-          </div>
-
-          <div class="toolbar-group" aria-label="Media inserts">
-            <button
-              type="button"
-              :disabled="!editor"
-              title="Image"
-              @click="insertImage"
-            >
-              Img
-            </button>
-            <button
-              type="button"
-              :disabled="!editor"
-              title="Video / YouTube"
-              @click="insertVideo"
-            >
-              Vid
-            </button>
-            <button
-              type="button"
-              :disabled="!editor"
-              title="MP3 or audio URL"
-              @click="insertAudio"
-            >
-              Aud
-            </button>
-            <button
-              type="button"
-              :class="{ active: isRecordingAudio }"
-              :disabled="!editor || isPreparingAudioRecording"
-              :title="isRecordingAudio ? 'Stop recording audio' : 'Record audio'"
-              @click="toggleAudioRecording"
-            >
-              {{ isRecordingAudio ? 'Stop' : 'Rec' }}
-            </button>
-          </div>
-
-          <div class="toolbar-group utility-group" aria-label="History and cleanup">
-            <button
-              type="button"
-              :disabled="!editor"
-              title="Clear formatting"
-              @click="clearFormatting"
-            >
-              Tx
-            </button>
-            <button
-              type="button"
-              :disabled="!editor"
-              title="Undo"
-              @click="editor?.chain().focus().undo().run()"
-            >
-              Undo
-            </button>
-            <button
-              type="button"
-              :disabled="!editor"
-              title="Redo"
-              @click="editor?.chain().focus().redo().run()"
-            >
-              Redo
-            </button>
-          </div>
-        </div>
-      </header>
-
-      <editor-content v-if="editor" class="editor" :editor="editor" />
+      </div>
     </section>
+
+    <section
+      v-if="canUseEditor && activeTab === 'media'"
+      class="tab-panel"
+      aria-label="Media"
+    >
+      <div class="panel-section">
+        <div class="section-heading">
+          <h2>Media</h2>
+          <button
+            type="button"
+            class="icon-label-button secondary-button"
+            title="Editor"
+            aria-label="Editor"
+            @click="activeTab = 'editor'"
+          >
+            <font-awesome-icon :icon="['far', 'pen-to-square']" fixed-width />
+            <span>Editor</span>
+          </button>
+        </div>
+
+        <form class="stack-form" @submit.prevent="insertImage">
+          <label class="field-label">
+            Image URL
+            <input
+              v-model="imageUrlDraft"
+              type="url"
+              aria-label="Image URL"
+              placeholder="https://..."
+              :disabled="!editor"
+            >
+          </label>
+          <button
+            type="submit"
+            class="icon-label-button"
+            :disabled="!editor"
+            title="Insert image"
+            aria-label="Insert image"
+          >
+            <font-awesome-icon :icon="['fas', 'image']" fixed-width />
+            <span>Insert image</span>
+          </button>
+        </form>
+
+        <form class="stack-form" @submit.prevent="insertVideo">
+          <label class="field-label">
+            Video or YouTube URL
+            <input
+              v-model="videoUrlDraft"
+              type="url"
+              aria-label="Video or YouTube URL"
+              placeholder="https://..."
+              :disabled="!editor"
+            >
+          </label>
+          <button
+            type="submit"
+            class="icon-label-button"
+            :disabled="!editor"
+            title="Insert video"
+            aria-label="Insert video"
+          >
+            <font-awesome-icon :icon="['fas', 'video']" fixed-width />
+            <span>Insert video</span>
+          </button>
+        </form>
+
+        <form class="stack-form" @submit.prevent="insertAudio">
+          <label class="field-label">
+            Audio URL
+            <input
+              v-model="audioUrlDraft"
+              type="url"
+              aria-label="Audio URL"
+              placeholder="https://..."
+              :disabled="!editor"
+            >
+          </label>
+          <button
+            type="submit"
+            class="icon-label-button"
+            :disabled="!editor"
+            title="Insert audio"
+            aria-label="Insert audio"
+          >
+            <font-awesome-icon :icon="['fas', 'microphone']" fixed-width />
+            <span>Insert audio</span>
+          </button>
+        </form>
+
+        <div class="recording-row">
+          <button
+            type="button"
+            class="icon-label-button"
+            :class="{ active: isRecordingAudio }"
+            :disabled="!editor || isPreparingAudioRecording"
+            :title="isRecordingAudio ? 'Stop recording audio' : 'Record audio'"
+            :aria-label="isRecordingAudio ? 'Stop recording audio' : 'Record audio'"
+            @click="toggleAudioRecording"
+          >
+            <font-awesome-icon :icon="isRecordingAudio ? ['fas', 'xmark'] : ['fas', 'microphone']" fixed-width />
+            <span>{{ isRecordingAudio ? 'Stop recording' : 'Record audio' }}</span>
+          </button>
+          <small>{{ isPreparingAudioRecording ? 'Preparing microphone...' : 'Drop images, audio, or YouTube links into the editor.' }}</small>
+        </div>
+      </div>
+    </section>
+
+    <section
+      v-if="activeTab === 'sync'"
+      class="tab-panel"
+      aria-label="Sync"
+    >
+      <div class="panel-section">
+        <div class="section-heading">
+          <h2>Sync</h2>
+          <button
+            v-if="store.syncConfig.connected"
+            type="button"
+            class="icon-label-button secondary-button"
+            title="Resync"
+            aria-label="Resync"
+            @click="resync"
+          >
+            <font-awesome-icon :icon="['fas', 'rotate']" fixed-width />
+            <span>Resync</span>
+          </button>
+        </div>
+
+        <dl class="status-list">
+          <div>
+            <dt>Account</dt>
+            <dd>{{ accountLabel }}</dd>
+          </div>
+          <div>
+            <dt>Workspace</dt>
+            <dd>{{ store.syncConfig.workspaceName || 'Not connected' }}</dd>
+          </div>
+          <div>
+            <dt>Parent page</dt>
+            <dd>{{ parentPageLabel }}</dd>
+          </div>
+          <div>
+            <dt>Status</dt>
+            <dd>{{ saveLabel }}</dd>
+          </div>
+        </dl>
+
+        <button
+          v-if="!store.syncConfig.connected"
+          type="button"
+          class="icon-label-button"
+          :disabled="isSigningIn"
+          :title="isSigningIn ? 'Connecting' : 'Continue with Notion'"
+          :aria-label="isSigningIn ? 'Connecting' : 'Continue with Notion'"
+          @click="loginWithNotion"
+        >
+          <font-awesome-icon :icon="['fas', 'cloud-arrow-up']" fixed-width />
+          <span>{{ isSigningIn ? 'Connecting...' : 'Continue with Notion' }}</span>
+        </button>
+        <button
+          v-else
+          type="button"
+          class="icon-label-button secondary-button"
+          title="Logout"
+          aria-label="Logout"
+          @click="logout"
+        >
+          <font-awesome-icon :icon="['fas', 'right-from-bracket']" fixed-width />
+          <span>Logout</span>
+        </button>
+      </div>
+
+      <div class="panel-section">
+        <h2>Server</h2>
+        <form class="inline-form" @submit.prevent="saveServerUrl">
+          <input
+            v-model="serverUrlDraft"
+            type="url"
+            aria-label="Sync server URL"
+            placeholder="http://localhost:8787"
+          >
+          <button
+            type="submit"
+            class="icon-label-button"
+            title="Save server URL"
+            aria-label="Save server URL"
+          >
+            <font-awesome-icon :icon="['fas', 'floppy-disk']" fixed-width />
+            <span>Save</span>
+          </button>
+        </form>
+      </div>
+
+      <div class="panel-section">
+        <h2>Notion Parent Page</h2>
+        <form class="inline-form" @submit.prevent="searchParentPages">
+          <input
+            v-model="parentPageSearchDraft"
+            aria-label="Search Notion pages"
+            placeholder="Search pages"
+            :disabled="!store.syncConfig.connected"
+          >
+          <button
+            type="submit"
+            class="icon-label-button"
+            :disabled="!store.syncConfig.connected"
+            title="Search Notion pages"
+            aria-label="Search Notion pages"
+          >
+            <font-awesome-icon :icon="['fas', 'magnifying-glass']" fixed-width />
+            <span>Search</span>
+          </button>
+        </form>
+
+        <form class="inline-form" @submit.prevent="createParentPage">
+          <input
+            v-model="parentPageTitleDraft"
+            aria-label="New Notion parent page"
+            placeholder="New parent page title"
+            :disabled="!store.syncConfig.connected"
+          >
+          <button
+            type="submit"
+            class="icon-label-button"
+            :disabled="!store.syncConfig.connected"
+            title="Create Notion parent page"
+            aria-label="Create Notion parent page"
+          >
+            <font-awesome-icon :icon="['fas', 'folder-plus']" fixed-width />
+            <span>Create</span>
+          </button>
+        </form>
+
+        <div class="item-list">
+          <button
+            v-for="page in store.notionParentPages"
+            :key="page.id"
+            type="button"
+            class="item-row"
+            :class="{ active: page.id === store.syncConfig.selectedParentPageId }"
+            :disabled="!store.syncConfig.connected"
+            @click="selectParentPage(page.id)"
+          >
+            <span>{{ page.title }}</span>
+            <small>{{ page.parentPageId ? 'Child page' : 'Page' }}</small>
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <div
+      v-if="archiveTarget"
+      class="modal-backdrop"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="archive-title"
+    >
+      <section class="modal">
+        <h2 id="archive-title">Archive {{ archiveTarget.kind }}</h2>
+        <p>{{ archiveTarget.title }}</p>
+        <div class="modal-actions">
+          <button
+            type="button"
+            class="icon-label-button secondary-button"
+            title="Cancel"
+            aria-label="Cancel"
+            @click="cancelArchive"
+          >
+            <font-awesome-icon :icon="['fas', 'xmark']" fixed-width />
+            <span>Cancel</span>
+          </button>
+          <button
+            type="button"
+            class="icon-label-button danger-primary"
+            title="Archive"
+            aria-label="Archive"
+            @click="confirmArchive"
+          >
+            <font-awesome-icon :icon="['fas', 'trash-can']" fixed-width />
+            <span>Archive</span>
+          </button>
+        </div>
+      </section>
+    </div>
   </main>
 </template>
 
 <style scoped>
 .shell {
   display: grid;
-  grid-template-rows: auto auto 1fr;
+  grid-template-rows: auto auto auto 1fr;
   min-height: 100vh;
   padding: 14px;
 }
 
 .topbar {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
   gap: 10px;
   align-items: center;
   padding-bottom: 12px;
   border-bottom: 1px solid var(--jot-border);
+}
+
+.topbar-status {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  min-width: 0;
+}
+
+.topbar-meta {
+  display: grid;
+  min-width: 0;
+  gap: 1px;
+}
+
+.topbar-meta strong,
+.topbar-meta small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.topbar-meta small {
+  color: var(--jot-muted);
+  font-size: 0.78rem;
 }
 
 .sync-badge {
@@ -1549,7 +2340,46 @@ function kebabCase(value: string) {
 
 .topbar-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
+}
+
+.topbar-actions select {
+  flex: 1 1 130px;
+  min-width: 0;
+}
+
+.topbar-actions button {
+  min-height: 30px;
+  padding: 0 8px;
+  font-weight: 750;
+}
+
+.tabs {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 4px;
+  margin-top: 10px;
+  padding: 3px;
+  border: 1px solid var(--jot-border);
+  border-radius: var(--jot-radius);
+  background: var(--jot-surface-muted);
+}
+
+.tabs button {
+  min-width: 0;
+  min-height: 30px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--jot-muted);
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.tabs button.active {
+  border-color: var(--jot-border);
+  background: var(--jot-surface);
+  color: var(--jot-text);
 }
 
 .secondary-button {
@@ -1558,8 +2388,57 @@ function kebabCase(value: string) {
   color: var(--jot-text);
 }
 
+.icon-label-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  min-width: 32px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.icon-label-button > svg,
+.icon-label-button > .text-icon {
+  flex: 0 0 auto;
+  width: 18px;
+}
+
+.icon-label-button > span:not(.text-icon) {
+  display: inline-block;
+  max-width: 0;
+  opacity: 0;
+  overflow: hidden;
+  transform: translateX(-4px);
+  transition:
+    max-width 160ms ease,
+    opacity 140ms ease,
+    transform 160ms ease,
+    margin-left 160ms ease;
+}
+
+.icon-label-button:hover > span:not(.text-icon),
+.icon-label-button:focus-visible > span:not(.text-icon) {
+  max-width: 130px;
+  margin-left: 6px;
+  opacity: 1;
+  transform: translateX(0);
+}
+
+.icon-label-button:disabled:hover > span:not(.text-icon) {
+  max-width: 0;
+  margin-left: 0;
+  opacity: 0;
+  transform: translateX(-4px);
+}
+
+.text-icon {
+  font-size: 0.76rem;
+  font-weight: 850;
+  letter-spacing: 0;
+}
+
 .page-title input,
-.project-title input,
 .editor-header p {
   margin: 0;
 }
@@ -1598,11 +2477,6 @@ function kebabCase(value: string) {
   color: var(--jot-muted);
 }
 
-.auth-actions {
-  display: grid;
-  gap: 8px;
-}
-
 .editor-shell {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
@@ -1614,6 +2488,15 @@ function kebabCase(value: string) {
   box-shadow: var(--jot-shadow);
 }
 
+.tab-panel {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  min-height: 0;
+  margin-top: 12px;
+  overflow: auto;
+}
+
 .editor-header {
   display: grid;
   gap: 10px;
@@ -1621,26 +2504,210 @@ function kebabCase(value: string) {
   border-bottom: 1px solid var(--jot-border);
 }
 
-.page-controls {
+.editor-title-row,
+.section-heading,
+.manage-row,
+.inline-form,
+.recording-row,
+.modal-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.editor-title-row {
+  align-items: start;
+}
+
+.editor-title-row .page-title {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.inline-form {
+  flex-wrap: wrap;
+}
+
+.inline-form input,
+.manage-row select {
+  flex: 1 1 160px;
+  min-width: 0;
+}
+
+.inline-form button,
+.manage-row button,
+.section-heading button,
+.recording-row button {
+  flex: 0 0 auto;
+  min-height: 32px;
+  padding: 0 10px;
+  font-weight: 750;
+}
+
+.panel-section {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 10px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--jot-border);
+}
+
+.panel-section:first-child {
+  padding-top: 0;
+}
+
+.panel-section:last-child {
+  border-bottom: 0;
+}
+
+.panel-section h2,
+.section-heading h2 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.section-heading {
+  justify-content: space-between;
+}
+
+.field-label,
+.stack-form {
+  display: grid;
   gap: 6px;
 }
 
-.project-controls {
+.field-label {
+  color: var(--jot-muted);
+  font-size: 0.78rem;
+  font-weight: 750;
+}
+
+.field-label input {
+  color: var(--jot-text);
+  font-size: 1rem;
+  font-weight: 500;
+}
+
+.stack-form {
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--jot-border);
+}
+
+.stack-form:last-of-type {
+  border-bottom: 0;
+}
+
+.item-list {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
   gap: 6px;
 }
 
-.page-title,
-.project-title {
+.item-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+  min-height: 38px;
+  padding: 7px 9px;
+  border-color: var(--jot-border);
+  background: var(--jot-surface);
+  color: var(--jot-text);
+  text-align: left;
+}
+
+.item-row span,
+.item-row small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.item-row small {
+  color: var(--jot-muted);
+  font-size: 0.76rem;
+}
+
+.item-row.active {
+  border-color: var(--jot-accent);
+  background: var(--jot-accent-soft);
+}
+
+.status-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+.status-list div {
+  display: grid;
+  grid-template-columns: 86px minmax(0, 1fr);
+  gap: 8px;
+}
+
+.status-list dt {
+  color: var(--jot-muted);
+  font-weight: 750;
+}
+
+.status-list dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.recording-row {
+  align-items: start;
+}
+
+.recording-row small {
+  color: var(--jot-muted);
+}
+
+.danger-button {
+  color: #991b1b;
+}
+
+.danger-primary {
+  border-color: #dc2626;
+  background: #dc2626;
+  color: white;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: rgb(17 17 19 / 36%);
+}
+
+.modal {
+  display: grid;
+  width: min(100%, 320px);
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--jot-border);
+  border-radius: var(--jot-radius);
+  background: var(--jot-surface);
+  box-shadow: var(--jot-shadow);
+}
+
+.modal h2,
+.modal p {
+  margin: 0;
+}
+
+.modal p {
+  overflow-wrap: anywhere;
+}
+
+.page-title {
   display: grid;
   gap: 3px;
 }
 
-.page-title input,
-.project-title input {
+.page-title input {
   width: 100%;
   min-width: 0;
   border: 0;
@@ -1648,90 +2715,128 @@ function kebabCase(value: string) {
   color: var(--jot-text);
 }
 
-.project-title input {
-  font-size: 0.9rem;
-  font-weight: 750;
-}
-
 .page-title input {
   font-size: 1rem;
   font-weight: 700;
 }
 
-.page-title input:focus,
-.project-title input:focus {
+.page-title input:focus {
   outline: 2px solid color-mix(in srgb, var(--jot-accent) 34%, transparent);
   outline-offset: 2px;
 }
 
-.toolbar {
+.editor-tools {
+  position: relative;
+  display: grid;
+  gap: 8px;
+}
+
+.editor-tool-tabs {
+  display: inline-grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 3px;
+  width: min(100%, 360px);
+  padding: 3px;
+  border: 1px solid var(--jot-border);
+  border-radius: var(--jot-radius);
+  background: var(--jot-surface-muted);
+}
+
+.editor-tool-tabs button {
+  min-width: 0;
+  min-height: 28px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--jot-muted);
+  font-size: 0.8rem;
+  font-weight: 800;
+}
+
+.editor-tool-tabs button.active {
+  border-color: var(--jot-border);
+  background: var(--jot-surface);
+  color: var(--jot-text);
+}
+
+.editor-quickbar {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  align-items: stretch;
-}
-
-.toolbar-group {
-  display: inline-flex;
-  flex: 0 1 auto;
-  flex-wrap: wrap;
-  gap: 3px;
   align-items: center;
-  min-width: 0;
-  padding-right: 6px;
-  border-right: 1px solid var(--jot-border);
 }
 
-.toolbar-group:last-child {
-  padding-right: 0;
-  border-right: 0;
-}
-
-.block-group {
-  flex: 1 1 214px;
-}
-
-.color-group,
-.utility-group {
-  flex: 0 1 auto;
-}
-
-.toolbar button,
-.page-controls button,
-.project-controls button,
-.toolbar-select {
-  min-width: 30px;
-  min-height: 30px;
+.tool-icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  min-width: 34px;
+  min-height: 32px;
   padding: 0 8px;
   border-color: var(--jot-border);
   background: var(--jot-surface-muted);
   color: var(--jot-text);
-  font-weight: 700;
+  font-weight: 800;
 }
 
-.toolbar-select {
-  width: auto;
+.tool-icon-button.active {
+  border-color: var(--jot-accent);
+  background: var(--jot-accent-soft);
+  color: var(--jot-accent-strong);
+}
+
+.tool-popover {
+  display: grid;
   max-width: 100%;
+  padding: 10px;
+  border: 1px solid var(--jot-border);
+  border-radius: var(--jot-radius);
+  background: var(--jot-surface);
+  box-shadow: var(--jot-shadow);
 }
 
-.block-select {
-  flex: 1 1 126px;
-  min-width: 126px;
+.tool-panel {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: end;
 }
 
-.compact-select {
-  flex: 0 1 88px;
-  min-width: 78px;
+.tool-panel .field-label {
+  flex: 1 1 130px;
+  min-width: 0;
 }
 
-.page-controls .archive-button {
-  min-width: 72px;
+.tool-panel input,
+.toolbar-select {
+  width: 100%;
+  min-width: 0;
 }
 
-.toolbar button.active {
+.tool-panel button {
+  min-height: 32px;
+  padding: 0 10px;
+  border-color: var(--jot-border);
+  background: var(--jot-surface-muted);
+  color: var(--jot-text);
+  font-weight: 750;
+}
+
+.button-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(76px, 1fr));
+  width: 100%;
+}
+
+.button-grid button.active,
+.tool-panel button.active {
   border-color: var(--jot-accent);
   background: var(--jot-accent);
   color: white;
+}
+
+.link-form input {
+  flex: 1 1 180px;
 }
 
 .editor {
