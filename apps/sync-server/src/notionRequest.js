@@ -66,6 +66,59 @@ export function createNotionRequester({
   };
 }
 
+export async function uploadFileToNotion(
+  store,
+  { data, mimeType, filename },
+  { notionVersion, baseUrl = 'https://api.notion.com/v1', fetchImpl = globalThis.fetch } = {},
+) {
+  const sessionRes = await fetchImpl(`${baseUrl}/file_uploads`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${store.tokens.access_token}`,
+      'Content-Type': 'application/json',
+      ...(notionVersion ? { 'Notion-Version': notionVersion } : {}),
+    },
+    body: JSON.stringify({
+      mode: 'single_part',
+      filename,
+      content_type: mimeType,
+    }),
+  });
+  if (!sessionRes.ok) {
+    const text = await sessionRes.text().catch(() => '');
+    throw new Error(`Notion file upload session failed: ${sessionRes.status} ${text}`);
+  }
+  const { id } = await sessionRes.json();
+
+  if (!id) {
+    throw new Error('Notion file upload session did not return an id.');
+  }
+
+  const body = new FormData();
+  body.append('file', new Blob([data], { type: mimeType }), filename);
+
+  const uploadRes = await fetchImpl(`${baseUrl}/file_uploads/${id}/send`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${store.tokens.access_token}`,
+      ...(notionVersion ? { 'Notion-Version': notionVersion } : {}),
+    },
+    body,
+  });
+  if (!uploadRes.ok) {
+    const text = await uploadRes.text().catch(() => '');
+    throw new Error(`Notion file upload failed: ${uploadRes.status} ${text}`);
+  }
+
+  const upload = await uploadRes.json().catch(() => ({}));
+
+  if (upload.status !== 'uploaded') {
+    throw new Error(`Notion file upload did not finish. Status: ${upload.status ?? 'unknown'}.`);
+  }
+
+  return id;
+}
+
 export function createRateLimiter({
   requestsPerSecond = DEFAULT_REQUESTS_PER_SECOND,
   sleep = defaultSleep,

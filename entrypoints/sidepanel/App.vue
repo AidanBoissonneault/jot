@@ -10,9 +10,21 @@ import {
   JotLink,
 } from '@/src/extensions/jotLink';
 import { PortableTextEditingKit } from '@/src/extensions/textFormatting';
+import { MediaKit } from '@/src/extensions/media';
+import {
+  hasPendingTransientMedia,
+  sanitizeMediaForSync,
+} from '@/src/extensions/mediaContent';
+import {
+  IMAGE_UPLOAD_MAX_BYTES,
+  isUploadableImageFile,
+  peekUploadableImageDrop,
+  readImageDropSrc,
+} from '@/src/extensions/mediaDrop';
 import {
   createCapturedContent,
   createLinkedHeadingContent,
+  notionClient,
 } from '@/src/services/notionClient';
 import { useJotStore } from '@/src/stores/jot';
 import type { DocumentContent } from '@/src/types/capture';
@@ -87,6 +99,7 @@ const editor = useEditor({
     }),
     JotLink,
     PortableTextEditingKit,
+    MediaKit,
   ],
   content: {
     type: 'doc',
@@ -127,6 +140,38 @@ const editor = useEditor({
       if (payload) {
         event.preventDefault();
         insertLinkedHeadingAtDrop(view, event, payload);
+        return true;
+      }
+
+      const uploadableInfo = peekUploadableImageDrop(event.dataTransfer);
+      if (uploadableInfo) {
+        event.preventDefault();
+        const dropPos = view.posAtCoords({ left: event.clientX, top: event.clientY });
+        if (typeof dropPos?.pos === 'number') {
+          view.dispatch(
+            view.state.tr.setSelection(
+              TextSelection.near(view.state.doc.resolve(dropPos.pos)),
+            ),
+          );
+        }
+        void handleUploadableImageDrop(uploadableInfo);
+        return true;
+      }
+
+      const imageSrc = readImageDropSrc(event.dataTransfer);
+
+      if (imageSrc) {
+        event.preventDefault();
+        const dropPos = view.posAtCoords({ left: event.clientX, top: event.clientY });
+        if (typeof dropPos?.pos === 'number') {
+          view.dispatch(
+            view.state.tr.setSelection(
+              TextSelection.near(view.state.doc.resolve(dropPos.pos)),
+            ),
+          );
+        }
+        editor.value?.chain().focus().setImage({ src: imageSrc }).run();
+        void saveEditorContentOptimistically();
         return true;
       }
 
@@ -319,10 +364,6 @@ watch(
     activePageId = page.id;
     pageTitleDraft.value = page.title;
 
-    if (!isPageChange) {
-      return;
-    }
-
     lastAppliedContent = storedContent;
     isApplyingStoredContent = true;
     editor.value.commands.setContent(page.content, { emitUpdate: false });
@@ -453,6 +494,14 @@ async function archivePage() {
   await store.archiveCurrentPage();
 }
 
+async function resync() {
+  if (store.currentPage) {
+    await store.refreshSelectedPage(store.currentPage.id);
+  } else {
+    await initializePanel();
+  }
+}
+
 async function loginWithNotion() {
   isSigningIn.value = true;
   await browser.tabs.create({ active: true, url: store.getSyncLoginUrl() });
@@ -571,6 +620,21 @@ function setLink() {
     .run();
 }
 
+function insertImage() {
+  const src = window.prompt('Image URL')?.trim();
+  if (src) editor.value?.chain().focus().setImage({ src }).run();
+}
+
+function insertVideo() {
+  const src = window.prompt('Video or YouTube URL')?.trim();
+  if (src) editor.value?.chain().focus().setYoutubeVideo({ src }).run();
+}
+
+function insertAudio() {
+  const src = window.prompt('Audio URL')?.trim();
+  if (src) editor.value?.chain().focus().setAudio({ src }).run();
+}
+
 function clearFormatting() {
   editor.value?.chain().focus().unsetAllMarks().clearNodes().run();
 }
@@ -589,7 +653,13 @@ function saveEditorContentInBackground() {
   }
 
   const page = { ...store.currentPage };
-  const content = editor.value.getJSON() as DocumentContent;
+  const editorContent = editor.value.getJSON() as DocumentContent;
+
+  if (hasPendingTransientMedia(editorContent)) {
+    return;
+  }
+
+  const content = sanitizeMediaForSync(editorContent);
   const title = pageTitleDraft.value;
 
   lastAppliedContent = JSON.stringify(content);
@@ -622,12 +692,17 @@ async function runEditorSaveLoop() {
   try {
     do {
       shouldSaveAgainAfterCurrentSave = false;
-      const content = editor.value?.getJSON() as DocumentContent | undefined;
+      const editorContent = editor.value?.getJSON() as DocumentContent | undefined;
 
-      if (!content) {
+      if (!editorContent) {
         return;
       }
 
+      if (hasPendingTransientMedia(editorContent)) {
+        return;
+      }
+
+      const content = sanitizeMediaForSync(editorContent);
       lastAppliedContent = JSON.stringify(content);
       await store.saveCurrentPageContent(content, {
         preserveLocalContent: true,
@@ -643,6 +718,58 @@ async function runEditorSaveLoop() {
     isEditorSaveInFlight = false;
     editorSavePromise = undefined;
   }
+}
+
+async function handleUploadableImageDrop(info: { kind: 'file'; file: File }): Promise<void> {
+  const { file } = info;
+
+  if (!isUploadableImageFile(file)) {
+    window.alert(`Images must be ${Math.floor(IMAGE_UPLOAD_MAX_BYTES / 1024 / 1024)} MB or smaller.`);
+    return;
+  }
+
+  const localSrc = URL.createObjectURL(file);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  shouldSkipNextUpdateSave = true;
+  editor.value?.chain().focus().setImage({ src: localSrc, uploadState: 'uploading' } as any).run();
+  queueMicrotask(() => {
+    shouldSkipNextUpdateSave = false;
+  });
+
+  let fileUploadId = '';
+
+  try {
+    fileUploadId = await notionClient.uploadMedia(file, file.type, file.name);
+  } catch (error) {
+    store.errorMessage =
+      error instanceof Error ? error.message : 'Unable to upload this image to Notion.';
+  }
+
+  shouldSkipNextUpdateSave = true;
+  editor.value?.state.doc.descendants((node, pos) => {
+    if (node.type.name === 'image' && node.attrs.src === localSrc) {
+      editor.value
+        ?.chain()
+        .command(({ tr }) => {
+          tr.setNodeMarkup(pos, undefined, {
+            ...node.attrs,
+            ...(fileUploadId ? { notionFileUploadId: fileUploadId } : {}),
+            uploadState: fileUploadId ? 'done' : 'error',
+          });
+          return true;
+        })
+        .run();
+    }
+  });
+  queueMicrotask(() => {
+    shouldSkipNextUpdateSave = false;
+  });
+
+  if (!fileUploadId) {
+    return;
+  }
+
+  void saveEditorContentOptimistically();
 }
 
 function readHeadingDropPayload(event: DragEvent) {
@@ -737,14 +864,24 @@ function kebabCase(value: string) {
         {{ saveLabel }}
       </div>
 
-      <button
-        v-if="store.syncConfig.connected"
-        type="button"
-        class="secondary-button"
-        @click="logout"
-      >
-        Logout
-      </button>
+      <div v-if="store.syncConfig.connected" class="topbar-actions">
+        <button
+          type="button"
+          class="secondary-button"
+          :disabled="store.isLoading"
+          title="Resync with Notion"
+          @click="resync"
+        >
+          ↻
+        </button>
+        <button
+          type="button"
+          class="secondary-button"
+          @click="logout"
+        >
+          Logout
+        </button>
+      </div>
     </header>
 
     <section
@@ -1059,6 +1196,33 @@ function kebabCase(value: string) {
             </button>
           </div>
 
+          <div class="toolbar-group" aria-label="Media inserts">
+            <button
+              type="button"
+              :disabled="!editor"
+              title="Image"
+              @click="insertImage"
+            >
+              Img
+            </button>
+            <button
+              type="button"
+              :disabled="!editor"
+              title="Video / YouTube"
+              @click="insertVideo"
+            >
+              Vid
+            </button>
+            <button
+              type="button"
+              :disabled="!editor"
+              title="Audio"
+              @click="insertAudio"
+            >
+              Aud
+            </button>
+          </div>
+
           <div class="toolbar-group utility-group" aria-label="History and cleanup">
             <button
               type="button"
@@ -1170,6 +1334,11 @@ function kebabCase(value: string) {
 
 .sync-badge.saved span {
   background: #16a34a;
+}
+
+.topbar-actions {
+  display: flex;
+  gap: 6px;
 }
 
 .secondary-button {
@@ -1480,5 +1649,30 @@ function kebabCase(value: string) {
 .editor :deep(.tiptap a) {
   color: var(--jot-accent-strong);
   overflow-wrap: anywhere;
+}
+
+.editor :deep(.tiptap img) {
+  max-width: 100%;
+  height: auto;
+  display: block;
+  border-radius: 4px;
+}
+
+.editor :deep(.tiptap .jot-image-wrapper) {
+  margin: 0 0 0.85rem;
+}
+
+.editor :deep(.tiptap .jot-image-wrapper.is-error),
+.editor :deep(.tiptap .jot-image-wrapper.is-uploading) {
+  border: 1px solid var(--jot-border);
+  border-radius: 4px;
+  background: var(--jot-surface-muted);
+  color: var(--jot-muted);
+  padding: 10px;
+  font-size: 0.86rem;
+}
+
+.editor :deep(.tiptap .jot-image-wrapper a) {
+  word-break: break-all;
 }
 </style>

@@ -12,6 +12,7 @@ import type {
   CaptureSelectionPayload,
   SourceOpenPayload,
 } from '@/src/types/messages';
+import { markUnrecoverableTransientMedia } from '@/src/extensions/mediaContent';
 
 type JotStorage = {
   activePageIdsByProject?: Record<string, string>;
@@ -240,6 +241,7 @@ async function readStorage(): Promise<Required<JotStorage>> {
     : stored.pages ?? createDefaultPages(projects)
   ).map((page) => ({
     ...page,
+    content: markUnrecoverableTransientMedia(page.content),
     localRevision: page.localRevision ?? crypto.randomUUID(),
     status: page.status ?? 'active',
     syncState: page.syncState ?? 'saved',
@@ -446,11 +448,12 @@ async function requestServer<T>(
   });
 
   const payload = (await response.json().catch(() => ({}))) as T & {
+    error?: string;
     message?: string;
   };
 
   if (!response.ok) {
-    throw new Error(payload.message ?? `Sync server returned ${response.status}.`);
+    throw new Error(payload.message ?? payload.error ?? `Sync server returned ${response.status}.`);
   }
 
   return payload;
@@ -1202,5 +1205,33 @@ export const notionClient = {
     const syncedPage = await syncPushPage(updatedPage, project);
     await persistPage(syncedPage);
     return syncedPage;
+  },
+
+  async uploadMedia(blob: Blob, mimeType: string, filename: string): Promise<string> {
+    const { syncConfig } = await readStorage();
+    if (!syncConfig.connected) {
+      throw new Error('Connect Notion before uploading images.');
+    }
+
+    const buf = await blob.arrayBuffer();
+    const bytes = new Uint8Array(buf);
+    // Build base64 in chunks to avoid call-stack limits on large images
+    let binary = '';
+    const chunkSize = 8192;
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+      binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+    }
+    const dataBase64 = btoa(binary);
+
+    const response = await requestServer<{ fileUploadId: string }>('/media/upload', {
+      method: 'POST',
+      body: JSON.stringify({ dataBase64, mimeType, filename }),
+    });
+
+    if (!response.fileUploadId) {
+      throw new Error('The sync server did not return a Notion file upload id.');
+    }
+
+    return response.fileUploadId;
   },
 };

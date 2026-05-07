@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createNotionRequester } from '../src/notionRequest.js';
+import { createNotionRequester, uploadFileToNotion } from '../src/notionRequest.js';
 
 test('notionRequest sends requests no faster than configured limiter cadence', async () => {
   let time = 0;
@@ -105,6 +105,82 @@ test('notionRequest does not retry permanent Notion errors', async () => {
     (error) => error.status === 400 && error.code === 'validation_error',
   );
   assert.equal(calls, 1);
+});
+
+test('uploadFileToNotion creates and sends a single-part multipart upload', async () => {
+  const calls = [];
+  const fetchImpl = async (url, init) => {
+    calls.push({ url, init });
+
+    if (url === 'https://api.notion.com/v1/file_uploads') {
+      return jsonResponse(200, { id: 'file-upload-id', status: 'pending' });
+    }
+
+    if (url === 'https://api.notion.com/v1/file_uploads/file-upload-id/send') {
+      assert.equal(init.method, 'POST');
+      assert.equal(init.headers.Authorization, 'Bearer secret');
+      assert.equal(init.headers['Notion-Version'], '2026-03-11');
+      assert.equal(init.headers['Content-Type'], undefined);
+      assert.ok(init.body instanceof FormData);
+
+      const file = init.body.get('file');
+      assert.equal(file.name, 'capture.png');
+      assert.equal(file.type, 'image/png');
+      assert.equal(await file.text(), 'image bytes');
+
+      return jsonResponse(200, { id: 'file-upload-id', status: 'uploaded' });
+    }
+
+    throw new Error(`Unexpected request: ${url}`);
+  };
+
+  const id = await uploadFileToNotion(
+    testStore(),
+    {
+      data: Buffer.from('image bytes'),
+      mimeType: 'image/png',
+      filename: 'capture.png',
+    },
+    {
+      notionVersion: '2026-03-11',
+      fetchImpl,
+    },
+  );
+
+  assert.equal(id, 'file-upload-id');
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].init.method, 'POST');
+  assert.equal(calls[0].init.headers.Authorization, 'Bearer secret');
+  assert.equal(calls[0].init.headers['Content-Type'], 'application/json');
+  assert.equal(calls[0].init.headers['Notion-Version'], '2026-03-11');
+  assert.deepEqual(JSON.parse(calls[0].init.body), {
+    mode: 'single_part',
+    filename: 'capture.png',
+    content_type: 'image/png',
+  });
+});
+
+test('uploadFileToNotion rejects uploads that Notion does not mark uploaded', async () => {
+  const fetchImpl = async (url) => {
+    if (url.endsWith('/file_uploads')) {
+      return jsonResponse(200, { id: 'file-upload-id', status: 'pending' });
+    }
+
+    return jsonResponse(200, { id: 'file-upload-id', status: 'pending' });
+  };
+
+  await assert.rejects(
+    uploadFileToNotion(
+      testStore(),
+      {
+        data: Buffer.from('image bytes'),
+        mimeType: 'image/png',
+        filename: 'capture.png',
+      },
+      { fetchImpl },
+    ),
+    /did not finish/,
+  );
 });
 
 function testStore() {

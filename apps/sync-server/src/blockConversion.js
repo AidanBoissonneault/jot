@@ -75,11 +75,47 @@ function tiptapNodeToNotionBlock(node) {
     };
   }
 
+  if (node.type === 'image') {
+    const src = node.attrs?.src;
+    const fileUploadId = node.attrs?.notionFileUploadId;
+
+    if (fileUploadId) {
+      return {
+        object: 'block',
+        type: 'image',
+        image: { type: 'file_upload', file_upload: { id: fileUploadId } },
+      };
+    }
+
+    if (!src || !/^https?:\/\//i.test(src)) {
+      return paragraphFallback('');
+    }
+
+    return { object: 'block', type: 'image', image: { type: 'external', external: { url: src } } };
+  }
+
+  if (node.type === 'youtube') {
+    const src = node.attrs?.src;
+    if (!src) return paragraphFallback('');
+    return { object: 'block', type: 'embed', embed: { url: src } };
+  }
+
+  if (node.type === 'audio') {
+    const src = node.attrs?.src;
+    if (!src) return paragraphFallback('');
+    return { object: 'block', type: 'audio', audio: { type: 'external', external: { url: src } } };
+  }
+
+  return paragraphFallback(richText.length ? richText : plainRichText(''));
+}
+
+function paragraphFallback(richText) {
+  const rt = typeof richText === 'string' ? plainRichText(richText) : richText;
   return {
     object: 'block',
     type: 'paragraph',
     paragraph: {
-      rich_text: richText.length ? richText : plainRichText(''),
+      rich_text: rt,
       color: 'default',
     },
   };
@@ -177,6 +213,25 @@ function notionBlockToTiptapNode(block) {
     };
   }
 
+  if (block.type === 'image') {
+    const url = block.image?.external?.url ?? block.image?.file?.url ?? block.image?.file_upload?.url;
+    if (!url) return null;
+    return { type: 'image', attrs: { src: url } };
+  }
+
+  if (block.type === 'video' || block.type === 'embed') {
+    const data = block[block.type];
+    const url = data?.external?.url ?? data?.url ?? data?.file?.url;
+    if (!url) return null;
+    return { type: 'youtube', attrs: { src: url } };
+  }
+
+  if (block.type === 'audio') {
+    const url = block.audio?.external?.url ?? block.audio?.file?.url;
+    if (!url) return null;
+    return { type: 'audio', attrs: { src: url } };
+  }
+
   if (block.type !== 'paragraph') {
     return null;
   }
@@ -262,5 +317,6 @@ function notionColor(color) {
 export function kindFromNotionBlock(block) {
   if (block.type?.startsWith('heading_')) return 'heading';
   if (block.type === 'quote') return 'quote';
+  if (['image', 'video', 'audio', 'embed', 'file'].includes(block.type)) return 'media';
   return block.type === 'paragraph' ? 'paragraph' : 'source';
 }

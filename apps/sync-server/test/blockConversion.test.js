@@ -48,3 +48,99 @@ test('Notion rich text newlines import as Tiptap hardBreak nodes', () => {
     { type: 'text', text: 'Line two' },
   ]);
 });
+
+test('tiptap http image syncs to Notion external image block', () => {
+  const blocks = tiptapDocumentToNotionBlocks({
+    type: 'doc',
+    content: [
+      {
+        type: 'image',
+        attrs: {
+          src: 'https://example.com/image.png',
+        },
+      },
+    ],
+  });
+
+  assert.deepEqual(blocks[0], {
+    object: 'block',
+    type: 'image',
+    image: {
+      type: 'external',
+      external: {
+        url: 'https://example.com/image.png',
+      },
+    },
+  });
+});
+
+test('tiptap uploaded image syncs to Notion file_upload image block', () => {
+  const blocks = tiptapDocumentToNotionBlocks({
+    type: 'doc',
+    content: [
+      {
+        type: 'image',
+        attrs: {
+          src: 'blob:local-preview',
+          notionFileUploadId: 'upload-id',
+        },
+      },
+    ],
+  });
+
+  assert.deepEqual(blocks[0], {
+    object: 'block',
+    type: 'image',
+    image: {
+      type: 'file_upload',
+      file_upload: {
+        id: 'upload-id',
+      },
+    },
+  });
+});
+
+test('tiptap transient image sources do not sync as Notion image blocks', () => {
+  const blocks = tiptapDocumentToNotionBlocks({
+    type: 'doc',
+    content: [
+      {
+        type: 'image',
+        attrs: {
+          src: 'blob:local-preview',
+        },
+      },
+      {
+        type: 'image',
+        attrs: {
+          src: 'data:image/png;base64,abc',
+        },
+      },
+    ],
+  });
+
+  assert.deepEqual(blocks.map((block) => block.type), ['paragraph', 'paragraph']);
+});
+
+test('Notion file image imports as Tiptap image with file URL', () => {
+  const doc = notionBlocksToTiptapDocument([
+    {
+      type: 'image',
+      image: {
+        type: 'file',
+        file: {
+          url: 'https://secure.notion-static.com/image.png',
+        },
+      },
+    },
+  ]);
+
+  assert.deepEqual(doc.content, [
+    {
+      type: 'image',
+      attrs: {
+        src: 'https://secure.notion-static.com/image.png',
+      },
+    },
+  ]);
+});

@@ -1,5 +1,6 @@
 import { computed, ref } from 'vue';
 import { defineStore } from 'pinia';
+import { mergeSyncedMediaContent } from '@/src/extensions/mediaContent';
 import { notionClient } from '@/src/services/notionClient';
 import type {
   DocumentContent,
@@ -237,7 +238,7 @@ export const useJotStore = defineStore('jot', () => {
       currentPage.value = options.preserveLocalContent
         ? {
             ...savedPage,
-            content: optimisticPage.content,
+            content: mergeSyncedMediaContent(optimisticPage.content, savedPage.content),
             title: optimisticPage.title,
           }
         : savedPage;
@@ -277,7 +278,7 @@ export const useJotStore = defineStore('jot', () => {
       const nextPage = options.preserveLocalContent
         ? {
             ...savedPage,
-            content: optimisticPage.content,
+            content: mergeSyncedMediaContent(optimisticPage.content, savedPage.content),
             title: optimisticPage.title,
           }
         : savedPage;
@@ -557,6 +558,7 @@ export const useJotStore = defineStore('jot', () => {
     registerCaptureInsertHandler,
     renameCurrentProject,
     renameCurrentPage,
+    refreshSelectedPage,
     refreshSyncSession,
     savePageContentSnapshot,
     saveCurrentPageContent,

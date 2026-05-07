@@ -53,10 +53,15 @@ export async function pushPageToNotionCore({
     await updateChildNotePage(store, notePage.id, page);
   }
 
-  await replaceManagedBlocks(store, page.id, notePage.id, page.content);
+  const replacement = await replaceManagedBlocks(store, page.id, notePage.id, page.content);
   const refreshedPage = await notionRequest(store, `/pages/${notePage.id}`);
+  const syncedContent = normalizeSyncedMediaContent(
+    page.content,
+    replacement?.createdBlocks ?? [],
+  );
   const syncedPage = {
     ...page,
+    content: syncedContent,
     notionPageId: notePage.id,
     notionDatabaseId: undefined,
     notionDataSourceId: undefined,
@@ -81,4 +86,51 @@ export async function pushPageToNotionCore({
     status: 'saved',
     message: 'Synced to Notion.',
   };
+}
+
+function normalizeSyncedMediaContent(content, createdBlocks) {
+  if (!content?.content?.length) {
+    return content;
+  }
+
+  return {
+    ...content,
+    content: content.content.map((node, index) =>
+      normalizeSyncedMediaNode(node, createdBlocks[index]),
+    ),
+  };
+}
+
+function normalizeSyncedMediaNode(node, createdBlock) {
+  if (node?.type === 'image' && node.attrs?.notionFileUploadId) {
+    const url = mediaUrlFromNotionBlock(createdBlock);
+
+    if (url) {
+      return {
+        ...node,
+        attrs: {
+          ...node.attrs,
+          src: url,
+          uploadState: 'done',
+        },
+      };
+    }
+  }
+
+  if (!node?.content?.length) {
+    return node;
+  }
+
+  return {
+    ...node,
+    content: node.content.map((child) => normalizeSyncedMediaNode(child)),
+  };
+}
+
+function mediaUrlFromNotionBlock(block) {
+  if (block?.type !== 'image') {
+    return null;
+  }
+
+  return block.image?.file?.url ?? block.image?.external?.url ?? null;
 }

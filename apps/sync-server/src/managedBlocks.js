@@ -26,4 +26,9 @@ export async function replaceManagedBlocks({
     kind: kindFromNotionBlock(notionBlocks[index]),
     lastSyncedHash: hash(JSON.stringify(notionBlocks[index] ?? {})),
   }));
+
+  return {
+    createdBlocks,
+    notionBlocks,
+  };
 }

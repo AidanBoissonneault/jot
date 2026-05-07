@@ -14,7 +14,7 @@ import {
   tiptapDocumentToNotionBlocks,
 } from './blockConversion.js';
 import { replaceManagedBlocks as replaceManagedBlocksWithDependencies } from './managedBlocks.js';
-import { createNotionRequester } from './notionRequest.js';
+import { createNotionRequester, uploadFileToNotion } from './notionRequest.js';
 import { pushPageToNotionCore } from './pageSync.js';
 import { syncProjectFolder } from './projectSync.js';
 import { MergeableSyncQueue } from './syncQueue.js';
@@ -31,6 +31,7 @@ const JOT_ROOT_PAGE_TITLE = process.env.JOT_ROOT_PAGE_TITLE ?? 'Jot';
 const JOT_SESSION_COOKIE = 'jot_session';
 const JOT_OAUTH_STATE_COOKIE = 'jot_notion_oauth_state';
 const SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 30;
+const MAX_IMAGE_UPLOAD_BYTES = 20 * 1024 * 1024;
 
 const fastify = Fastify({ logger: true });
 const syncQueue = new MergeableSyncQueue();
@@ -386,6 +387,36 @@ async function pushPageToNotion({
     },
   });
 }
+
+fastify.post('/media/upload', async (request, reply) => {
+  const { dataBase64, mimeType, filename } = request.body ?? {};
+  if (!dataBase64 || !mimeType) {
+    return reply.status(400).send({ error: 'Missing dataBase64 or mimeType.' });
+  }
+
+  if (!String(mimeType).startsWith('image/')) {
+    return reply.status(400).send({ error: 'Only image uploads are supported.' });
+  }
+
+  if (!isBase64(dataBase64)) {
+    return reply.status(400).send({ error: 'Invalid upload data.' });
+  }
+
+  const store = await requireConnectedStore(request);
+  const buffer = Buffer.from(dataBase64, 'base64');
+
+  if (buffer.byteLength > MAX_IMAGE_UPLOAD_BYTES) {
+    return reply.status(413).send({ error: 'Images must be 20 MB or smaller.' });
+  }
+
+  const fileUploadId = await uploadFileToNotion(
+    store,
+    { data: buffer, mimeType, filename: sanitizeImageFilename(filename, mimeType) },
+    { notionVersion: NOTION_VERSION },
+  );
+
+  return { fileUploadId };
+});
 
 fastify.post('/sync/pull', async (request) => {
   const { page } = request.body ?? {};
@@ -1233,16 +1264,74 @@ async function appendManagedBlocks(store, notionPageId, notionBlocks) {
   const createdBlocks = [];
 
   for (const batch of chunks(notionBlocks, 100)) {
-    const response = await notionRequest(store, `/blocks/${notionPageId}/children`, {
-      method: 'PATCH',
-      body: {
-        children: batch,
-      },
-    });
-    createdBlocks.push(...response.results);
+    let results;
+
+    try {
+      const response = await notionRequest(store, `/blocks/${notionPageId}/children`, {
+        method: 'PATCH',
+        body: { children: batch },
+      });
+      results = response.results;
+    } catch {
+      results = await appendBlocksWithFallback(store, notionPageId, batch);
+    }
+
+    createdBlocks.push(...results);
   }
 
   return createdBlocks;
+}
+
+async function appendBlocksWithFallback(store, notionPageId, blocks) {
+  const results = [];
+
+  for (const block of blocks) {
+    try {
+      const response = await notionRequest(store, `/blocks/${notionPageId}/children`, {
+        method: 'PATCH',
+        body: { children: [block] },
+      });
+      results.push(...response.results);
+    } catch {
+      const fallback = mediaFallbackBlock(block);
+      try {
+        const response = await notionRequest(store, `/blocks/${notionPageId}/children`, {
+          method: 'PATCH',
+          body: { children: [fallback] },
+        });
+        results.push(...response.results);
+      } catch {
+        // fallback also rejected — skip block rather than aborting the whole page
+      }
+    }
+  }
+
+  return results;
+}
+
+function mediaFallbackBlock(block) {
+  const url = mediaUrlFromNotionBlock(block);
+  const isLinkable = url && !url.startsWith('data:');
+  return {
+    object: 'block',
+    type: 'paragraph',
+    paragraph: {
+      rich_text: isLinkable
+        ? [{ type: 'text', text: { content: url, link: { url } } }]
+        : [{ type: 'text', text: { content: '[Image — not synced]' } }],
+      color: 'default',
+    },
+  };
+}
+
+function mediaUrlFromNotionBlock(block) {
+  const t = block?.type;
+  if (t === 'image') return block.image?.external?.url ?? block.image?.file?.url ?? block.image?.file_upload?.url ?? null;
+  if (t === 'video') return block.video?.external?.url ?? block.video?.file?.url ?? null;
+  if (t === 'audio') return block.audio?.external?.url ?? block.audio?.file?.url ?? null;
+  if (t === 'embed') return block.embed?.url ?? null;
+  if (t === 'file') return block.file?.external?.url ?? block.file?.file?.url ?? null;
+  return null;
 }
 
 async function importManagedBlocks(store, page) {
@@ -1307,6 +1396,33 @@ function chunks(values, size) {
   }
 
   return result;
+}
+
+function isBase64(value) {
+  return typeof value === 'string' && /^[A-Za-z0-9+/]*={0,2}$/.test(value) && value.length % 4 === 0;
+}
+
+function sanitizeImageFilename(filename, mimeType) {
+  const safeName = String(filename ?? '')
+    .trim()
+    .replace(/[\\/:"*?<>|]+/g, '-')
+    .replace(/\s+/g, ' ')
+    .slice(0, 180);
+  const extension = imageExtensionFromMimeType(mimeType);
+  const name = safeName || `image.${extension}`;
+
+  return /\.[A-Za-z0-9]+$/.test(name) ? name : `${name}.${extension}`;
+}
+
+function imageExtensionFromMimeType(mimeType) {
+  return {
+    'image/jpeg': 'jpg',
+    'image/png': 'png',
+    'image/gif': 'gif',
+    'image/webp': 'webp',
+    'image/svg+xml': 'svg',
+    'image/avif': 'avif',
+  }[String(mimeType).toLowerCase()] ?? 'png';
 }
 
 function closePage(message) {
