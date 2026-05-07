@@ -16,9 +16,13 @@ import {
   sanitizeMediaForSync,
 } from '@/src/extensions/mediaContent';
 import {
+  AUDIO_UPLOAD_MAX_BYTES,
   IMAGE_UPLOAD_MAX_BYTES,
+  isUploadableAudioFile,
   isUploadableImageFile,
+  peekUploadableAudioDrop,
   peekUploadableImageDrop,
+  readAudioDropSrc,
   readImageDropSrc,
   readYoutubeDropSrc,
 } from '@/src/extensions/mediaDrop';
@@ -80,6 +84,8 @@ const pageTitleDraft = ref('');
 const projectNameDraft = ref('');
 const isSigningIn = ref(false);
 const editorStateVersion = ref(0);
+const isRecordingAudio = ref(false);
+const isPreparingAudioRecording = ref(false);
 let activePageId = '';
 let isApplyingStoredContent = false;
 let lastAppliedContent = '';
@@ -89,6 +95,9 @@ let isEditorSaveInFlight = false;
 let editorSavePromise: Promise<void> | undefined;
 let shouldSaveAgainAfterCurrentSave = false;
 let sessionPollTimer: number | undefined;
+let audioRecorder: MediaRecorder | undefined;
+let audioStream: MediaStream | undefined;
+let audioChunks: Blob[] = [];
 
 const editor = useEditor({
   extensions: [
@@ -152,12 +161,30 @@ const editor = useEditor({
         return true;
       }
 
+      const uploadableAudioInfo = peekUploadableAudioDrop(event.dataTransfer);
+      if (uploadableAudioInfo) {
+        event.preventDefault();
+        moveEditorSelectionToDrop(view, event);
+        void handleUploadableAudioDrop(uploadableAudioInfo);
+        return true;
+      }
+
       const youtubeSrc = readYoutubeDropSrc(event.dataTransfer);
 
       if (youtubeSrc) {
         event.preventDefault();
         moveEditorSelectionToDrop(view, event);
         editor.value?.chain().focus().setYoutubeVideo({ src: youtubeSrc }).run();
+        void saveEditorContentOptimistically();
+        return true;
+      }
+
+      const audioSrc = readAudioDropSrc(event.dataTransfer);
+
+      if (audioSrc) {
+        event.preventDefault();
+        moveEditorSelectionToDrop(view, event);
+        editor.value?.chain().focus().setAudio({ src: audioSrc }).run();
         void saveEditorContentOptimistically();
         return true;
       }
@@ -340,6 +367,7 @@ onBeforeUnmount(() => {
   if (editor.value && store.currentPage) {
     void saveEditorContentOptimistically();
   }
+  stopAudioStream();
   editor.value?.destroy();
 });
 
@@ -628,8 +656,83 @@ function insertVideo() {
 }
 
 function insertAudio() {
-  const src = window.prompt('Audio URL')?.trim();
-  if (src) editor.value?.chain().focus().setAudio({ src }).run();
+  const src = window.prompt('MP3 or audio URL')?.trim();
+
+  if (!src) {
+    return;
+  }
+
+  if (!isHttpAudioUrl(src)) {
+    window.alert('Paste a public http(s) URL to an MP3 or audio file.');
+    return;
+  }
+
+  editor.value?.chain().focus().setAudio({ src }).run();
+  void saveEditorContentOptimistically();
+}
+
+async function toggleAudioRecording() {
+  if (isRecordingAudio.value) {
+    audioRecorder?.stop();
+    return;
+  }
+
+  await startAudioRecording();
+}
+
+async function startAudioRecording() {
+  if (!editor.value || isPreparingAudioRecording.value) {
+    return;
+  }
+
+  if (!navigator.mediaDevices?.getUserMedia) {
+    window.alert('Audio recording is not available in this browser.');
+    return;
+  }
+
+  isPreparingAudioRecording.value = true;
+
+  try {
+    audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    audioChunks = [];
+    const mimeType = preferredAudioRecordingMimeType();
+    audioRecorder = new MediaRecorder(
+      audioStream,
+      mimeType ? { mimeType } : undefined,
+    );
+
+    audioRecorder.addEventListener('dataavailable', (event) => {
+      if (event.data.size > 0) {
+        audioChunks.push(event.data);
+      }
+    });
+
+    audioRecorder.addEventListener('stop', () => {
+      const recorderMimeType = audioRecorder?.mimeType || mimeType || 'audio/webm';
+      const audioBlob = new Blob(audioChunks, { type: recorderMimeType });
+      const extension = audioExtensionFromMimeType(recorderMimeType);
+      const file = new File(
+        [audioBlob],
+        `jot-recording-${new Date().toISOString().replace(/[:.]/g, '-')}.${extension}`,
+        { type: recorderMimeType },
+      );
+
+      isRecordingAudio.value = false;
+      audioRecorder = undefined;
+      audioChunks = [];
+      stopAudioStream();
+      void handleUploadableAudioFile(file);
+    });
+
+    audioRecorder.start();
+    isRecordingAudio.value = true;
+  } catch (error) {
+    store.errorMessage =
+      error instanceof Error ? error.message : 'Unable to start audio recording.';
+    stopAudioStream();
+  } finally {
+    isPreparingAudioRecording.value = false;
+  }
 }
 
 function moveEditorSelectionToDrop(view: EditorView, event: DragEvent) {
@@ -779,6 +882,96 @@ async function handleUploadableImageDrop(info: { kind: 'file'; file: File }): Pr
   }
 
   void saveEditorContentOptimistically();
+}
+
+async function handleUploadableAudioDrop(info: { kind: 'file'; file: File }): Promise<void> {
+  await handleUploadableAudioFile(info.file);
+}
+
+async function handleUploadableAudioFile(file: File): Promise<void> {
+  if (!isUploadableAudioFile(file)) {
+    window.alert(`Audio files must be ${Math.floor(AUDIO_UPLOAD_MAX_BYTES / 1024 / 1024)} MB or smaller.`);
+    return;
+  }
+
+  const localSrc = URL.createObjectURL(file);
+  shouldSkipNextUpdateSave = true;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  editor.value?.chain().focus().setAudio({
+    src: localSrc,
+    uploadState: 'uploading',
+    mimeType: file.type,
+  } as any).run();
+  queueMicrotask(() => {
+    shouldSkipNextUpdateSave = false;
+  });
+
+  let fileUploadId = '';
+
+  try {
+    fileUploadId = await notionClient.uploadMedia(file, file.type, file.name);
+  } catch (error) {
+    store.errorMessage =
+      error instanceof Error ? error.message : 'Unable to upload this audio to Notion.';
+  }
+
+  shouldSkipNextUpdateSave = true;
+  editor.value?.state.doc.descendants((node, pos) => {
+    if (node.type.name === 'audio' && node.attrs.src === localSrc) {
+      editor.value
+        ?.chain()
+        .command(({ tr }) => {
+          tr.setNodeMarkup(pos, undefined, {
+            ...node.attrs,
+            ...(fileUploadId ? { notionFileUploadId: fileUploadId } : {}),
+            uploadState: fileUploadId ? 'done' : 'error',
+          });
+          return true;
+        })
+        .run();
+    }
+  });
+  queueMicrotask(() => {
+    shouldSkipNextUpdateSave = false;
+  });
+
+  if (!fileUploadId) {
+    return;
+  }
+
+  void saveEditorContentOptimistically();
+}
+
+function stopAudioStream() {
+  audioStream?.getTracks().forEach((track) => track.stop());
+  audioStream = undefined;
+}
+
+function preferredAudioRecordingMimeType() {
+  const supportedTypes = [
+    'audio/mpeg',
+    'audio/mp3',
+    'audio/webm;codecs=opus',
+    'audio/webm',
+    'audio/ogg;codecs=opus',
+    'audio/ogg',
+  ];
+
+  return supportedTypes.find((type) => MediaRecorder.isTypeSupported(type)) ?? '';
+}
+
+function audioExtensionFromMimeType(mimeType: string) {
+  const normalized = mimeType.toLowerCase();
+
+  if (normalized.includes('mpeg') || normalized.includes('mp3')) return 'mp3';
+  if (normalized.includes('ogg') || normalized.includes('opus')) return 'ogg';
+  if (normalized.includes('wav')) return 'wav';
+  if (normalized.includes('mp4') || normalized.includes('aac')) return 'm4a';
+  return 'webm';
+}
+
+function isHttpAudioUrl(value: string) {
+  return /^https?:\/\/.+\.(mp3|mpeg|m4a|aac|wav|ogg|oga|opus|webm)(\?[^#]*)?(#.*)?$/i.test(value);
 }
 
 function readHeadingDropPayload(event: DragEvent) {
@@ -1225,10 +1418,19 @@ function kebabCase(value: string) {
             <button
               type="button"
               :disabled="!editor"
-              title="Audio"
+              title="MP3 or audio URL"
               @click="insertAudio"
             >
               Aud
+            </button>
+            <button
+              type="button"
+              :class="{ active: isRecordingAudio }"
+              :disabled="!editor || isPreparingAudioRecording"
+              :title="isRecordingAudio ? 'Stop recording audio' : 'Record audio'"
+              @click="toggleAudioRecording"
+            >
+              {{ isRecordingAudio ? 'Stop' : 'Rec' }}
             </button>
           </div>
 
@@ -1682,6 +1884,30 @@ function kebabCase(value: string) {
 }
 
 .editor :deep(.tiptap .jot-image-wrapper a) {
+  word-break: break-all;
+}
+
+.editor :deep(.tiptap .jot-audio-wrapper) {
+  max-width: 640px;
+  margin: 0 0 0.85rem;
+}
+
+.editor :deep(.tiptap .jot-audio-wrapper audio) {
+  display: block;
+  width: 100%;
+}
+
+.editor :deep(.tiptap .jot-audio-wrapper.is-error),
+.editor :deep(.tiptap .jot-audio-wrapper.is-uploading) {
+  border: 1px solid var(--jot-border);
+  border-radius: 4px;
+  background: var(--jot-surface-muted);
+  color: var(--jot-muted);
+  padding: 10px;
+  font-size: 0.86rem;
+}
+
+.editor :deep(.tiptap .jot-audio-wrapper a) {
   word-break: break-all;
 }
 

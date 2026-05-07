@@ -98,6 +98,44 @@ export const JotAudio = Audio.extend({
       uploadState: { default: 'idle' },
       mimeType: { default: '' },
       kind: { default: 'audio' },
+      notionFileUploadId: { default: '' },
+    };
+  },
+
+  addNodeView() {
+    return ({ node }) => {
+      const wrapper = document.createElement('div');
+      wrapper.className = 'jot-audio-wrapper';
+      const uploadState = String(node.attrs.uploadState ?? 'idle');
+      const src = String(node.attrs.src ?? '');
+
+      if (uploadState === 'error') {
+        wrapper.classList.add('is-error');
+        wrapper.textContent = 'Audio was not synced. Record or add it again to upload it to Notion.';
+        return { dom: wrapper };
+      }
+
+      if (uploadState === 'uploading') {
+        wrapper.classList.add('is-uploading');
+      }
+
+      const audio = document.createElement('audio');
+      audio.controls = true;
+      audio.src = src;
+      audio.preload = 'metadata';
+
+      audio.addEventListener('error', () => {
+        audio.remove();
+        const link = document.createElement('a');
+        link.href = src;
+        link.textContent = src;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        wrapper.appendChild(link);
+      });
+
+      wrapper.appendChild(audio);
+      return { dom: wrapper };
     };
   },
 });

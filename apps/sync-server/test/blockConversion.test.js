@@ -192,3 +192,45 @@ test('Notion video imports as Tiptap YouTube node', () => {
     },
   ]);
 });
+
+test('tiptap uploaded audio syncs to Notion file_upload audio block', () => {
+  const blocks = tiptapDocumentToNotionBlocks({
+    type: 'doc',
+    content: [
+      {
+        type: 'audio',
+        attrs: {
+          src: 'blob:local-recording',
+          notionFileUploadId: 'audio-upload-id',
+        },
+      },
+    ],
+  });
+
+  assert.deepEqual(blocks[0], {
+    object: 'block',
+    type: 'audio',
+    audio: {
+      type: 'file_upload',
+      file_upload: {
+        id: 'audio-upload-id',
+      },
+    },
+  });
+});
+
+test('tiptap transient audio sources do not sync as Notion audio blocks', () => {
+  const blocks = tiptapDocumentToNotionBlocks({
+    type: 'doc',
+    content: [
+      {
+        type: 'audio',
+        attrs: {
+          src: 'blob:local-recording',
+        },
+      },
+    ],
+  });
+
+  assert.equal(blocks[0].type, 'paragraph');
+});

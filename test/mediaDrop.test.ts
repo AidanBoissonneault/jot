@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
+  AUDIO_UPLOAD_MAX_BYTES,
   IMAGE_UPLOAD_MAX_BYTES,
+  isUploadableAudioFile,
   isUploadableImageFile,
+  peekUploadableAudioDrop,
   peekUploadableImageDrop,
+  readAudioDropSrc,
   readImageDropSrc,
   readYoutubeDropSrc,
 } from '@/src/extensions/mediaDrop';
@@ -76,6 +80,34 @@ describe('media drop helpers', () => {
     ).toBeNull();
   });
 
+  it('extracts public audio URLs from dropped HTML, URI lists, and plain text', () => {
+    expect(
+      readAudioDropSrc(dropData({
+        'text/html': '<audio src="https://example.com/clip.mp3"></audio>',
+      })),
+    ).toBe('https://example.com/clip.mp3');
+
+    expect(
+      readAudioDropSrc(dropData({
+        'text/uri-list': '# comment\nhttps://example.com/clip.m4a?download=1',
+      })),
+    ).toBe('https://example.com/clip.m4a?download=1');
+
+    expect(
+      readAudioDropSrc(dropData({
+        'text/plain': 'https://example.com/clip.webm',
+      })),
+    ).toBe('https://example.com/clip.webm');
+  });
+
+  it('rejects non-audio URLs as audio drops', () => {
+    expect(
+      readAudioDropSrc(dropData({
+        'text/plain': 'https://example.com/page',
+      })),
+    ).toBeNull();
+  });
+
   it('selects only image files for upload and applies the 20 MB limit', () => {
     const image = new File(['pixels'], 'capture.png', { type: 'image/png' });
     const text = new File(['notes'], 'notes.txt', { type: 'text/plain' });
@@ -89,6 +121,21 @@ describe('media drop helpers', () => {
     });
     expect(isUploadableImageFile(image)).toBe(true);
     expect(isUploadableImageFile(oversized)).toBe(false);
+  });
+
+  it('selects only audio files for upload and applies the 20 MB limit', () => {
+    const audio = new File(['sound'], 'clip.mp3', { type: 'audio/mpeg' });
+    const text = new File(['notes'], 'notes.txt', { type: 'text/plain' });
+    const oversized = new File([new Uint8Array(AUDIO_UPLOAD_MAX_BYTES + 1)], 'huge.mp3', {
+      type: 'audio/mpeg',
+    });
+
+    expect(peekUploadableAudioDrop(dropData({}, [text, audio]))).toEqual({
+      kind: 'file',
+      file: audio,
+    });
+    expect(isUploadableAudioFile(audio)).toBe(true);
+    expect(isUploadableAudioFile(oversized)).toBe(false);
   });
 });
 

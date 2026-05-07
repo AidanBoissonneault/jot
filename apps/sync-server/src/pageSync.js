@@ -102,7 +102,7 @@ function normalizeSyncedMediaContent(content, createdBlocks) {
 }
 
 function normalizeSyncedMediaNode(node, createdBlock) {
-  if (node?.type === 'image' && node.attrs?.notionFileUploadId) {
+  if ((node?.type === 'image' || node?.type === 'audio') && node.attrs?.notionFileUploadId) {
     const url = mediaUrlFromNotionBlock(createdBlock);
 
     if (url) {
@@ -128,9 +128,13 @@ function normalizeSyncedMediaNode(node, createdBlock) {
 }
 
 function mediaUrlFromNotionBlock(block) {
-  if (block?.type !== 'image') {
-    return null;
+  if (block?.type === 'image') {
+    return block.image?.file?.url ?? block.image?.external?.url ?? null;
   }
 
-  return block.image?.file?.url ?? block.image?.external?.url ?? null;
+  if (block?.type === 'audio') {
+    return block.audio?.file?.url ?? block.audio?.external?.url ?? null;
+  }
+
+  return null;
 }

@@ -60,6 +60,28 @@ describe('media content helpers', () => {
       uploadState: 'error',
     });
   });
+
+  it('handles transient audio uploads like image uploads', () => {
+    const content = doc([
+      audio({
+        src: 'blob:chrome-extension://recording',
+        notionFileUploadId: 'audio-upload-id',
+        uploadState: 'uploading',
+      }),
+    ]);
+    const synced = doc([audio({ src: 'https://secure.notion-static.com/recording.mp3' })]);
+
+    expect(hasPendingTransientMedia(content)).toBe(false);
+    expect(sanitizeMediaForSync(content).content?.[0].attrs).toMatchObject({
+      src: 'blob:chrome-extension://recording',
+      notionFileUploadId: 'audio-upload-id',
+      uploadState: 'done',
+    });
+    expect(mergeSyncedMediaContent(content, synced).content?.[0].attrs).toMatchObject({
+      src: 'https://secure.notion-static.com/recording.mp3',
+      uploadState: 'done',
+    });
+  });
 });
 
 function doc(content: DocumentContent[]): DocumentContent {
@@ -79,6 +101,13 @@ function paragraph(text: string): DocumentContent {
 function image(attrs: Record<string, unknown>): DocumentContent {
   return {
     type: 'image',
+    attrs,
+  };
+}
+
+function audio(attrs: Record<string, unknown>): DocumentContent {
+  return {
+    type: 'audio',
     attrs,
   };
 }

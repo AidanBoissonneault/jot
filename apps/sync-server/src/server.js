@@ -31,7 +31,7 @@ const JOT_ROOT_PAGE_TITLE = process.env.JOT_ROOT_PAGE_TITLE ?? 'Jot';
 const JOT_SESSION_COOKIE = 'jot_session';
 const JOT_OAUTH_STATE_COOKIE = 'jot_notion_oauth_state';
 const SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 30;
-const MAX_IMAGE_UPLOAD_BYTES = 20 * 1024 * 1024;
+const MAX_MEDIA_UPLOAD_BYTES = 20 * 1024 * 1024;
 
 const fastify = Fastify({ logger: true });
 const syncQueue = new MergeableSyncQueue();
@@ -394,8 +394,8 @@ fastify.post('/media/upload', async (request, reply) => {
     return reply.status(400).send({ error: 'Missing dataBase64 or mimeType.' });
   }
 
-  if (!String(mimeType).startsWith('image/')) {
-    return reply.status(400).send({ error: 'Only image uploads are supported.' });
+  if (!isSupportedMediaMimeType(mimeType)) {
+    return reply.status(400).send({ error: 'Only image and audio uploads are supported.' });
   }
 
   if (!isBase64(dataBase64)) {
@@ -405,13 +405,13 @@ fastify.post('/media/upload', async (request, reply) => {
   const store = await requireConnectedStore(request);
   const buffer = Buffer.from(dataBase64, 'base64');
 
-  if (buffer.byteLength > MAX_IMAGE_UPLOAD_BYTES) {
-    return reply.status(413).send({ error: 'Images must be 20 MB or smaller.' });
+  if (buffer.byteLength > MAX_MEDIA_UPLOAD_BYTES) {
+    return reply.status(413).send({ error: 'Media files must be 20 MB or smaller.' });
   }
 
   const fileUploadId = await uploadFileToNotion(
     store,
-    { data: buffer, mimeType, filename: sanitizeImageFilename(filename, mimeType) },
+    { data: buffer, mimeType, filename: sanitizeMediaFilename(filename, mimeType) },
     { notionVersion: NOTION_VERSION },
   );
 
@@ -1402,19 +1402,25 @@ function isBase64(value) {
   return typeof value === 'string' && /^[A-Za-z0-9+/]*={0,2}$/.test(value) && value.length % 4 === 0;
 }
 
-function sanitizeImageFilename(filename, mimeType) {
+function isSupportedMediaMimeType(mimeType) {
+  const normalized = String(mimeType).toLowerCase();
+  return normalized.startsWith('image/') || normalized.startsWith('audio/');
+}
+
+function sanitizeMediaFilename(filename, mimeType) {
   const safeName = String(filename ?? '')
     .trim()
     .replace(/[\\/:"*?<>|]+/g, '-')
     .replace(/\s+/g, ' ')
     .slice(0, 180);
-  const extension = imageExtensionFromMimeType(mimeType);
-  const name = safeName || `image.${extension}`;
+  const mediaKind = String(mimeType).toLowerCase().startsWith('audio/') ? 'audio' : 'image';
+  const extension = mediaExtensionFromMimeType(mimeType);
+  const name = safeName || `${mediaKind}.${extension}`;
 
   return /\.[A-Za-z0-9]+$/.test(name) ? name : `${name}.${extension}`;
 }
 
-function imageExtensionFromMimeType(mimeType) {
+function mediaExtensionFromMimeType(mimeType) {
   return {
     'image/jpeg': 'jpg',
     'image/png': 'png',
@@ -1422,7 +1428,18 @@ function imageExtensionFromMimeType(mimeType) {
     'image/webp': 'webp',
     'image/svg+xml': 'svg',
     'image/avif': 'avif',
-  }[String(mimeType).toLowerCase()] ?? 'png';
+    'audio/mpeg': 'mp3',
+    'audio/mp3': 'mp3',
+    'audio/mp4': 'm4a',
+    'audio/aac': 'aac',
+    'audio/wav': 'wav',
+    'audio/x-wav': 'wav',
+    'audio/ogg': 'ogg',
+    'audio/opus': 'opus',
+    'audio/webm': 'webm',
+  }[String(mimeType).toLowerCase()] ?? (
+    String(mimeType).toLowerCase().startsWith('audio/') ? 'mp3' : 'png'
+  );
 }
 
 function closePage(message) {

@@ -1210,12 +1210,12 @@ export const notionClient = {
   async uploadMedia(blob: Blob, mimeType: string, filename: string): Promise<string> {
     const { syncConfig } = await readStorage();
     if (!syncConfig.connected) {
-      throw new Error('Connect Notion before uploading images.');
+      throw new Error('Connect Notion before uploading media.');
     }
 
     const buf = await blob.arrayBuffer();
     const bytes = new Uint8Array(buf);
-    // Build base64 in chunks to avoid call-stack limits on large images
+    // Build base64 in chunks to avoid call-stack limits on large media files.
     let binary = '';
     const chunkSize = 8192;
     for (let i = 0; i < bytes.length; i += chunkSize) {

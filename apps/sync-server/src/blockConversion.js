@@ -107,7 +107,17 @@ function tiptapNodeToNotionBlock(node) {
 
   if (node.type === 'audio') {
     const src = node.attrs?.src;
-    if (!src) return paragraphFallback('');
+    const fileUploadId = node.attrs?.notionFileUploadId;
+
+    if (fileUploadId) {
+      return {
+        object: 'block',
+        type: 'audio',
+        audio: { type: 'file_upload', file_upload: { id: fileUploadId } },
+      };
+    }
+
+    if (!src || !/^https?:\/\//i.test(src)) return paragraphFallback('');
     return { object: 'block', type: 'audio', audio: { type: 'external', external: { url: src } } };
   }
 
@@ -232,7 +242,7 @@ function notionBlockToTiptapNode(block) {
   }
 
   if (block.type === 'audio') {
-    const url = block.audio?.external?.url ?? block.audio?.file?.url;
+    const url = block.audio?.external?.url ?? block.audio?.file?.url ?? block.audio?.file_upload?.url;
     if (!url) return null;
     return { type: 'audio', attrs: { src: url } };
   }

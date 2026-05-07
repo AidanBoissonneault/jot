@@ -112,3 +112,70 @@ test('pushPageToNotionCore returns Notion file URL for uploaded image content', 
     uploadState: 'done',
   });
 });
+
+test('pushPageToNotionCore returns Notion file URL for uploaded audio content', async () => {
+  const store = {
+    blockMappings: {},
+    notePages: {},
+  };
+  const pageContent = {
+    type: 'doc',
+    content: [
+      {
+        type: 'audio',
+        attrs: {
+          src: 'blob:chrome-extension://recording',
+          notionFileUploadId: 'audio-upload-id',
+          uploadState: 'uploading',
+        },
+      },
+    ],
+  };
+  const response = await pushPageToNotionCore({
+    request: {},
+    page: {
+      id: 'page-1',
+      title: 'Local title',
+      content: pageContent,
+    },
+    project: { id: 'project-1', name: 'Project' },
+    selectedParentPageId: 'parent-page',
+    dependencies: {
+      appendLog: () => undefined,
+      createChildPage: async () => ({
+        id: 'notion-page-1',
+        last_edited_time: 'created-revision',
+      }),
+      ensureJotRootPage: async () => ({ id: 'jot-root', title: 'Jot' }),
+      ensureProjectRootPage: async () => ({ id: 'project-root', title: 'Project' }),
+      notionRequest: async () => ({
+        id: 'notion-page-1',
+        last_edited_time: 'synced-revision',
+      }),
+      replaceManagedBlocks: async () => ({
+        createdBlocks: [
+          {
+            id: 'block-1',
+            type: 'audio',
+            audio: {
+              type: 'file',
+              file: {
+                url: 'https://secure.notion-static.com/recording.mp3',
+              },
+            },
+          },
+        ],
+      }),
+      requireConnectedStore: async () => store,
+      updateChildNotePage: async () => undefined,
+      writeStore: async () => undefined,
+    },
+  });
+
+  assert.equal(response.status, 'saved');
+  assert.deepEqual(response.page.content.content[0].attrs, {
+    src: 'https://secure.notion-static.com/recording.mp3',
+    notionFileUploadId: 'audio-upload-id',
+    uploadState: 'done',
+  });
+});

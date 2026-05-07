@@ -13,7 +13,7 @@ export function sanitizeMediaForSync(content: DocumentContent): DocumentContent 
 }
 
 export function hasPendingTransientMedia(content: DocumentContent): boolean {
-  if (content.type === 'image') {
+  if (isUploadableMediaNode(content)) {
     const attrs = content.attrs ?? {};
     const src = String(attrs.src ?? '');
     return isTransientUrl(src) && !attrs.notionFileUploadId;
@@ -38,7 +38,7 @@ export function markUnrecoverableTransientMedia(content: DocumentContent): Docum
 }
 
 function sanitizeNode(node: DocumentContent): DocumentContent | undefined {
-  if (node.type === 'image') {
+  if (isUploadableMediaNode(node)) {
     const attrs = node.attrs ?? {};
     const src = String(attrs.src ?? '');
     const hasUpload = Boolean(attrs.notionFileUploadId);
@@ -72,7 +72,10 @@ function sanitizeNode(node: DocumentContent): DocumentContent | undefined {
 }
 
 function mergeNode(localNode: DocumentContent, syncedNode: DocumentContent): DocumentContent {
-  if (localNode.type === 'image' && syncedNode.type === 'image') {
+  if (
+    isUploadableMediaNode(localNode) &&
+    localNode.type === syncedNode.type
+  ) {
     const syncedAttrs = syncedNode.attrs ?? {};
     const syncedSrc = String(syncedAttrs.src ?? '');
 
@@ -101,7 +104,7 @@ function mergeNode(localNode: DocumentContent, syncedNode: DocumentContent): Doc
 }
 
 function markNode(node: DocumentContent): DocumentContent {
-  if (node.type === 'image') {
+  if (isUploadableMediaNode(node)) {
     const attrs = node.attrs ?? {};
     const src = String(attrs.src ?? '');
 
@@ -132,4 +135,8 @@ function isTransientUrl(value: string) {
 
 function isHttpUrl(value: string) {
   return /^https?:\/\//i.test(value);
+}
+
+function isUploadableMediaNode(node: DocumentContent) {
+  return node.type === 'image' || node.type === 'audio';
 }
