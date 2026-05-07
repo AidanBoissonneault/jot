@@ -1256,9 +1256,12 @@ function kebabCase(value: string) {
         <div
           :class="syncBadgeClass"
           :title="syncBadgeTitle"
+          role="status"
+          tabindex="0"
+          :aria-label="`${saveLabel}: ${syncBadgeTitle}`"
         >
-          <span aria-hidden="true" />
-          {{ saveLabel }}
+          <span class="sync-dot" aria-hidden="true" />
+          <span class="sync-label">{{ saveLabel }}</span>
         </div>
         <div class="topbar-meta">
           <strong>{{ contextLabel }}</strong>
@@ -1266,7 +1269,7 @@ function kebabCase(value: string) {
         </div>
       </div>
 
-      <div class="topbar-actions">
+      <div class="topbar-switchers">
         <select
           v-if="store.syncConfig.connected"
           v-model="currentProjectModel"
@@ -1296,9 +1299,10 @@ function kebabCase(value: string) {
             {{ page.title }}
           </option>
         </select>
+      </div>
 
+      <div v-if="store.syncConfig.connected" class="topbar-actions">
         <button
-          v-if="store.syncConfig.connected"
           type="button"
           class="icon-label-button secondary-button"
           :disabled="store.isLoading"
@@ -1311,7 +1315,6 @@ function kebabCase(value: string) {
         </button>
 
         <button
-          v-if="store.syncConfig.connected"
           type="button"
           class="icon-label-button"
           :disabled="store.isLoading || !store.currentProjectId"
@@ -1323,7 +1326,6 @@ function kebabCase(value: string) {
           <span>New page</span>
         </button>
         <button
-          v-if="store.syncConfig.connected"
           type="button"
           class="icon-label-button secondary-button"
           :disabled="store.isLoading"
@@ -1335,7 +1337,6 @@ function kebabCase(value: string) {
           <span>Sync</span>
         </button>
         <button
-          v-if="store.syncConfig.connected"
           type="button"
           class="icon-label-button secondary-button"
           title="Logout"
@@ -2280,9 +2281,12 @@ function kebabCase(value: string) {
   display: inline-flex;
   align-items: center;
   justify-self: start;
-  gap: 6px;
+  gap: 0;
+  overflow: hidden;
   min-height: 28px;
-  padding: 0 10px;
+  min-width: 28px;
+  max-width: 100%;
+  padding: 0 9px;
   border: 1px solid var(--jot-border);
   border-radius: 999px;
   background: var(--jot-surface-muted);
@@ -2291,11 +2295,40 @@ function kebabCase(value: string) {
   font-weight: 750;
 }
 
-.sync-badge span {
+.sync-badge:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--jot-accent) 34%, transparent);
+  outline-offset: 2px;
+}
+
+.sync-dot {
+  flex: 0 0 auto;
   width: 8px;
   height: 8px;
   border-radius: 999px;
   background: var(--jot-muted);
+}
+
+.sync-label {
+  display: inline-block;
+  max-width: 0;
+  margin-left: 0;
+  opacity: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  transform: translateX(-4px);
+  transition:
+    max-width 160ms ease,
+    opacity 140ms ease,
+    transform 160ms ease,
+    margin-left 160ms ease;
+}
+
+.sync-badge:hover .sync-label,
+.sync-badge:focus-visible .sync-label {
+  max-width: 12ch;
+  margin-left: 6px;
+  opacity: 1;
+  transform: translateX(0);
 }
 
 .sync-badge.error {
@@ -2304,7 +2337,7 @@ function kebabCase(value: string) {
   color: #991b1b;
 }
 
-.sync-badge.error span {
+.sync-badge.error .sync-dot {
   background: #dc2626;
 }
 
@@ -2314,7 +2347,7 @@ function kebabCase(value: string) {
   color: #92400e;
 }
 
-.sync-badge.stale span {
+.sync-badge.stale .sync-dot {
   background: #f59e0b;
 }
 
@@ -2324,7 +2357,7 @@ function kebabCase(value: string) {
   color: #1d4ed8;
 }
 
-.sync-badge.saving span {
+.sync-badge.saving .sync-dot {
   background: #2563eb;
 }
 
@@ -2334,25 +2367,41 @@ function kebabCase(value: string) {
   color: #166534;
 }
 
-.sync-badge.saved span {
+.sync-badge.saved .sync-dot {
   background: #16a34a;
 }
 
-.topbar-actions {
-  display: flex;
-  flex-wrap: wrap;
+.topbar-switchers {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 6px;
 }
 
-.topbar-actions select {
-  flex: 1 1 130px;
+.topbar-switchers select {
   min-width: 0;
 }
 
+.topbar-actions {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+
 .topbar-actions button {
+  justify-self: stretch;
   min-height: 30px;
   padding: 0 8px;
   font-weight: 750;
+}
+
+.topbar-actions .icon-label-button {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.topbar-actions .icon-label-button:hover > span:not(.text-icon),
+.topbar-actions .icon-label-button:focus-visible > span:not(.text-icon) {
+  max-width: 10ch;
 }
 
 .tabs {
@@ -2376,6 +2425,10 @@ function kebabCase(value: string) {
   font-weight: 800;
 }
 
+.tabs .icon-label-button {
+  justify-self: stretch;
+}
+
 .tabs button.active {
   border-color: var(--jot-border);
   background: var(--jot-surface);
@@ -2394,6 +2447,7 @@ function kebabCase(value: string) {
   justify-content: center;
   gap: 0;
   min-width: 32px;
+  max-width: 100%;
   overflow: hidden;
   white-space: nowrap;
 }
@@ -2419,7 +2473,7 @@ function kebabCase(value: string) {
 
 .icon-label-button:hover > span:not(.text-icon),
 .icon-label-button:focus-visible > span:not(.text-icon) {
-  max-width: 130px;
+  max-width: min(18ch, calc(100vw - 84px));
   margin-left: 6px;
   opacity: 1;
   transform: translateX(0);
@@ -2433,6 +2487,8 @@ function kebabCase(value: string) {
 }
 
 .text-icon {
+  display: inline-flex;
+  justify-content: center;
   font-size: 0.76rem;
   font-weight: 850;
   letter-spacing: 0;
@@ -2510,27 +2566,42 @@ function kebabCase(value: string) {
 .inline-form,
 .recording-row,
 .modal-actions {
-  display: flex;
+  display: grid;
   gap: 8px;
   align-items: center;
 }
 
 .editor-title-row {
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: start;
 }
 
 .editor-title-row .page-title {
-  flex: 1 1 auto;
   min-width: 0;
 }
 
+.section-heading {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.manage-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.modal-actions {
+  grid-template-columns: repeat(2, minmax(96px, 1fr));
+}
+
+.recording-row {
+  grid-template-columns: auto minmax(0, 1fr);
+}
+
 .inline-form {
-  flex-wrap: wrap;
+  grid-template-columns: minmax(0, 1fr) auto;
 }
 
 .inline-form input,
 .manage-row select {
-  flex: 1 1 160px;
   min-width: 0;
 }
 
@@ -2538,7 +2609,6 @@ function kebabCase(value: string) {
 .manage-row button,
 .section-heading button,
 .recording-row button {
-  flex: 0 0 auto;
   min-height: 32px;
   padding: 0 10px;
   font-weight: 750;
@@ -2563,10 +2633,6 @@ function kebabCase(value: string) {
 .section-heading h2 {
   margin: 0;
   font-size: 0.95rem;
-}
-
-.section-heading {
-  justify-content: space-between;
 }
 
 .field-label,
@@ -2732,10 +2798,10 @@ function kebabCase(value: string) {
 }
 
 .editor-tool-tabs {
-  display: inline-grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  display: grid;
+  grid-template-columns: repeat(3, minmax(92px, 1fr));
   gap: 3px;
-  width: min(100%, 360px);
+  width: 100%;
   padding: 3px;
   border: 1px solid var(--jot-border);
   border-radius: var(--jot-radius);
@@ -2744,12 +2810,22 @@ function kebabCase(value: string) {
 
 .editor-tool-tabs button {
   min-width: 0;
-  min-height: 28px;
+  min-height: 32px;
+  padding: 0 8px;
   border-color: transparent;
   background: transparent;
   color: var(--jot-muted);
   font-size: 0.8rem;
   font-weight: 800;
+}
+
+.editor-tool-tabs .icon-label-button {
+  justify-self: stretch;
+}
+
+.editor-tool-tabs .icon-label-button:hover > span:not(.text-icon),
+.editor-tool-tabs .icon-label-button:focus-visible > span:not(.text-icon) {
+  max-width: 11ch;
 }
 
 .editor-tool-tabs button.active {
@@ -2759,8 +2835,8 @@ function kebabCase(value: string) {
 }
 
 .editor-quickbar {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(92px, max-content));
   gap: 6px;
   align-items: center;
 }
@@ -2770,7 +2846,8 @@ function kebabCase(value: string) {
   align-items: center;
   justify-content: center;
   gap: 0;
-  min-width: 34px;
+  min-width: 42px;
+  max-width: 100%;
   min-height: 32px;
   padding: 0 8px;
   border-color: var(--jot-border);
@@ -2796,14 +2873,13 @@ function kebabCase(value: string) {
 }
 
 .tool-panel {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(124px, 1fr));
   gap: 8px;
   align-items: end;
 }
 
 .tool-panel .field-label {
-  flex: 1 1 130px;
   min-width: 0;
 }
 
@@ -2824,7 +2900,7 @@ function kebabCase(value: string) {
 
 .button-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(76px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
   width: 100%;
 }
 
@@ -2836,7 +2912,7 @@ function kebabCase(value: string) {
 }
 
 .link-form input {
-  flex: 1 1 180px;
+  min-width: 0;
 }
 
 .editor {
