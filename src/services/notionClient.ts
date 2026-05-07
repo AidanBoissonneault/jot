@@ -45,6 +45,17 @@ type SyncProjectResponse = {
   status: Exclude<SaveStatus, 'idle' | 'saving'>;
 };
 
+export type OptimisticProjectCreation = {
+  page: ProjectPage;
+  project: Project;
+  settled: Promise<{ page: ProjectPage; project: Project }>;
+};
+
+export type OptimisticPageCreation = {
+  page: ProjectPage;
+  settled: Promise<ProjectPage>;
+};
+
 const STORAGE_KEYS: Array<keyof JotStorage> = [
   'activePageIdsByProject',
   'captures',
@@ -71,6 +82,8 @@ const defaultProjects: Project[] = [
 ];
 
 const waitForStub = () => new Promise((resolve) => setTimeout(resolve, 80));
+const pendingTempPageSaves = new Map<string, ProjectPage>();
+const projectReconciliations = new Map<string, Promise<string>>();
 
 function emptyDocument(): DocumentContent {
   return {
@@ -196,12 +209,13 @@ function createDefaultPages(projects: Project[]): ProjectPage[] {
   });
 }
 
-function createProjectRecord(name: string): Project {
+function createProjectRecord(name: string, id = `project-${crypto.randomUUID()}`): Project {
   return {
-    id: `project-${crypto.randomUUID()}`,
+    id,
     name: name.trim() || 'Untitled Project',
     status: 'active',
     tags: [],
+    syncState: 'saved',
   };
 }
 
@@ -209,7 +223,13 @@ async function readStorage(): Promise<Required<JotStorage>> {
   const stored = (await browser.storage.local.get(STORAGE_KEYS)) as JotStorage;
 
   const storedProjects = stored.projects?.length ? stored.projects : defaultProjects;
-  const projects = isLegacyStubProjectSet(storedProjects) ? defaultProjects : storedProjects;
+  const projects = (isLegacyStubProjectSet(storedProjects)
+    ? defaultProjects
+    : storedProjects
+  ).map((project) => ({
+    ...project,
+    syncState: project.syncState ?? 'saved',
+  }));
   const captures = stored.captures ?? [];
   const shouldCreatePages =
     !stored.pages?.length ||
@@ -360,6 +380,29 @@ function createEmptyPage(projectId: string, title: string): ProjectPage {
   };
 }
 
+function createOptimisticProjectRecord(name: string): Project {
+  return {
+    ...createProjectRecord(name, `temp-project-${crypto.randomUUID()}`),
+    syncState: 'creating',
+  };
+}
+
+function createOptimisticPage(projectId: string, title: string): ProjectPage {
+  return {
+    ...createEmptyPage(projectId, title),
+    id: `temp-page-${crypto.randomUUID()}`,
+    syncState: 'creating',
+  };
+}
+
+function isTempProject(project: Project | undefined) {
+  return Boolean(project?.id.startsWith('temp-project-') || project?.syncState === 'creating');
+}
+
+function isTempPage(page: ProjectPage | undefined) {
+  return Boolean(page?.id.startsWith('temp-page-') || page?.syncState === 'creating');
+}
+
 function markPageDirty(page: ProjectPage): ProjectPage {
   return {
     ...page,
@@ -372,7 +415,7 @@ function markPageDirty(page: ProjectPage): ProjectPage {
 
 function withSyncStatus(
   page: ProjectPage,
-  status: Exclude<SaveStatus, 'idle' | 'saving'>,
+  status: Exclude<SaveStatus, 'idle'>,
   message?: string,
 ): ProjectPage {
   return {
@@ -499,6 +542,138 @@ async function persistPage(page: ProjectPage) {
   });
 }
 
+async function replaceTempProject({
+  tempPage,
+  tempProject,
+  realPage,
+  realProject,
+}: {
+  tempPage: ProjectPage;
+  tempProject: Project;
+  realPage: ProjectPage;
+  realProject: Project;
+}) {
+  const { activePageIdsByProject, currentProjectId, pages, projects } = await readStorage();
+  const nextActivePageIds = { ...activePageIdsByProject };
+  const tempActivePageId = nextActivePageIds[tempProject.id];
+
+  delete nextActivePageIds[tempProject.id];
+  nextActivePageIds[realProject.id] =
+    tempActivePageId === tempPage.id ? realPage.id : tempActivePageId;
+
+  await writeStorage({
+    activePageIdsByProject: nextActivePageIds,
+    currentProjectId: currentProjectId === tempProject.id ? realProject.id : currentProjectId,
+    pages: pages.map((page) =>
+      page.id === tempPage.id
+        ? {
+            ...page,
+            ...realPage,
+            content: page.content,
+            title: page.title,
+            syncState: pendingTempPageSaves.has(tempPage.id) ? 'saving' : 'saved',
+          }
+        : page.projectId === tempProject.id
+          ? { ...page, projectId: realProject.id }
+          : page,
+    ),
+    projects: projects.map((project) =>
+      project.id === tempProject.id ? realProject : project,
+    ),
+  });
+}
+
+async function rollbackTempProject(
+  tempProject: Project,
+  tempPage: ProjectPage,
+  previousProjectId: string,
+  message: string,
+) {
+  const { activePageIdsByProject, currentProjectId, pages, projects } = await readStorage();
+  const nextActivePageIds = { ...activePageIdsByProject };
+  delete nextActivePageIds[tempProject.id];
+  pendingTempPageSaves.delete(tempPage.id);
+
+  await writeStorage({
+    activePageIdsByProject: nextActivePageIds,
+    currentProjectId: currentProjectId === tempProject.id ? previousProjectId : currentProjectId,
+    pages: pages.filter((page) => page.projectId !== tempProject.id),
+    projects: projects
+      .filter((project) => project.id !== tempProject.id)
+      .map((project) =>
+        project.id === previousProjectId
+          ? { ...project, syncState: 'error', syncMessage: message }
+          : project,
+      ),
+  });
+}
+
+async function replaceTempPage(tempPage: ProjectPage, realPage: ProjectPage) {
+  const { activePageIdsByProject, currentProjectId, pages } = await readStorage();
+  const nextActivePageIds = {
+    ...activePageIdsByProject,
+    [realPage.projectId]:
+      activePageIdsByProject[realPage.projectId] === tempPage.id
+        ? realPage.id
+        : activePageIdsByProject[realPage.projectId],
+  };
+  const currentStoredPage = pages.find((page) => page.id === tempPage.id);
+
+  await writeStorage({
+    activePageIdsByProject: nextActivePageIds,
+    currentProjectId,
+    pages: pages.map((page) =>
+      page.id === tempPage.id
+        ? {
+            ...page,
+            ...realPage,
+            content: currentStoredPage?.content ?? page.content,
+            title: currentStoredPage?.title ?? page.title,
+            syncState: pendingTempPageSaves.has(tempPage.id) ? 'saving' : realPage.syncState,
+          }
+        : page,
+    ),
+  });
+}
+
+async function rollbackTempPage(
+  tempPage: ProjectPage,
+  previousActivePageId: string,
+  message: string,
+) {
+  const { activePageIdsByProject, pages } = await readStorage();
+  pendingTempPageSaves.delete(tempPage.id);
+
+  await writeStorage({
+    activePageIdsByProject: {
+      ...activePageIdsByProject,
+      [tempPage.projectId]: previousActivePageId,
+    },
+    pages: pages
+      .filter((page) => page.id !== tempPage.id)
+      .map((page) =>
+        page.id === previousActivePageId
+          ? { ...page, syncState: 'error', syncMessage: message }
+          : page,
+      ),
+  });
+}
+
+async function replayTempPageSave(tempPageId: string, realPage: ProjectPage) {
+  const pendingPage = pendingTempPageSaves.get(tempPageId);
+  pendingTempPageSaves.delete(tempPageId);
+
+  if (!pendingPage) {
+    return realPage;
+  }
+
+  return notionClient.updateProjectPage({
+    ...realPage,
+    title: pendingPage.title,
+    content: pendingPage.content,
+  });
+}
+
 async function updateStoredSyncConfig(config: Partial<SyncConfig>): Promise<SyncConfig> {
   const { syncConfig } = await readStorage();
   const nextConfig = {
@@ -535,12 +710,10 @@ export const notionClient = {
     await writeStorage({ currentProjectId: projectId });
   },
 
-  async createProject(name = 'Untitled Project'): Promise<Project> {
-    const { activePageIdsByProject, pages, projects } = await readStorage();
-    const project = createProjectRecord(name);
-    const page = createEmptyPage(project.id, 'Untitled Page');
-
-    await syncProject(project);
+  async createProject(name = 'Untitled Project'): Promise<OptimisticProjectCreation> {
+    const { activePageIdsByProject, currentProjectId, pages, projects } = await readStorage();
+    const project = createOptimisticProjectRecord(name);
+    const page = createOptimisticPage(project.id, 'Untitled Page');
 
     await writeStorage({
       activePageIdsByProject: {
@@ -552,7 +725,40 @@ export const notionClient = {
       projects: [...projects, project],
     });
 
-    return project;
+    const settled = (async () => {
+      const realProject = createProjectRecord(project.name);
+      const realPage = {
+        ...page,
+        id: `page-${realProject.id}-${crypto.randomUUID()}`,
+        projectId: realProject.id,
+        syncState: 'saved' as const,
+      };
+
+      try {
+        await syncProject(realProject);
+        await replaceTempProject({
+          tempPage: page,
+          tempProject: project,
+          realPage,
+          realProject,
+        });
+        const savedPage = await replayTempPageSave(page.id, realPage);
+        return { page: savedPage, project: realProject };
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : 'Unable to create this project.';
+        await rollbackTempProject(project, page, currentProjectId, message);
+        throw error;
+      } finally {
+        projectReconciliations.delete(project.id);
+      }
+    })();
+
+    const projectReconciliation = settled.then(({ project }) => project.id);
+    projectReconciliation.catch(() => undefined);
+    projectReconciliations.set(project.id, projectReconciliation);
+
+    return { page, project, settled };
   },
 
   async renameProject(projectId: string, name: string): Promise<Project> {
@@ -725,7 +931,7 @@ export const notionClient = {
       return undefined;
     }
 
-    const syncedPage = await syncPullPage(page);
+    const syncedPage = isTempPage(page) ? page : await syncPullPage(page);
 
     if (syncedPage !== page) {
       await persistPage(syncedPage);
@@ -760,12 +966,15 @@ export const notionClient = {
       },
     });
 
-    const syncedPage = await syncPullPage(page);
+    const syncedPage = isTempPage(page) ? page : await syncPullPage(page);
     await persistPage(syncedPage);
     return syncedPage;
   },
 
-  async createProjectPage(projectId: string, title = 'Untitled Page') {
+  async createProjectPage(
+    projectId: string,
+    title = 'Untitled Page',
+  ): Promise<OptimisticPageCreation> {
     const { activePageIdsByProject, pages, projects } = await readStorage();
     const project = projects.find((storedProject) => storedProject.id === projectId);
 
@@ -773,18 +982,54 @@ export const notionClient = {
       throw new Error('This project is no longer available.');
     }
 
-    const page = markPageDirty(createEmptyPage(projectId, title.trim() || 'Untitled Page'));
-    const syncedPage = await syncPushPage(page, project);
+    const previousActivePageId = activePageIdsByProject[projectId] ?? '';
+    const page = createOptimisticPage(projectId, title.trim() || 'Untitled Page');
 
     await writeStorage({
       activePageIdsByProject: {
         ...activePageIdsByProject,
-        [projectId]: syncedPage.id,
+        [projectId]: page.id,
       },
-      pages: [...pages, syncedPage],
+      pages: [...pages, page],
     });
 
-    return syncedPage;
+    const settled = (async () => {
+      try {
+        const realProjectId = projectReconciliations.has(projectId)
+          ? await projectReconciliations.get(projectId)
+          : projectId;
+        const { projects: latestProjects } = await readStorage();
+        const realProject = latestProjects.find(
+          (storedProject) => storedProject.id === realProjectId,
+        );
+
+        if (!realProject || isTempProject(realProject)) {
+          throw new Error('This project is not ready to sync pages yet.');
+        }
+
+        const realPage = markPageDirty({
+          ...page,
+          id: `page-${realProject.id}-${crypto.randomUUID()}`,
+          projectId: realProject.id,
+          syncState: 'saving',
+        });
+        const syncedPage = await syncPushPage(realPage, realProject);
+
+        if (syncedPage.syncState === 'error') {
+          throw new Error(syncedPage.syncMessage ?? 'Unable to create this page.');
+        }
+
+        await replaceTempPage(page, syncedPage);
+        return replayTempPageSave(page.id, syncedPage);
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : 'Unable to create this page.';
+        await rollbackTempPage(page, previousActivePageId, message);
+        throw error;
+      }
+    })();
+
+    return { page, settled };
   },
 
   async renameProjectPage(pageId: string, title: string) {
@@ -805,6 +1050,17 @@ export const notionClient = {
       ...page,
       title: title.trim() || 'Untitled Page',
     });
+
+    if (isTempPage(updatedPage) || isTempProject(project)) {
+      await writeStorage({
+        pages: pages.map((storedPage) =>
+          storedPage.id === updatedPage.id ? updatedPage : storedPage,
+        ),
+      });
+      pendingTempPageSaves.set(updatedPage.id, updatedPage);
+      return updatedPage;
+    }
+
     const syncedPage = await syncPushPage(updatedPage, project);
 
     await writeStorage({
@@ -868,6 +1124,11 @@ export const notionClient = {
         storedPage.id === updatedPage.id ? updatedPage : storedPage,
       ),
     });
+
+    if (isTempPage(updatedPage) || isTempProject(project)) {
+      pendingTempPageSaves.set(updatedPage.id, updatedPage);
+      return updatedPage;
+    }
 
     const syncedPage = await syncPushPage(updatedPage, project);
     await persistPage(syncedPage);

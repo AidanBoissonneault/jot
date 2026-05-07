@@ -34,5 +34,3 @@ web-ext.config.ts
 *.sw?
 
 .env
-
-BUILD_PLAN.md

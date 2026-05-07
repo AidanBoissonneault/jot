@@ -1,5 +1,7 @@
 export type CaptureType = 'quote' | 'task' | 'idea' | 'link';
-export type SaveStatus = 'idle' | 'saving' | 'saved' | 'stale' | 'error';
+export type OptimisticStatus = 'creating' | 'saving' | 'saved' | 'stale' | 'error';
+export type SaveStatus = 'idle' | OptimisticStatus;
+export type MediaUploadStatus = OptimisticStatus;
 
 export type HighlightMeta = {
   text: string;
@@ -29,6 +31,8 @@ export type Project = {
   name: string;
   status: 'active' | 'archived';
   tags: string[];
+  syncMessage?: string;
+  syncState?: OptimisticStatus;
 };
 
 export type DocumentContent = {

@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "wxt",
     "dev:server": "pnpm --filter @jot/sync-server dev",
+    "test": "vitest run",
     "build": "wxt build",
     "zip": "wxt zip",
     "compile": "vue-tsc --noEmit",
@@ -25,6 +26,7 @@
     "@wxt-dev/module-vue": "^1.0.3",
     "postcss": "^8.5.6",
     "typescript": "^5.9.3",
+    "vitest": "^4.0.0",
     "vue-tsc": "^3.2.5",
     "wxt": "^0.20.25"
   }

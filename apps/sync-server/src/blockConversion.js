@@ -1,0 +1,266 @@
+export function tiptapDocumentToNotionBlocks(doc) {
+  return (doc?.content ?? []).map((node) => tiptapNodeToNotionBlock(node));
+}
+
+function tiptapNodeToNotionBlock(node) {
+  const richText = inlineContentToRichText(node.content);
+
+  if (node.type === 'heading') {
+    const level = Math.min(3, Math.max(1, Number(node.attrs?.level ?? 2)));
+    return {
+      object: 'block',
+      type: `heading_${level}`,
+      [`heading_${level}`]: {
+        rich_text: richText,
+        color: 'default',
+        is_toggleable: false,
+      },
+    };
+  }
+
+  if (node.type === 'blockquote') {
+    return {
+      object: 'block',
+      type: 'quote',
+      quote: {
+        rich_text: richText,
+        color: 'default',
+      },
+    };
+  }
+
+  if (node.type === 'codeBlock') {
+    return {
+      object: 'block',
+      type: 'code',
+      code: {
+        rich_text: plainRichText(textFromNode(node)),
+        language: 'plain text',
+      },
+    };
+  }
+
+  if (node.type === 'bulletList' || node.type === 'orderedList') {
+    const listItems = node.content ?? [];
+    return {
+      object: 'block',
+      type: 'paragraph',
+      paragraph: {
+        rich_text: plainRichText(listItems.map((item) => `- ${textFromNode(item)}`).join('\n')),
+        color: 'default',
+      },
+    };
+  }
+
+  if (node.type === 'taskList') {
+    return {
+      object: 'block',
+      type: 'paragraph',
+      paragraph: {
+        rich_text: plainRichText(
+          (node.content ?? [])
+            .map((item) => `${item.attrs?.checked ? '[x]' : '[ ]'} ${textFromNode(item)}`)
+            .join('\n'),
+        ),
+        color: 'default',
+      },
+    };
+  }
+
+  if (node.type === 'horizontalRule') {
+    return {
+      object: 'block',
+      type: 'divider',
+      divider: {},
+    };
+  }
+
+  return {
+    object: 'block',
+    type: 'paragraph',
+    paragraph: {
+      rich_text: richText.length ? richText : plainRichText(''),
+      color: 'default',
+    },
+  };
+}
+
+function inlineContentToRichText(content = []) {
+  const richText = [];
+
+  for (const node of content) {
+    if (node.type === 'text') {
+      richText.push(textNodeToRichText(node));
+    } else if (node.type === 'hardBreak') {
+      richText.push(...plainRichText('\n'));
+    } else {
+      richText.push(...inlineContentToRichText(node.content ?? []));
+    }
+  }
+
+  return richText.length ? richText : [];
+}
+
+function textNodeToRichText(node) {
+  const marks = node.marks ?? [];
+  const link = marks.find((mark) => mark.type === 'link')?.attrs?.href;
+  const textStyle = marks.find((mark) => mark.type === 'textStyle')?.attrs ?? {};
+
+  return {
+    type: 'text',
+    text: {
+      content: node.text ?? '',
+      ...(link ? { link: { url: link } } : {}),
+    },
+    annotations: {
+      bold: marks.some((mark) => mark.type === 'bold'),
+      italic: marks.some((mark) => mark.type === 'italic'),
+      strikethrough: marks.some((mark) => mark.type === 'strike'),
+      underline: marks.some((mark) => mark.type === 'underline'),
+      code: marks.some((mark) => mark.type === 'code'),
+      color: notionColor(textStyle.color),
+    },
+  };
+}
+
+function plainRichText(text) {
+  return [
+    {
+      type: 'text',
+      text: {
+        content: text,
+      },
+    },
+  ];
+}
+
+export function notionBlocksToTiptapDocument(blocks) {
+  return {
+    type: 'doc',
+    content: blocks.map(notionBlockToTiptapNode).filter(Boolean),
+  };
+}
+
+function notionBlockToTiptapNode(block) {
+  if (block.type?.startsWith('heading_')) {
+    return {
+      type: 'heading',
+      attrs: {
+        level: Number(block.type.replace('heading_', '')),
+      },
+      content: richTextToTiptapInline(block[block.type].rich_text),
+    };
+  }
+
+  if (block.type === 'quote') {
+    return {
+      type: 'blockquote',
+      content: [
+        {
+          type: 'paragraph',
+          content: richTextToTiptapInline(block.quote.rich_text),
+        },
+      ],
+    };
+  }
+
+  if (block.type === 'code') {
+    return {
+      type: 'codeBlock',
+      content: plainTiptapText(block.code.rich_text.map((text) => text.plain_text).join('')),
+    };
+  }
+
+  if (block.type === 'divider') {
+    return {
+      type: 'horizontalRule',
+    };
+  }
+
+  if (block.type !== 'paragraph') {
+    return null;
+  }
+
+  return {
+    type: 'paragraph',
+    content: richTextToTiptapInline(block.paragraph.rich_text),
+  };
+}
+
+function richTextToTiptapInline(richText = []) {
+  const content = [];
+
+  for (const item of richText) {
+    const plainText = String(item.plain_text ?? '').replace(/\s*jot_capture_id:[\w-]+/g, '');
+
+    if (!plainText) {
+      continue;
+    }
+
+    const marks = marksFromRichText(item);
+    const parts = plainText.split('\n');
+
+    parts.forEach((part, index) => {
+      if (index > 0) {
+        content.push({ type: 'hardBreak' });
+      }
+
+      if (part) {
+        content.push({
+          type: 'text',
+          text: part,
+          ...(marks.length ? { marks } : {}),
+        });
+      }
+    });
+  }
+
+  return content.length ? content : undefined;
+}
+
+function marksFromRichText(item) {
+  const marks = [];
+  const annotations = item.annotations ?? {};
+
+  if (annotations.bold) marks.push({ type: 'bold' });
+  if (annotations.italic) marks.push({ type: 'italic' });
+  if (annotations.strikethrough) marks.push({ type: 'strike' });
+  if (annotations.underline) marks.push({ type: 'underline' });
+  if (annotations.code) marks.push({ type: 'code' });
+  if (item.href) marks.push({ type: 'link', attrs: { href: item.href } });
+
+  return marks;
+}
+
+function plainTiptapText(text) {
+  return text
+    ? [
+        {
+          type: 'text',
+          text,
+        },
+      ]
+    : undefined;
+}
+
+function textFromNode(node) {
+  if (node.text) {
+    return node.text;
+  }
+
+  if (node.type === 'hardBreak') {
+    return '\n';
+  }
+
+  return (node.content ?? []).map(textFromNode).join('');
+}
+
+function notionColor(color) {
+  return typeof color === 'string' && color ? 'default' : 'default';
+}
+
+export function kindFromNotionBlock(block) {
+  if (block.type?.startsWith('heading_')) return 'heading';
+  if (block.type === 'quote') return 'quote';
+  return block.type === 'paragraph' ? 'paragraph' : 'source';
+}

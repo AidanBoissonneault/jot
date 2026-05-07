@@ -18,6 +18,7 @@ import type {
 type CaptureInsertHandler = (payload: CaptureSelectionPayload) => Promise<boolean>;
 type SaveOptions = {
   preserveLocalContent?: boolean;
+  title?: string;
 };
 
 export const useJotStore = defineStore('jot', () => {
@@ -78,13 +79,43 @@ export const useJotStore = defineStore('jot', () => {
   }
 
   async function createProject(name: string) {
-    saveStatus.value = 'saving';
+    saveStatus.value = 'creating';
 
     try {
-      const project = await notionClient.createProject(name);
-      projects.value = await notionClient.listProjects();
-      currentProjectId.value = project.id;
-      await loadCurrentPage();
+      const creation = await notionClient.createProject(name);
+      projects.value = [...projects.value, creation.project];
+      pages.value = [creation.page];
+      currentProjectId.value = creation.project.id;
+      currentPage.value = creation.page;
+      applyProjectOrPageSyncState(creation.project, creation.page);
+
+      void creation.settled.then(async ({ page, project }) => {
+        const wasViewingProject = currentProjectId.value === creation.project.id;
+        const wasViewingPage = currentPage.value?.id === creation.page.id;
+
+        projects.value = await notionClient.listProjects();
+        if (wasViewingProject) {
+          currentProjectId.value = project.id;
+        }
+
+        if (currentProjectId.value === project.id) {
+          await loadProjectPages();
+        }
+
+        if (wasViewingPage) {
+          currentPage.value = page;
+          applyPageSyncState(page);
+        }
+      }).catch(async (error) => {
+        const message =
+          error instanceof Error ? error.message : 'Unable to create this project.';
+        projects.value = await notionClient.listProjects();
+        const storedProjectId = await notionClient.getCurrentProjectId();
+        currentProjectId.value = storedProjectId;
+        await loadCurrentPage();
+        errorMessage.value = message;
+        saveStatus.value = 'error';
+      });
     } catch (error) {
       errorMessage.value =
         error instanceof Error ? error.message : 'Unable to create this project.';
@@ -182,6 +213,7 @@ export const useJotStore = defineStore('jot', () => {
     const optimisticPage = {
       ...currentPage.value,
       content,
+      title: options.title ?? currentPage.value.title,
       updatedAt: new Date().toISOString(),
       syncState: 'saving' as const,
     };
@@ -201,6 +233,7 @@ export const useJotStore = defineStore('jot', () => {
         ? {
             ...savedPage,
             content: optimisticPage.content,
+            title: optimisticPage.title,
           }
         : savedPage;
       applyPageSyncState(savedPage);
@@ -216,15 +249,32 @@ export const useJotStore = defineStore('jot', () => {
       return;
     }
 
-    saveStatus.value = 'saving';
+    saveStatus.value = 'creating';
 
     try {
-      currentPage.value = await notionClient.createProjectPage(
+      const creation = await notionClient.createProjectPage(
         currentProjectId.value,
         nextPageTitle(),
       );
-      await loadProjectPages();
-      applyPageSyncState(currentPage.value);
+      currentPage.value = creation.page;
+      pages.value = [...pages.value, creation.page];
+      applyPageSyncState(creation.page);
+
+      void creation.settled.then(async (page) => {
+        const wasViewingPage = currentPage.value?.id === creation.page.id;
+        await loadProjectPages();
+
+        if (wasViewingPage) {
+          currentPage.value = page;
+          applyPageSyncState(page);
+        }
+      }).catch(async (error) => {
+        const message =
+          error instanceof Error ? error.message : 'Unable to create this page.';
+        await loadCurrentPage();
+        errorMessage.value = message;
+        saveStatus.value = 'error';
+      });
     } catch (error) {
       errorMessage.value =
         error instanceof Error ? error.message : 'Unable to create this page.';
@@ -399,6 +449,15 @@ export const useJotStore = defineStore('jot', () => {
     errorMessage.value =
       page.syncState === 'error' || page.syncState === 'stale'
         ? page.syncMessage ?? ''
+        : '';
+  }
+
+  function applyProjectOrPageSyncState(project: Project, page?: ProjectPage) {
+    const status = page?.syncState ?? project.syncState ?? 'saved';
+    saveStatus.value = status;
+    errorMessage.value =
+      status === 'error' || status === 'stale'
+        ? page?.syncMessage ?? project.syncMessage ?? ''
         : '';
   }
 

@@ -73,6 +73,7 @@ let lastAppliedContent = '';
 let pendingSaveVersion = 0;
 let shouldSkipNextUpdateSave = false;
 let isEditorSaveInFlight = false;
+let editorSavePromise: Promise<void> | undefined;
 let shouldSaveAgainAfterCurrentSave = false;
 let sessionPollTimer: number | undefined;
 
@@ -196,6 +197,10 @@ const saveLabel = computed(() => {
     return 'Saving';
   }
 
+  if (store.saveStatus === 'creating') {
+    return 'Creating';
+  }
+
   if (store.saveStatus === 'error') {
     return 'Save failed';
   }
@@ -231,7 +236,10 @@ const syncBadgeClass = computed(() => ({
   stale:
     store.saveStatus === 'stale' ||
     !store.syncConfig.connected,
-  saving: store.saveStatus === 'saving' || store.isLoading,
+  saving:
+    store.saveStatus === 'saving' ||
+    store.saveStatus === 'creating' ||
+    store.isLoading,
   saved:
     store.saveStatus === 'saved' &&
     store.syncConfig.connected,
@@ -415,12 +423,19 @@ async function createPage() {
 }
 
 async function renamePage() {
-  if (!store.currentPage || pageTitleDraft.value === store.currentPage.title) {
+  if (!store.currentPage) {
     return;
   }
 
+  const title = pageTitleDraft.value;
+
   await flushEditorContent();
-  await store.renameCurrentPage(pageTitleDraft.value);
+
+  if (!store.currentPage || title === store.currentPage.title) {
+    return;
+  }
+
+  await store.renameCurrentPage(title);
 }
 
 async function archivePage() {
@@ -573,20 +588,32 @@ async function saveEditorContentOptimistically() {
 
   if (isEditorSaveInFlight) {
     shouldSaveAgainAfterCurrentSave = true;
+    await editorSavePromise;
     return;
   }
 
   isEditorSaveInFlight = true;
+  editorSavePromise = runEditorSaveLoop();
 
+  await editorSavePromise;
+}
+
+async function runEditorSaveLoop() {
   const saveVersion = ++pendingSaveVersion;
 
   try {
     do {
       shouldSaveAgainAfterCurrentSave = false;
-      const content = editor.value.getJSON() as DocumentContent;
+      const content = editor.value?.getJSON() as DocumentContent | undefined;
+
+      if (!content) {
+        return;
+      }
+
       lastAppliedContent = JSON.stringify(content);
       await store.saveCurrentPageContent(content, {
         preserveLocalContent: true,
+        title: pageTitleDraft.value,
       });
     } while (
       shouldSaveAgainAfterCurrentSave &&
@@ -596,6 +623,7 @@ async function saveEditorContentOptimistically() {
     );
   } finally {
     isEditorSaveInFlight = false;
+    editorSavePromise = undefined;
   }
 }
 
