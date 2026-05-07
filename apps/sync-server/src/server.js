@@ -9,7 +9,10 @@ import path from 'node:path';
 import process from 'node:process';
 import mysql from 'mysql2/promise';
 import { replaceManagedBlocks as replaceManagedBlocksWithDependencies } from './managedBlocks.js';
+import { createNotionRequester } from './notionRequest.js';
+import { pushPageToNotionCore } from './pageSync.js';
 import { syncProjectFolder } from './projectSync.js';
+import { MergeableSyncQueue } from './syncQueue.js';
 
 loadEnvFile(path.join(process.cwd(), '.env'));
 loadEnvFile(path.join(process.cwd(), 'apps', 'sync-server', '.env'));
@@ -25,7 +28,8 @@ const JOT_OAUTH_STATE_COOKIE = 'jot_notion_oauth_state';
 const SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 30;
 
 const fastify = Fastify({ logger: true });
-const pageSyncQueues = new Map();
+const syncQueue = new MergeableSyncQueue();
+const notionRequest = createNotionRequester({ notionVersion: NOTION_VERSION });
 let mysqlPool;
 
 const auth = betterAuth({
@@ -298,13 +302,15 @@ fastify.post('/sync/push', async (request) => {
     };
   }
 
-  return enqueuePageSync(page.id, () =>
-    pushPageToNotion({
+  return syncQueue.enqueue(
+    `page:${project.id}:${page.id}`,
+    {
       request,
       page,
       project,
       selectedParentPageId,
-    }),
+    },
+    pushPageToNotion,
   );
 });
 
@@ -318,12 +324,14 @@ fastify.post('/sync/project', async (request) => {
     };
   }
 
-  return enqueuePageSync(`project:${project.id}`, () =>
-    syncProjectToNotion({
+  return syncQueue.enqueue(
+    `project:${project.id}`,
+    {
       request,
       project,
       selectedParentPageId,
-    }),
+    },
+    syncProjectToNotion,
   );
 });
 
@@ -355,86 +363,23 @@ async function pushPageToNotion({
   project,
   selectedParentPageId,
 }) {
-  const store = await requireConnectedStore(request);
-  const jotRootPage = await ensureJotRootPage(store, { selectedParentPageId });
-  const projectRootPage = await ensureProjectRootPage(store, jotRootPage.id, project);
-  const notionPageId = page.notionPageId ?? store.notePages[page.id]?.notionPageId;
-
-  let notePage = notionPageId
-    ? await notionRequest(store, `/pages/${notionPageId}`)
-    : undefined;
-
-  if (
-    notePage?.last_edited_time &&
-    page.remoteRevision &&
-    notePage.last_edited_time !== page.remoteRevision
-  ) {
-    appendLog(store, 'sync_stale', `${page.title} changed in Notion.`);
-    await writeStore(store);
-    return {
-      page: {
-        ...page,
-        notionPageId,
-        notionDatabaseId: undefined,
-        notionDataSourceId: undefined,
-        notionParentPageId: projectRootPage.id,
-        notionLastEditedTime: notePage.last_edited_time,
-        remoteRevision: notePage.last_edited_time,
-      },
-      status: 'stale',
-      message: 'This page changed in Notion. Pull or review it before saving over it.',
-    };
-  }
-
-  if (!notePage) {
-    notePage = await createChildPage(store, projectRootPage.id, page.title);
-  } else {
-    await updateChildNotePage(store, notePage.id, page);
-  }
-
-  await replaceManagedBlocks(store, page.id, notePage.id, page.content);
-  const refreshedPage = await notionRequest(store, `/pages/${notePage.id}`);
-  const syncedPage = {
-    ...page,
-    notionPageId: notePage.id,
-    notionDatabaseId: undefined,
-    notionDataSourceId: undefined,
-    notionParentPageId: projectRootPage.id,
-    notionLastEditedTime: refreshedPage.last_edited_time,
-    remoteRevision: refreshedPage.last_edited_time,
-    syncState: 'saved',
-  };
-
-  store.notePages[page.id] = {
-    notionPageId: notePage.id,
-    parentPageId: projectRootPage.id,
-    title: page.title,
-    lastEditedTime: refreshedPage.last_edited_time,
-  };
-  appendLog(store, 'sync_push', page.title);
-  await writeStore(store);
-
-  return {
-    parentPage: jotRootPage,
-    page: syncedPage,
-    status: 'saved',
-    message: 'Synced to Notion.',
-  };
-}
-
-function enqueuePageSync(pageId, task) {
-  const previous = pageSyncQueues.get(pageId) ?? Promise.resolve();
-  const next = previous
-    .catch(() => undefined)
-    .then(task)
-    .finally(() => {
-      if (pageSyncQueues.get(pageId) === next) {
-        pageSyncQueues.delete(pageId);
-      }
-    });
-
-  pageSyncQueues.set(pageId, next);
-  return next;
+  return pushPageToNotionCore({
+    request,
+    page,
+    project,
+    selectedParentPageId,
+    dependencies: {
+      appendLog,
+      createChildPage,
+      ensureJotRootPage,
+      ensureProjectRootPage,
+      notionRequest,
+      replaceManagedBlocks,
+      requireConnectedStore,
+      updateChildNotePage,
+      writeStore,
+    },
+  });
 }
 
 fastify.post('/sync/pull', async (request) => {
@@ -848,28 +793,6 @@ function toMysqlDateTime(date) {
   return date.toISOString().slice(0, 19).replace('T', ' ');
 }
 
-async function notionRequest(store, endpoint, init = {}) {
-  const response = await fetch(`https://api.notion.com/v1${endpoint}`, {
-    method: init.method ?? 'GET',
-    headers: {
-      Authorization: `Bearer ${store.tokens.access_token}`,
-      'Content-Type': 'application/json',
-      'Notion-Version': NOTION_VERSION,
-    },
-    body: init.body ? JSON.stringify(init.body) : undefined,
-  });
-  const payload = await response.json().catch(() => ({}));
-
-  if (!response.ok) {
-    const error = new Error(payload.message ?? `Notion returned ${response.status}.`);
-    error.status = response.status;
-    error.code = payload.code;
-    throw error;
-  }
-
-  return payload;
-}
-
 function isNotionObjectNotFound(error) {
   return error?.status === 404 || error?.code === 'object_not_found';
 }
@@ -914,13 +837,7 @@ async function getOrCreateInstallation(userId, accessToken) {
   let workspaceName = null;
 
   try {
-    const response = await fetch('https://api.notion.com/v1/users/me', {
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        'Notion-Version': NOTION_VERSION,
-      },
-    });
-    const profile = await response.json();
+    const profile = await notionRequest({ tokens: { access_token: accessToken } }, '/users/me');
     workspaceName = profile.bot?.workspace_name ?? null;
   } catch {
     // non-fatal: workspace name will just be null
