@@ -20,6 +20,7 @@ import {
   isUploadableImageFile,
   peekUploadableImageDrop,
   readImageDropSrc,
+  readYoutubeDropSrc,
 } from '@/src/extensions/mediaDrop';
 import {
   createCapturedContent,
@@ -146,15 +147,18 @@ const editor = useEditor({
       const uploadableInfo = peekUploadableImageDrop(event.dataTransfer);
       if (uploadableInfo) {
         event.preventDefault();
-        const dropPos = view.posAtCoords({ left: event.clientX, top: event.clientY });
-        if (typeof dropPos?.pos === 'number') {
-          view.dispatch(
-            view.state.tr.setSelection(
-              TextSelection.near(view.state.doc.resolve(dropPos.pos)),
-            ),
-          );
-        }
+        moveEditorSelectionToDrop(view, event);
         void handleUploadableImageDrop(uploadableInfo);
+        return true;
+      }
+
+      const youtubeSrc = readYoutubeDropSrc(event.dataTransfer);
+
+      if (youtubeSrc) {
+        event.preventDefault();
+        moveEditorSelectionToDrop(view, event);
+        editor.value?.chain().focus().setYoutubeVideo({ src: youtubeSrc }).run();
+        void saveEditorContentOptimistically();
         return true;
       }
 
@@ -162,14 +166,7 @@ const editor = useEditor({
 
       if (imageSrc) {
         event.preventDefault();
-        const dropPos = view.posAtCoords({ left: event.clientX, top: event.clientY });
-        if (typeof dropPos?.pos === 'number') {
-          view.dispatch(
-            view.state.tr.setSelection(
-              TextSelection.near(view.state.doc.resolve(dropPos.pos)),
-            ),
-          );
-        }
+        moveEditorSelectionToDrop(view, event);
         editor.value?.chain().focus().setImage({ src: imageSrc }).run();
         void saveEditorContentOptimistically();
         return true;
@@ -633,6 +630,18 @@ function insertVideo() {
 function insertAudio() {
   const src = window.prompt('Audio URL')?.trim();
   if (src) editor.value?.chain().focus().setAudio({ src }).run();
+}
+
+function moveEditorSelectionToDrop(view: EditorView, event: DragEvent) {
+  const dropPos = view.posAtCoords({ left: event.clientX, top: event.clientY });
+
+  if (typeof dropPos?.pos === 'number') {
+    view.dispatch(
+      view.state.tr.setSelection(
+        TextSelection.near(view.state.doc.resolve(dropPos.pos)),
+      ),
+    );
+  }
 }
 
 function clearFormatting() {
@@ -1674,5 +1683,62 @@ function kebabCase(value: string) {
 
 .editor :deep(.tiptap .jot-image-wrapper a) {
   word-break: break-all;
+}
+
+.editor :deep(.tiptap div[data-youtube-video]) {
+  width: 100%;
+  max-width: 640px;
+  aspect-ratio: 16 / 9;
+  margin: 0 0 0.85rem;
+  overflow: hidden;
+  border-radius: 4px;
+  background: #111113;
+}
+
+.editor :deep(.tiptap div[data-youtube-video] iframe) {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+  border: 0;
+}
+
+.editor :deep(.tiptap .jot-youtube-wrapper) {
+  width: 100%;
+  max-width: 640px;
+  aspect-ratio: 16 / 9;
+  margin: 0 0 0.85rem;
+  overflow: hidden;
+  border-radius: 4px;
+  background: #111113;
+}
+
+.editor :deep(.tiptap .jot-youtube-link) {
+  position: relative;
+  display: grid;
+  width: 100%;
+  height: 100%;
+  place-items: center;
+  color: white;
+  text-decoration: none;
+}
+
+.editor :deep(.tiptap .jot-youtube-link img) {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0.78;
+}
+
+.editor :deep(.tiptap .jot-youtube-play) {
+  position: absolute;
+  display: inline-flex;
+  align-items: center;
+  min-height: 34px;
+  padding: 0 14px;
+  border-radius: 4px;
+  background: #dc2626;
+  color: white;
+  font-size: 0.88rem;
+  font-weight: 800;
 }
 </style>

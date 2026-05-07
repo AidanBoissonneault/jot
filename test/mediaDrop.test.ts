@@ -4,6 +4,7 @@ import {
   isUploadableImageFile,
   peekUploadableImageDrop,
   readImageDropSrc,
+  readYoutubeDropSrc,
 } from '@/src/extensions/mediaDrop';
 
 describe('media drop helpers', () => {
@@ -37,6 +38,40 @@ describe('media drop helpers', () => {
     expect(
       readImageDropSrc(dropData({
         'text/plain': 'data:image/png;base64,abc',
+      })),
+    ).toBeNull();
+  });
+
+  it('extracts YouTube URLs from dropped HTML, URI lists, and plain text', () => {
+    expect(
+      readYoutubeDropSrc(dropData({
+        'text/html': '<a href="https://www.youtube.com/watch?v=dQw4w9WgXcQ">Video</a>',
+      })),
+    ).toBe('https://www.youtube.com/watch?v=dQw4w9WgXcQ');
+
+    expect(
+      readYoutubeDropSrc(dropData({
+        'text/uri-list': '# comment\nhttps://youtu.be/dQw4w9WgXcQ?t=12',
+      })),
+    ).toBe('https://youtu.be/dQw4w9WgXcQ?t=12');
+
+    expect(
+      readYoutubeDropSrc(dropData({
+        'text/plain': 'https://www.youtube.com/shorts/dQw4w9WgXcQ',
+      })),
+    ).toBe('https://www.youtube.com/shorts/dQw4w9WgXcQ');
+  });
+
+  it('rejects non-video and non-YouTube URLs as YouTube drops', () => {
+    expect(
+      readYoutubeDropSrc(dropData({
+        'text/plain': 'https://www.youtube.com/feed/subscriptions',
+      })),
+    ).toBeNull();
+
+    expect(
+      readYoutubeDropSrc(dropData({
+        'text/plain': 'https://example.com/watch?v=dQw4w9WgXcQ',
       })),
     ).toBeNull();
   });

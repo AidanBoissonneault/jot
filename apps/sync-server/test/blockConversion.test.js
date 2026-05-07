@@ -144,3 +144,51 @@ test('Notion file image imports as Tiptap image with file URL', () => {
     },
   ]);
 });
+
+test('tiptap YouTube syncs to Notion external video block', () => {
+  const blocks = tiptapDocumentToNotionBlocks({
+    type: 'doc',
+    content: [
+      {
+        type: 'youtube',
+        attrs: {
+          src: 'https://youtu.be/dQw4w9WgXcQ?t=12',
+        },
+      },
+    ],
+  });
+
+  assert.deepEqual(blocks[0], {
+    object: 'block',
+    type: 'video',
+    video: {
+      type: 'external',
+      external: {
+        url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=12',
+      },
+    },
+  });
+});
+
+test('Notion video imports as Tiptap YouTube node', () => {
+  const doc = notionBlocksToTiptapDocument([
+    {
+      type: 'video',
+      video: {
+        type: 'external',
+        external: {
+          url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+        },
+      },
+    },
+  ]);
+
+  assert.deepEqual(doc.content, [
+    {
+      type: 'youtube',
+      attrs: {
+        src: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+      },
+    },
+  ]);
+});

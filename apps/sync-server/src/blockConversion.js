@@ -97,7 +97,12 @@ function tiptapNodeToNotionBlock(node) {
   if (node.type === 'youtube') {
     const src = node.attrs?.src;
     if (!src) return paragraphFallback('');
-    return { object: 'block', type: 'embed', embed: { url: src } };
+    const videoUrl = normalizeYoutubeVideoUrl(src);
+    return {
+      object: 'block',
+      type: 'video',
+      video: { type: 'external', external: { url: videoUrl } },
+    };
   }
 
   if (node.type === 'audio') {
@@ -312,6 +317,41 @@ function textFromNode(node) {
 
 function notionColor(color) {
   return typeof color === 'string' && color ? 'default' : 'default';
+}
+
+function normalizeYoutubeVideoUrl(src) {
+  try {
+    const url = new URL(src);
+    const host = url.hostname.toLowerCase();
+
+    if (host.endsWith('youtu.be')) {
+      const id = url.pathname.split('/').filter(Boolean)[0];
+      return id ? youtubeWatchUrl(id, url.searchParams) : src;
+    }
+
+    const embedMatch = url.pathname.match(/^\/(?:embed|shorts|v)\/([\w-]+)/i);
+    const id = url.searchParams.get('v') ?? embedMatch?.[1];
+
+    if (!id) {
+      return src;
+    }
+
+    return youtubeWatchUrl(id, url.searchParams);
+  } catch {
+    return src;
+  }
+}
+
+function youtubeWatchUrl(id, sourceParams) {
+  const url = new URL('https://www.youtube.com/watch');
+  url.searchParams.set('v', id);
+
+  const start = sourceParams.get('t') ?? sourceParams.get('start');
+  if (start) {
+    url.searchParams.set('t', start);
+  }
+
+  return url.toString();
 }
 
 export function kindFromNotionBlock(block) {

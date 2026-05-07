@@ -53,7 +53,43 @@ export const JotImage = Image.extend({
   },
 });
 
-export const JotYoutube = Youtube;
+export const JotYoutube = Youtube.configure({
+  HTMLAttributes: {
+    referrerpolicy: 'strict-origin-when-cross-origin',
+    allow: 'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share',
+  },
+}).extend({
+  addNodeView() {
+    return ({ node }) => {
+      const src = String(node.attrs.src ?? '');
+      const videoId = youtubeVideoId(src);
+      const wrapper = document.createElement('div');
+      wrapper.className = 'jot-youtube-wrapper';
+
+      const link = document.createElement('a');
+      link.href = src;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      link.className = 'jot-youtube-link';
+
+      if (videoId) {
+        const thumbnail = document.createElement('img');
+        thumbnail.src = `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
+        thumbnail.alt = 'YouTube video thumbnail';
+        thumbnail.loading = 'lazy';
+        link.appendChild(thumbnail);
+      }
+
+      const play = document.createElement('span');
+      play.className = 'jot-youtube-play';
+      play.textContent = 'Play on YouTube';
+      link.appendChild(play);
+
+      wrapper.appendChild(link);
+      return { dom: wrapper };
+    };
+  },
+});
 
 export const JotAudio = Audio.extend({
   addAttributes() {
@@ -73,3 +109,22 @@ export const MediaKit = Extension.create({
     return [JotImage, JotYoutube, JotAudio];
   },
 });
+
+function youtubeVideoId(value: string): string {
+  try {
+    const url = new URL(value);
+    const host = url.hostname.toLowerCase();
+
+    if (host.endsWith('youtu.be')) {
+      return url.pathname.split('/').filter(Boolean)[0] ?? '';
+    }
+
+    return (
+      url.searchParams.get('v') ??
+      url.pathname.match(/^\/(?:embed|shorts|v)\/([\w-]+)/i)?.[1] ??
+      ''
+    );
+  } catch {
+    return '';
+  }
+}
