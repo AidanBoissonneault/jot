@@ -216,6 +216,103 @@ describe('page title and content saves', () => {
     expect(requestBody.page.title).toBe('Renamed Page');
     expect(store.currentPage?.title).toBe('Renamed Page');
   });
+
+  test('a slow save cannot overwrite newer optimistic content', async () => {
+    const firstSave = deferred<Response>();
+    const secondSave = deferred<Response>();
+    const fetchMock = vi
+      .fn()
+      .mockImplementationOnce(() => firstSave.promise)
+      .mockImplementationOnce(() => secondSave.promise);
+    vi.stubGlobal('fetch', fetchMock);
+    const store = useJotStore();
+    const firstContent = docWithText('first draft');
+    const secondContent = docWithText('second draft');
+
+    await seedStore(store);
+    const firstPromise = store.saveCurrentPageContent(firstContent, {
+      preserveLocalContent: true,
+    });
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    const firstRequest = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
+    const firstRevision = store.currentPage?.localRevision;
+    const secondPromise = store.saveCurrentPageContent(secondContent, {
+      preserveLocalContent: true,
+    });
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    const secondRevision = store.currentPage?.localRevision;
+
+    firstSave.resolve(jsonResponse({
+      status: 'saved',
+      page: {
+        ...firstRequest.page,
+        content: firstContent,
+        notionPageId: 'notion-page',
+        remoteRevision: 'remote-1',
+        syncState: 'saved',
+      },
+    }));
+    await firstPromise;
+
+    expect(firstRevision).not.toBe(secondRevision);
+    expect(store.currentPage?.content).toEqual(secondContent);
+    expect(store.currentPage?.notionPageId).toBe('notion-page');
+    expect(store.currentPage?.remoteRevision).toBe('remote-1');
+
+    const secondRequest = JSON.parse(String(fetchMock.mock.calls[1][1]?.body));
+    secondSave.resolve(jsonResponse({
+      status: 'saved',
+      page: {
+        ...secondRequest.page,
+        content: secondContent,
+        notionPageId: 'notion-page',
+        remoteRevision: 'remote-2',
+        syncState: 'saved',
+      },
+    }));
+    await secondPromise;
+
+    expect(store.currentPage?.content).toEqual(secondContent);
+    expect(store.currentPage?.remoteRevision).toBe('remote-2');
+  });
+
+  test('a stale save response updates sync metadata without replacing newer content', async () => {
+    const saveRequest = deferred<Response>();
+    const fetchMock = vi.fn(() => saveRequest.promise);
+    vi.stubGlobal('fetch', fetchMock);
+    const store = useJotStore();
+
+    await seedStore(store);
+    const savePromise = store.saveCurrentPageContent(docWithText('first draft'), {
+      preserveLocalContent: true,
+    });
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    const requestBody = JSON.parse(String(
+      (fetchMock.mock.calls as unknown as Array<[string, RequestInit]>)[0][1]?.body,
+    ));
+    store.currentPage = {
+      ...store.currentPage!,
+      content: docWithText('newer unsaved draft'),
+      localRevision: 'newer-local-revision',
+    };
+
+    saveRequest.resolve(jsonResponse({
+      status: 'saved',
+      page: {
+        ...requestBody.page,
+        content: docWithText('first draft'),
+        notionPageId: 'notion-page',
+        remoteRevision: 'remote-1',
+        syncMessage: 'Synced to Notion.',
+        syncState: 'saved',
+      },
+    }));
+    await savePromise;
+
+    expect(store.currentPage?.content).toEqual(docWithText('newer unsaved draft'));
+    expect(store.currentPage?.notionPageId).toBe('notion-page');
+    expect(store.currentPage?.remoteRevision).toBe('remote-1');
+  });
 });
 
 describe('project page caching', () => {
@@ -304,6 +401,84 @@ describe('project page caching', () => {
     expect(store.currentPage?.content).toEqual(docWithText('second body'));
     expect(store.pages.find((page) => page.id === 'page-jot')?.content)
       .toEqual(docWithText('old page edit'));
+  });
+
+  test('refreshing a selected page does not overwrite newer local content', async () => {
+    const pagePull = deferred<Response>();
+    vi.stubGlobal('fetch', vi.fn(() => pagePull.promise));
+    const syncedBasePage = {
+      ...basePage,
+      localRevision: 'local-1',
+      notionPageId: 'notion-page',
+      remoteRevision: 'remote-1',
+    };
+    const store = useJotStore();
+
+    resetBrowserStorage({
+      activePageIdsByProject: { 'project-jot': 'page-jot' },
+      currentProjectId: 'project-jot',
+      hasMigratedCapturesToPages: true,
+      pages: [syncedBasePage],
+      projects: [baseProject],
+      syncConfig: connectedConfig,
+    });
+    await seedStore(store, [syncedBasePage]);
+
+    const refreshPromise = store.refreshSelectedPage('page-jot');
+    store.currentPage = {
+      ...store.currentPage!,
+      content: docWithText('newer local draft'),
+      localRevision: 'local-2',
+    };
+
+    pagePull.resolve(jsonResponse({
+      status: 'saved',
+      page: {
+        ...syncedBasePage,
+        content: docWithText('remote content'),
+        remoteRevision: 'remote-2',
+        syncState: 'saved',
+      },
+    }));
+    await refreshPromise;
+
+    expect(store.currentPage?.content).toEqual(docWithText('newer local draft'));
+    expect(store.currentPage?.remoteRevision).toBe('remote-2');
+  });
+
+  test('runtime page updates do not overwrite newer active page content', async () => {
+    const store = useJotStore();
+    const localPage = {
+      ...basePage,
+      content: docWithText('newer local draft'),
+      localRevision: 'local-2',
+      remoteRevision: 'remote-1',
+    };
+    const incomingPage = {
+      ...basePage,
+      content: docWithText('background capture result'),
+      localRevision: 'local-1',
+      notionPageId: 'notion-page',
+      remoteRevision: 'remote-2',
+      syncState: 'saved' as const,
+    };
+
+    await seedStore(store, [localPage]);
+    store.currentPage = localPage;
+    store.startRuntimeListener();
+
+    const listener = vi.mocked(browser.runtime.onMessage.addListener)
+      .mock.calls.at(-1)?.[0] as ((message: unknown) => unknown) | undefined;
+    listener?.({
+      type: 'jot.projectPageUpdated',
+      payload: {
+        page: incomingPage,
+      },
+    });
+
+    expect(store.currentPage?.content).toEqual(docWithText('newer local draft'));
+    expect(store.currentPage?.notionPageId).toBe('notion-page');
+    expect(store.currentPage?.remoteRevision).toBe('remote-2');
   });
 });
 

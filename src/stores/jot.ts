@@ -219,10 +219,12 @@ export const useJotStore = defineStore('jot', () => {
     const optimisticPage = {
       ...currentPage.value,
       content,
+      localRevision: crypto.randomUUID(),
       title: options.title ?? currentPage.value.title,
       updatedAt: new Date().toISOString(),
       syncState: 'saving' as const,
     };
+    const optimisticRevision = optimisticPage.localRevision;
     currentPage.value = optimisticPage;
 
     try {
@@ -235,14 +237,16 @@ export const useJotStore = defineStore('jot', () => {
         return;
       }
 
-      currentPage.value = options.preserveLocalContent
-        ? {
-            ...savedPage,
-            content: mergeSyncedMediaContent(optimisticPage.content, savedPage.content),
-            title: optimisticPage.title,
-          }
-        : savedPage;
-      applyPageSyncState(savedPage);
+      const currentRevision = currentPage.value.localRevision;
+      const nextPage = currentRevision === optimisticRevision
+        ? mergeSavedPage(optimisticPage, savedPage, options)
+        : mergePageSyncMetadata(currentPage.value, savedPage);
+
+      currentPage.value = nextPage;
+      pages.value = pages.value.map((storedPage) =>
+        storedPage.id === activePageId ? nextPage : storedPage,
+      );
+      applyPageSyncState(nextPage);
     } catch (error) {
       errorMessage.value =
         error instanceof Error ? error.message : 'Unable to save this page.';
@@ -259,10 +263,12 @@ export const useJotStore = defineStore('jot', () => {
     const optimisticPage = {
       ...page,
       content,
+      localRevision: crypto.randomUUID(),
       title: options.title ?? page.title,
       updatedAt: new Date().toISOString(),
       syncState: 'saving' as const,
     };
+    const optimisticRevision = optimisticPage.localRevision;
 
     pages.value = pages.value.map((storedPage) =>
       storedPage.id === activePageId ? optimisticPage : storedPage,
@@ -275,13 +281,12 @@ export const useJotStore = defineStore('jot', () => {
 
     try {
       const savedPage = await notionClient.updateProjectPage(optimisticPage);
-      const nextPage = options.preserveLocalContent
-        ? {
-            ...savedPage,
-            content: mergeSyncedMediaContent(optimisticPage.content, savedPage.content),
-            title: optimisticPage.title,
-          }
-        : savedPage;
+      const storedPage = pages.value.find((page) => page.id === activePageId);
+      const nextPage = storedPage?.localRevision === optimisticRevision
+        ? mergeSavedPage(optimisticPage, savedPage, options)
+        : storedPage
+          ? mergePageSyncMetadata(storedPage, savedPage)
+          : mergeSavedPage(optimisticPage, savedPage, options);
 
       pages.value = pages.value.map((storedPage) =>
         storedPage.id === activePageId ? nextPage : storedPage,
@@ -408,9 +413,24 @@ export const useJotStore = defineStore('jot', () => {
       return;
     }
 
-    currentPage.value = message.payload.page;
+    const updatedPage = message.payload.page;
+    const existingPage = pages.value.find((page) => page.id === updatedPage.id);
+    const nextPage = existingPage && isNewerLocalPage(existingPage, updatedPage)
+      ? mergePageSyncMetadata(existingPage, updatedPage)
+      : updatedPage;
+
+    pages.value = pages.value.map((page) =>
+      page.id === updatedPage.id ? nextPage : page,
+    );
+
+    if (currentPage.value?.id === updatedPage.id) {
+      currentPage.value = isNewerLocalPage(currentPage.value, updatedPage)
+        ? mergePageSyncMetadata(currentPage.value, updatedPage)
+        : nextPage;
+    }
+
     void loadProjectPages();
-    applyPageSyncState(message.payload.page);
+    applyPageSyncState(currentPage.value?.id === updatedPage.id ? currentPage.value : nextPage);
   }
 
   async function updateServerUrl(serverUrl: string) {
@@ -520,15 +540,62 @@ export const useJotStore = defineStore('jot', () => {
   }
 
   async function refreshSelectedPage(pageId: string) {
+    const startingRevision = currentPage.value?.id === pageId
+      ? currentPage.value.localRevision
+      : undefined;
     const syncedPage = await notionClient.syncProjectPage(pageId);
 
     if (!syncedPage || currentPage.value?.id !== pageId) {
       return;
     }
 
-    currentPage.value = syncedPage;
+    currentPage.value = currentPage.value.localRevision === startingRevision
+      ? syncedPage
+      : mergePageSyncMetadata(currentPage.value, syncedPage);
     await loadProjectPages();
-    applyPageSyncState(syncedPage);
+    pages.value = pages.value.map((page) =>
+      page.id === pageId ? currentPage.value ?? page : page,
+    );
+    applyPageSyncState(currentPage.value);
+  }
+
+  function mergeSavedPage(
+    localPage: ProjectPage,
+    savedPage: ProjectPage,
+    options: SaveOptions,
+  ): ProjectPage {
+    return options.preserveLocalContent
+      ? {
+          ...savedPage,
+          content: mergeSyncedMediaContent(localPage.content, savedPage.content),
+          title: localPage.title,
+          localRevision: savedPage.localRevision ?? localPage.localRevision,
+        }
+      : savedPage;
+  }
+
+  function mergePageSyncMetadata(localPage: ProjectPage, syncedPage: ProjectPage): ProjectPage {
+    return {
+      ...localPage,
+      notionPageId: syncedPage.notionPageId ?? localPage.notionPageId,
+      notionDatabaseId: syncedPage.notionDatabaseId ?? localPage.notionDatabaseId,
+      notionDataSourceId: syncedPage.notionDataSourceId ?? localPage.notionDataSourceId,
+      notionParentPageId: syncedPage.notionParentPageId ?? localPage.notionParentPageId,
+      notionLastEditedTime: syncedPage.notionLastEditedTime ?? localPage.notionLastEditedTime,
+      remoteRevision: syncedPage.remoteRevision ?? localPage.remoteRevision,
+      syncMessage: syncedPage.syncMessage,
+      syncState: syncedPage.syncState ?? localPage.syncState,
+      updatedAt: syncedPage.updatedAt ?? localPage.updatedAt,
+      content: mergeSyncedMediaContent(localPage.content, syncedPage.content),
+    };
+  }
+
+  function isNewerLocalPage(localPage: ProjectPage, incomingPage: ProjectPage) {
+    return Boolean(
+      localPage.localRevision &&
+      incomingPage.localRevision &&
+      localPage.localRevision !== incomingPage.localRevision,
+    );
   }
 
   function nextPageTitle() {

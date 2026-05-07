@@ -18,7 +18,9 @@ export async function pushPageToNotionCore({
   } = dependencies;
   const store = await requireConnectedStore(request);
   const jotRootPage = await ensureJotRootPage(store, { selectedParentPageId });
-  const projectRootPage = await ensureProjectRootPage(store, jotRootPage.id, project);
+  const projectRootPage = await ensureProjectRootPage(store, jotRootPage.id, project, {
+    candidateNotionPageId: page.notionParentPageId,
+  });
   const notionPageId = page.notionPageId ?? store.notePages[page.id]?.notionPageId;
 
   let notePage = notionPageId

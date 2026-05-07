@@ -353,10 +353,8 @@ async function syncProject(project: Project): Promise<void> {
 
   if (response.parentPage) {
     await updateStoredSyncConfig({
-      selectedParentPageId: response.parentPage.parentPageId,
-      selectedParentPageTitle: response.parentPage.parentPageId
-        ? syncConfig.selectedParentPageTitle
-        : undefined,
+      selectedParentPageId: response.parentPage.id,
+      selectedParentPageTitle: response.parentPage.title,
     });
   }
 
@@ -479,10 +477,8 @@ async function syncPushPage(page: ProjectPage, project: Project): Promise<Projec
 
     if (response.parentPage) {
       await updateStoredSyncConfig({
-        selectedParentPageId: response.parentPage.parentPageId,
-        selectedParentPageTitle: response.parentPage.parentPageId
-          ? syncConfig.selectedParentPageTitle
-          : undefined,
+        selectedParentPageId: response.parentPage.id,
+        selectedParentPageTitle: response.parentPage.title,
       });
     }
 

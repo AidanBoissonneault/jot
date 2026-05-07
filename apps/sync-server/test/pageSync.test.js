@@ -179,3 +179,60 @@ test('pushPageToNotionCore returns Notion file URL for uploaded audio content', 
     uploadState: 'done',
   });
 });
+
+test('pushPageToNotionCore reuses existing Notion page link after relogin', async () => {
+  const calls = [];
+  const store = {
+    blockMappings: {},
+    notePages: {},
+  };
+  const response = await pushPageToNotionCore({
+    request: {},
+    page: {
+      id: 'page-1',
+      title: 'Local title',
+      content: { type: 'doc', content: [] },
+      notionPageId: 'notion-page-1',
+      notionParentPageId: 'project-root',
+    },
+    project: { id: 'project-1', name: 'Project' },
+    selectedParentPageId: 'selected-root',
+    dependencies: {
+      appendLog: (_store, event, message) => calls.push(['log', event, message]),
+      createChildPage: async () => {
+        calls.push(['create-child']);
+        throw new Error('should not create a duplicate note page');
+      },
+      ensureJotRootPage: async () => ({ id: 'selected-root', title: 'Jot' }),
+      ensureProjectRootPage: async (_store, rootId, _project, options) => {
+        calls.push(['ensure-project', rootId, options.candidateNotionPageId]);
+        return { id: 'project-root', title: 'Project' };
+      },
+      notionRequest: async (_store, endpoint) => {
+        calls.push(['notion', endpoint]);
+        assert.equal(endpoint, '/pages/notion-page-1');
+        return {
+          id: 'notion-page-1',
+          last_edited_time: 'synced-revision',
+        };
+      },
+      replaceManagedBlocks: async () => ({ createdBlocks: [] }),
+      requireConnectedStore: async () => store,
+      updateChildNotePage: async (_store, pageId, page) => {
+        calls.push(['update-page', pageId, page.title]);
+      },
+      writeStore: async () => calls.push(['write-store']),
+    },
+  });
+
+  assert.equal(response.status, 'saved');
+  assert.equal(response.page.notionPageId, 'notion-page-1');
+  assert.deepEqual(store.notePages['page-1'], {
+    notionPageId: 'notion-page-1',
+    parentPageId: 'project-root',
+    title: 'Local title',
+    lastEditedTime: 'synced-revision',
+  });
+  assert.equal(calls.some((call) => call[0] === 'create-child'), false);
+  assert.deepEqual(calls[0], ['ensure-project', 'selected-root', 'project-root']);
+});

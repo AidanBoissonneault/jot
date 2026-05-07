@@ -467,8 +467,18 @@ watch(
     const editorContent = JSON.stringify(editor.value.getJSON());
     const storedContent = JSON.stringify(page.content);
     const isPageChange = activePageId !== page.id;
+    const hasUnsavedEditorContent =
+      editorContent !== lastAppliedContent ||
+      isEditorSaveInFlight ||
+      shouldSaveAgainAfterCurrentSave;
 
     if (!isPageChange && editorContent === storedContent) {
+      pageTitleDraft.value = page.title;
+      return;
+    }
+
+    if (!isPageChange && hasUnsavedEditorContent) {
+      pageTitleDraft.value = page.title;
       return;
     }
 

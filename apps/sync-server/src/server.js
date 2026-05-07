@@ -17,6 +17,7 @@ import { replaceManagedBlocks as replaceManagedBlocksWithDependencies } from './
 import { createNotionRequester, uploadFileToNotion } from './notionRequest.js';
 import { pushPageToNotionCore } from './pageSync.js';
 import { syncProjectFolder } from './projectSync.js';
+import { createRootPageHelpers } from './rootPages.js';
 import { MergeableSyncQueue } from './syncQueue.js';
 
 loadEnvFile(path.join(process.cwd(), '.env'));
@@ -36,6 +37,21 @@ const MAX_MEDIA_UPLOAD_BYTES = 20 * 1024 * 1024;
 const fastify = Fastify({ logger: true });
 const syncQueue = new MergeableSyncQueue();
 const notionRequest = createNotionRequester({ notionVersion: NOTION_VERSION });
+const {
+  ensureJotRootPage,
+  ensureProjectRootPage,
+  pageSummary,
+} = createRootPageHelpers({
+  appendLog,
+  createChildPage,
+  createWorkspacePage,
+  isNotionObjectNotFound,
+  jotRootPageTitle: JOT_ROOT_PAGE_TITLE,
+  listAllBlockChildren,
+  notionRequest,
+  titleFromPage,
+  updatePageTitle,
+});
 let mysqlPool;
 
 const auth = betterAuth({
@@ -1033,119 +1049,6 @@ function parseJsonColumn(value, fallback) {
   } catch {
     return fallback;
   }
-}
-
-async function ensureJotRootPage(store, { selectedParentPageId }) {
-  const stored = store.jotRootPage;
-
-  if (stored?.id && (!selectedParentPageId || stored.parentPageId === selectedParentPageId)) {
-    try {
-      const page = await notionRequest(store, `/pages/${stored.id}`);
-      store.jotRootPage = {
-        id: page.id,
-        parentPageId: selectedParentPageId ?? stored.parentPageId,
-        title: titleFromPage(page) || stored.title || JOT_ROOT_PAGE_TITLE,
-        url: page.url,
-      };
-      return pageSummary(store.jotRootPage);
-    } catch (error) {
-      appendLog(store, 'root_page_lookup_error', error.message);
-    }
-  }
-
-  const { page, parentPageId } = await createJotRootPage(store, selectedParentPageId);
-
-  store.jotRootPage = {
-    id: page.id,
-    parentPageId,
-    title: titleFromPage(page) || JOT_ROOT_PAGE_TITLE,
-    url: page.url,
-  };
-  store.jotDatabase = undefined;
-  appendLog(store, 'root_page_created', store.jotRootPage.title);
-
-  return pageSummary(store.jotRootPage);
-}
-
-async function createJotRootPage(store, selectedParentPageId) {
-  if (selectedParentPageId) {
-    try {
-      return {
-        page: await createChildPage(store, selectedParentPageId, JOT_ROOT_PAGE_TITLE),
-        parentPageId: selectedParentPageId,
-      };
-    } catch (error) {
-      if (!isNotionObjectNotFound(error)) {
-        throw error;
-      }
-
-      appendLog(
-        store,
-        'root_parent_inaccessible',
-        `${selectedParentPageId}: ${error.message}`,
-      );
-    }
-  }
-
-  return {
-    page: await createWorkspacePage(store, JOT_ROOT_PAGE_TITLE),
-    parentPageId: undefined,
-  };
-}
-
-async function ensureProjectRootPage(store, jotRootPageId, project) {
-  const stored = store.projectPages[project.id];
-
-  if (stored?.notionPageId && stored.parentPageId === jotRootPageId) {
-    try {
-      const page = await notionRequest(store, `/pages/${stored.notionPageId}`);
-      const title = project.name || stored.title || 'Untitled Project';
-
-      if (titleFromPage(page) !== title) {
-        await updatePageTitle(store, page.id, title);
-      }
-
-      store.projectPages[project.id] = {
-        notionPageId: page.id,
-        parentPageId: jotRootPageId,
-        title,
-        lastEditedTime: page.last_edited_time,
-      };
-      return pageSummary({
-        id: page.id,
-        parentPageId: jotRootPageId,
-        title,
-        url: page.url,
-      });
-    } catch (error) {
-      appendLog(store, 'project_page_lookup_error', error.message);
-    }
-  }
-
-  const page = await createChildPage(store, jotRootPageId, project.name || 'Untitled Project');
-  store.projectPages[project.id] = {
-    notionPageId: page.id,
-    parentPageId: jotRootPageId,
-    title: titleFromPage(page) || project.name || 'Untitled Project',
-    lastEditedTime: page.last_edited_time,
-  };
-  appendLog(store, 'project_page_created', store.projectPages[project.id].title);
-
-  return pageSummary({
-    id: page.id,
-    parentPageId: jotRootPageId,
-    title: store.projectPages[project.id].title,
-    url: page.url,
-  });
-}
-
-function pageSummary(page) {
-  return {
-    id: page.id,
-    parentPageId: page.parentPageId,
-    title: page.title || JOT_ROOT_PAGE_TITLE,
-    url: page.url,
-  };
 }
 
 async function createChildPage(store, parentPageId, title) {
