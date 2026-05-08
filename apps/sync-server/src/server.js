@@ -2,7 +2,6 @@ import Fastify from 'fastify';
 import fastifyCors from '@fastify/cors';
 import { betterAuth } from 'better-auth';
 import { fromNodeHeaders } from 'better-auth/node';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { existsSync, readFileSync } from 'node:fs';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import path from 'node:path';
@@ -32,8 +31,6 @@ loadEnvFile(path.join(process.cwd(), 'apps', 'sync-server', '.env'));
 const PORT = Number(process.env.PORT ?? 8787);
 const HOST = process.env.HOST ?? '127.0.0.1';
 const NOTION_VERSION = process.env.NOTION_VERSION ?? '2026-03-11';
-const DATA_DIR = process.env.JOT_SYNC_DATA_DIR ?? path.join(process.cwd(), '.data');
-const STORE_FILE = path.join(DATA_DIR, 'store.json');
 const JOT_ROOT_PAGE_TITLE = process.env.JOT_ROOT_PAGE_TITLE ?? 'Jot';
 const JOT_SESSION_COOKIE = 'jot_session';
 const JOT_OAUTH_STATE_COOKIE = 'jot_notion_oauth_state';
@@ -724,24 +721,15 @@ function isThreadBackedPage(store, page) {
   );
 }
 
-async function readStore() {
-  await mkdir(DATA_DIR, { recursive: true });
-
-  try {
-    const raw = await readFile(STORE_FILE, 'utf8');
-    return normalizeStore(JSON.parse(raw));
-  } catch {
-    return normalizeStore({});
-  }
+function readStore() {
+  return normalizeStore({});
 }
 
 async function writeStore(store) {
   if (store.installationId) {
     await writeJotSyncState(store.installationId, store);
   }
-
-  await mkdir(DATA_DIR, { recursive: true });
-  await writeFile(STORE_FILE, JSON.stringify(normalizeStore(store), null, 2));
+  // TODO: persist logs to MySQL or structured logging
 }
 
 function normalizeStore(store) {

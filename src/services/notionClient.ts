@@ -7,6 +7,7 @@ import type {
   SaveStatus,
   SyncConfig,
 } from '@/src/types/capture';
+import { idbGet, idbGetMany, idbSet, idbSetMany } from '@/src/services/idbStore';
 import { encodeJotSource, JOT_SOURCE_ATTR } from '@/src/extensions/jotLink';
 import type {
   CaptureSelectionPayload,
@@ -274,8 +275,19 @@ function sortProjectsByUpdatedDesc(first: Project, second: Project) {
   return new Date(second.updatedAt).getTime() - new Date(first.updatedAt).getTime();
 }
 
+async function migrateStorageToIdb(): Promise<void> {
+  const done = await idbGet<boolean>('__idb_migrated__');
+  if (done) return;
+  const existing = (await browser.storage.local.get(STORAGE_KEYS)) as JotStorage;
+  if (Object.keys(existing).length > 0) {
+    await idbSetMany(existing as Record<string, unknown>);
+  }
+  await idbSet('__idb_migrated__', true);
+}
+
 async function readStorage(): Promise<Required<JotStorage>> {
-  const stored = (await browser.storage.local.get(STORAGE_KEYS)) as JotStorage;
+  await migrateStorageToIdb();
+  const stored = (await idbGetMany(STORAGE_KEYS)) as JotStorage;
 
   const storedProjects = stored.projects !== undefined ? stored.projects : defaultProjects;
   const projects = (isLegacyStubProjectSet(storedProjects)
@@ -327,7 +339,7 @@ async function readStorage(): Promise<Required<JotStorage>> {
     shouldCreatePages ||
     stored.hasMigratedCapturesToPages !== true
   ) {
-    await browser.storage.local.set({
+    await idbSetMany({
       activePageIdsByProject,
       projects,
       currentProjectId,
@@ -355,7 +367,7 @@ function isLegacyStubProjectSet(projects: Project[]) {
 }
 
 async function writeStorage(storage: Partial<JotStorage>) {
-  await browser.storage.local.set(storage);
+  await idbSetMany(storage as Record<string, unknown>);
 }
 
 function appendContent(page: ProjectPage, content: DocumentContent[]): ProjectPage {
