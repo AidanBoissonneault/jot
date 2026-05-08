@@ -52,6 +52,8 @@ export const useJotStore = defineStore('jot', () => {
       syncConfig.value = await notionClient
         .refreshSyncSession()
         .catch(() => syncConfig.value);
+      await notionClient.validateNotionCache().catch(() => undefined);
+      syncConfig.value = await notionClient.getSyncConfig();
       projects.value = await notionClient.listProjects();
       const storedProjectId = await notionClient.getCurrentProjectId();
       currentProjectId.value = projects.value.some(
@@ -141,6 +143,37 @@ export const useJotStore = defineStore('jot', () => {
     } catch (error) {
       errorMessage.value =
         error instanceof Error ? error.message : 'Unable to rename this project.';
+      saveStatus.value = 'error';
+    }
+  }
+
+  async function updateCurrentProjectMetadata(metadata: {
+    category?: string;
+    stateText?: string;
+  }) {
+    if (!currentProjectId.value) {
+      return;
+    }
+
+    saveStatus.value = 'saving';
+
+    try {
+      const project = await notionClient.updateProjectMetadata(currentProjectId.value, {
+        category: metadata.category,
+        stateContent: metadata.stateText === undefined
+          ? undefined
+          : documentFromPlainText(metadata.stateText),
+      });
+      projects.value = projects.value
+        .map((storedProject) =>
+          storedProject.id === project.id ? project : storedProject,
+        )
+        .sort(sortProjectsByUpdatedDesc);
+      saveStatus.value = 'saved';
+      errorMessage.value = '';
+    } catch (error) {
+      errorMessage.value =
+        error instanceof Error ? error.message : 'Unable to update this project.';
       saveStatus.value = 'error';
     }
   }
@@ -559,6 +592,31 @@ export const useJotStore = defineStore('jot', () => {
     applyPageSyncState(currentPage.value);
   }
 
+  async function reloadFromNotion() {
+    isLoading.value = true;
+    saveStatus.value = 'saving';
+    errorMessage.value = '';
+
+    try {
+      const reloaded = await notionClient.reloadFromNotion();
+      syncConfig.value = reloaded.syncConfig;
+      projects.value = reloaded.projects;
+      currentProjectId.value = reloaded.currentProjectId;
+      pages.value = reloaded.pages.filter(
+        (page) => page.projectId === currentProjectId.value && page.status !== 'archived',
+      );
+      currentPage.value = pages.value[0];
+      saveStatus.value = currentPage.value?.syncState ?? 'saved';
+      errorMessage.value = '';
+    } catch (error) {
+      errorMessage.value =
+        error instanceof Error ? error.message : 'Unable to reload Jot from Notion.';
+      saveStatus.value = 'error';
+    } finally {
+      isLoading.value = false;
+    }
+  }
+
   function mergeSavedPage(
     localPage: ProjectPage,
     savedPage: ProjectPage,
@@ -603,6 +661,25 @@ export const useJotStore = defineStore('jot', () => {
     return `Page ${nextNumber}`;
   }
 
+  function documentFromPlainText(text: string): DocumentContent {
+    const lines = text.split(/\r?\n/);
+    return {
+      type: 'doc',
+      content: lines.length
+        ? lines.map((line) => ({
+            type: 'paragraph',
+            ...(line
+              ? { content: [{ type: 'text', text: line }] }
+              : {}),
+          }))
+        : [{ type: 'paragraph' }],
+    };
+  }
+
+  function sortProjectsByUpdatedDesc(first: Project, second: Project) {
+    return new Date(second.updatedAt).getTime() - new Date(first.updatedAt).getTime();
+  }
+
   return {
     archiveCurrentProject,
     archiveCurrentPage,
@@ -624,7 +701,9 @@ export const useJotStore = defineStore('jot', () => {
     projects,
     registerCaptureInsertHandler,
     renameCurrentProject,
+    updateCurrentProjectMetadata,
     renameCurrentPage,
+    reloadFromNotion,
     refreshSelectedPage,
     refreshSyncSession,
     savePageContentSnapshot,

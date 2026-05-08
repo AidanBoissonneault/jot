@@ -30,6 +30,11 @@ export type Project = {
   id: string;
   name: string;
   status: 'active' | 'archived';
+  category?: string;
+  createdAt: string;
+  updatedAt: string;
+  stateContent: DocumentContent;
+  stateRemoteRevision?: string;
   tags: string[];
   syncMessage?: string;
   syncState?: OptimisticStatus;

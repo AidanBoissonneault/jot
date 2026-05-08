@@ -16,6 +16,11 @@ import {
 import { replaceManagedBlocks as replaceManagedBlocksWithDependencies } from './managedBlocks.js';
 import { createNotionRequester, uploadFileToNotion } from './notionRequest.js';
 import { pushPageToNotionCore } from './pageSync.js';
+import {
+  createProjectDatabaseHelpers,
+  projectStateKey,
+  threadKey,
+} from './projectDatabase.js';
 import { syncProjectFolder } from './projectSync.js';
 import { createRootPageHelpers } from './rootPages.js';
 import { MergeableSyncQueue } from './syncQueue.js';
@@ -36,6 +41,7 @@ const MAX_MEDIA_UPLOAD_BYTES = 20 * 1024 * 1024;
 
 const fastify = Fastify({ logger: true });
 const syncQueue = new MergeableSyncQueue();
+const installationMutationLocks = new Map();
 const notionRequest = createNotionRequester({ notionVersion: NOTION_VERSION });
 const {
   ensureJotRootPage,
@@ -51,6 +57,25 @@ const {
   notionRequest,
   titleFromPage,
   updatePageTitle,
+});
+const {
+  archiveThreadToggle,
+  ensureProjectDatabase,
+  ensureProjectPage,
+  ensureThreadToggle,
+  importThreadContent,
+  reloadProjectDatabaseFromNotion,
+  updateThreadToggleTitle,
+} = createProjectDatabaseHelpers({
+  appendLog,
+  createWorkspacePage,
+  hash,
+  isNotionObjectNotFound,
+  listAllBlockChildren,
+  notionBlocksToTiptapDocument,
+  notionRequest,
+  replaceManagedBlocks,
+  tiptapDocumentToNotionBlocks,
 });
 let mysqlPool;
 
@@ -357,26 +382,196 @@ fastify.post('/sync/project', async (request) => {
   );
 });
 
+fastify.post('/sync/validate', async (request) => {
+  const { pages = [], projects = [] } = request.body ?? {};
+  const store = await requireConnectedStore(request);
+  const result = await validateNotionCache(store, {
+    pages: Array.isArray(pages) ? pages : [],
+    projects: Array.isArray(projects) ? projects : [],
+  });
+
+  if (result.changed) {
+    appendLog(
+      store,
+      'sync_cache_uncached',
+      `${result.uncachedProjectIds.length} projects, ${result.uncachedPageIds.length} pages`,
+    );
+    await writeStore(store);
+  }
+
+  return {
+    status: 'saved',
+    clearSelectedParentPage: result.clearSelectedParentPage,
+    uncachedProjectIds: result.uncachedProjectIds,
+    uncachedPageIds: result.uncachedPageIds,
+  };
+});
+
+fastify.post('/sync/reload', async (request) => {
+  const { selectedParentPageId } = request.body ?? {};
+  const store = await requireConnectedStore(request);
+
+  const result = await withFreshInstallationStore(store, async (freshStore) => {
+    const reloaded = await reloadProjectDatabaseFromNotion(freshStore, {
+      selectedParentPageId,
+    });
+
+    appendLog(
+      freshStore,
+      'sync_reload',
+      `${reloaded.projects.length} projects, ${reloaded.pages.length} pages`,
+    );
+    await writeStore(freshStore);
+    return reloaded;
+  });
+
+  return {
+    status: 'saved',
+    ...result,
+  };
+});
+
 async function syncProjectToNotion({
   request,
   project,
   selectedParentPageId,
 }) {
   const store = await requireConnectedStore(request);
-  const response = await syncProjectFolder({
-    store,
-    project,
-    selectedParentPageId,
-    ensureJotRootPage,
-    ensureProjectRootPage,
-    archiveProjectRootPage,
-    pageSummary,
+
+  return withFreshInstallationStore(store, async (freshStore) => {
+    const response = await syncProjectFolder({
+      store: freshStore,
+      project,
+      selectedParentPageId,
+      ensureJotRootPage,
+      ensureProjectPage,
+      ensureProjectRootPage,
+      archiveProjectRootPage,
+      pageSummary,
+    });
+
+    appendLog(freshStore, project.status === 'archived' ? 'project_archived' : 'project_synced', project.name);
+    await writeStore(freshStore);
+
+    return response;
   });
+}
 
-  appendLog(store, project.status === 'archived' ? 'project_archived' : 'project_synced', project.name);
-  await writeStore(store);
+async function validateNotionCache(store, { pages, projects }) {
+  const uncachedProjectIds = new Set();
+  const uncachedPageIds = new Set();
+  let clearSelectedParentPage = false;
+  let changed = false;
 
-  return response;
+  if (store.jotRootPage?.id && !(await notionObjectExists(store, 'page', store.jotRootPage.id))) {
+    store.jotRootPage = undefined;
+    store.jotDatabase = undefined;
+    store.projectPages = {};
+    store.projectBlocks = {};
+    store.threadBlocks = {};
+    store.notePages = {};
+    store.blockMappings = {};
+    clearSelectedParentPage = true;
+    for (const project of projects) uncachedProjectIds.add(project.id);
+    for (const page of pages) uncachedPageIds.add(page.id);
+    return {
+      changed: true,
+      clearSelectedParentPage,
+      uncachedProjectIds: [...uncachedProjectIds],
+      uncachedPageIds: [...uncachedPageIds],
+    };
+  }
+
+  if (
+    store.jotDatabase?.databaseId &&
+    !(await notionObjectExists(store, 'database', store.jotDatabase.databaseId))
+  ) {
+    store.jotDatabase = undefined;
+    store.projectPages = {};
+    store.projectBlocks = {};
+    store.threadBlocks = {};
+    store.notePages = {};
+    store.blockMappings = {};
+    for (const project of projects) uncachedProjectIds.add(project.id);
+    for (const page of pages) uncachedPageIds.add(page.id);
+    changed = true;
+  }
+
+  for (const project of projects) {
+    const cached = store.projectPages?.[project.id];
+
+    if (cached?.notionPageId && !(await notionObjectExists(store, 'page', cached.notionPageId))) {
+      delete store.projectPages[project.id];
+      delete store.projectBlocks?.[projectStateKey(project.id)];
+      uncachedProjectIds.add(project.id);
+      for (const page of pages.filter((candidate) => candidate.projectId === project.id)) {
+        uncachePage(store, page.id);
+        uncachedPageIds.add(page.id);
+      }
+      changed = true;
+    }
+  }
+
+  for (const page of pages) {
+    const cachedThread = store.threadBlocks?.[threadKey(page.id)];
+    const cachedNote = store.notePages?.[page.id];
+    const notionPageId = page.notionPageId ?? cachedNote?.notionPageId;
+
+    if (
+      cachedThread?.blockId &&
+      !(await notionObjectExists(store, 'block', cachedThread.blockId))
+    ) {
+      uncachePage(store, page.id);
+      uncachedPageIds.add(page.id);
+      changed = true;
+      continue;
+    }
+
+    if (
+      notionPageId &&
+      !cachedThread?.blockId &&
+      !(await notionObjectExists(
+        store,
+        cachedNote?.kind === 'thread' ? 'block' : 'page',
+        notionPageId,
+      ))
+    ) {
+      uncachePage(store, page.id);
+      uncachedPageIds.add(page.id);
+      changed = true;
+    }
+  }
+
+  return {
+    changed,
+    clearSelectedParentPage,
+    uncachedProjectIds: [...uncachedProjectIds],
+    uncachedPageIds: [...uncachedPageIds],
+  };
+}
+
+function uncachePage(store, pageId) {
+  delete store.threadBlocks?.[threadKey(pageId)];
+  delete store.notePages?.[pageId];
+  delete store.blockMappings?.[pageId];
+}
+
+async function notionObjectExists(store, kind, id) {
+  try {
+    const endpoint = kind === 'database'
+      ? `/databases/${id}`
+      : kind === 'block'
+        ? `/blocks/${id}`
+        : `/pages/${id}`;
+    await notionRequest(store, endpoint);
+    return true;
+  } catch (error) {
+    if (isNotionObjectNotFound(error)) {
+      return false;
+    }
+
+    throw error;
+  }
 }
 
 async function pushPageToNotion({
@@ -385,22 +580,30 @@ async function pushPageToNotion({
   project,
   selectedParentPageId,
 }) {
-  return pushPageToNotionCore({
-    request,
-    page,
-    project,
-    selectedParentPageId,
-    dependencies: {
-      appendLog,
-      createChildPage,
-      ensureJotRootPage,
-      ensureProjectRootPage,
-      notionRequest,
-      replaceManagedBlocks,
-      requireConnectedStore,
-      updateChildNotePage,
-      writeStore,
-    },
+  const store = await requireConnectedStore(request);
+
+  return withFreshInstallationStore(store, (freshStore) => {
+    return pushPageToNotionCore({
+      request,
+      page,
+      project,
+      selectedParentPageId,
+      dependencies: {
+        appendLog,
+        archiveThreadToggle,
+        createChildPage,
+        ensureJotRootPage,
+        ensureProjectPage,
+        ensureProjectRootPage,
+        ensureThreadToggle,
+        notionRequest,
+        replaceManagedBlocks,
+        requireConnectedStore: async () => freshStore,
+        updateThreadToggleTitle,
+        updateChildNotePage,
+        writeStore,
+      },
+    });
   });
 }
 
@@ -446,14 +649,14 @@ fastify.post('/sync/pull', async (request) => {
   }
 
   const store = await requireConnectedStore(request);
-  const notionPage = await notionRequest(store, `/pages/${page.notionPageId}`);
+  const notionContainer = await retrieveNotionPageOrBlock(store, page);
 
-  if (!page.remoteRevision || notionPage.last_edited_time === page.remoteRevision) {
+  if (!page.remoteRevision || notionContainer.last_edited_time === page.remoteRevision) {
     return {
       page: {
         ...page,
-        notionLastEditedTime: notionPage.last_edited_time,
-        remoteRevision: notionPage.last_edited_time,
+        notionLastEditedTime: notionContainer.last_edited_time,
+        remoteRevision: notionContainer.last_edited_time,
         syncState: 'saved',
       },
       status: 'saved',
@@ -467,8 +670,8 @@ fastify.post('/sync/pull', async (request) => {
     return {
       page: {
         ...page,
-        notionLastEditedTime: notionPage.last_edited_time,
-        remoteRevision: notionPage.last_edited_time,
+        notionLastEditedTime: notionContainer.last_edited_time,
+        remoteRevision: notionContainer.last_edited_time,
         syncState: 'stale',
       },
       status: 'stale',
@@ -483,8 +686,8 @@ fastify.post('/sync/pull', async (request) => {
     page: {
       ...page,
       content: pulledContent,
-      notionLastEditedTime: notionPage.last_edited_time,
-      remoteRevision: notionPage.last_edited_time,
+      notionLastEditedTime: notionContainer.last_edited_time,
+      remoteRevision: notionContainer.last_edited_time,
       syncState: 'saved',
     },
     status: 'saved',
@@ -493,6 +696,33 @@ fastify.post('/sync/pull', async (request) => {
 });
 
 fastify.listen({ port: PORT, host: HOST });
+
+async function retrieveNotionPageOrBlock(store, page) {
+  if (isThreadBackedPage(store, page)) {
+    return notionRequest(store, `/blocks/${page.notionPageId}`);
+  }
+
+  try {
+    return await notionRequest(store, `/pages/${page.notionPageId}`);
+  } catch (error) {
+    if (!isBlockNotPageError(error)) {
+      throw error;
+    }
+
+    appendLog(store, 'sync_pull_block_fallback', page.title ?? page.id);
+    return notionRequest(store, `/blocks/${page.notionPageId}`);
+  }
+}
+
+function isThreadBackedPage(store, page) {
+  const cachedThread = store.threadBlocks?.[threadKey(page.id)];
+  const cachedNote = store.notePages?.[page.id];
+
+  return Boolean(
+    cachedThread?.blockId === page.notionPageId ||
+    cachedNote?.kind === 'thread',
+  );
+}
 
 async function readStore() {
   await mkdir(DATA_DIR, { recursive: true });
@@ -518,6 +748,8 @@ function normalizeStore(store) {
   return {
     parentPages: store.parentPages ?? {},
     projectPages: store.projectPages ?? {},
+    projectBlocks: store.projectBlocks ?? {},
+    threadBlocks: store.threadBlocks ?? {},
     jotRootPage: store.jotRootPage,
     jotDatabase: store.jotDatabase,
     notePages: store.notePages ?? {},
@@ -558,6 +790,42 @@ async function requireConnectedStore(request) {
     ...syncState,
     installationId: installation.id,
     tokens: installation.tokens,
+  };
+}
+
+async function withFreshInstallationStore(store, mutator) {
+  const lockKey = store.installationId ? String(store.installationId) : 'local';
+  const previous = installationMutationLocks.get(lockKey) ?? Promise.resolve();
+  const current = previous.catch(() => undefined).then(async () => {
+    const freshStore = await freshConnectedStore(store);
+    return mutator(freshStore);
+  });
+  const tracked = current.finally(() => {
+    if (installationMutationLocks.get(lockKey) === tracked) {
+      installationMutationLocks.delete(lockKey);
+    }
+  });
+
+  installationMutationLocks.set(lockKey, tracked);
+
+  return current;
+}
+
+async function freshConnectedStore(store) {
+  if (!store.installationId) {
+    return store;
+  }
+
+  const [localStore, syncState] = await Promise.all([
+    readStore(),
+    readJotSyncState(store.installationId),
+  ]);
+
+  return {
+    ...localStore,
+    ...syncState,
+    installationId: store.installationId,
+    tokens: store.tokens,
   };
 }
 
@@ -849,6 +1117,13 @@ function isNotionObjectNotFound(error) {
   return error?.status === 404 || error?.code === 'object_not_found';
 }
 
+function isBlockNotPageError(error) {
+  return (
+    error?.code === 'validation_error' &&
+    /is a block, not a page|retrieve block API/i.test(error?.message ?? '')
+  );
+}
+
 async function getDb() {
   if (!mysqlPool) {
     mysqlPool = mysql.createPool(mysqlConnectionConfig());
@@ -960,12 +1235,31 @@ async function getActiveInstallationWithTokens(userId) {
 
 async function ensureJotSyncState(installationId, connection) {
   const db = connection ?? (await getDb());
+  await ensureJotSyncStateColumn(db, 'project_blocks_json');
+  await ensureJotSyncStateColumn(db, 'thread_blocks_json');
   await db.execute(
     `INSERT IGNORE INTO jot_sync_state
-      (installation_id, note_pages_json, block_mappings_json, parent_pages_json, project_pages_json)
-     VALUES (?, JSON_OBJECT(), JSON_OBJECT(), JSON_OBJECT(), JSON_OBJECT())`,
+      (installation_id, note_pages_json, block_mappings_json, parent_pages_json,
+       project_pages_json, project_blocks_json, thread_blocks_json)
+     VALUES (?, JSON_OBJECT(), JSON_OBJECT(), JSON_OBJECT(), JSON_OBJECT(), JSON_OBJECT(), JSON_OBJECT())`,
     [installationId],
   );
+}
+
+async function ensureJotSyncStateColumn(db, columnName) {
+  try {
+    await db.execute(`ALTER TABLE jot_sync_state ADD COLUMN ${columnName} JSON NULL`);
+    await db.execute(`UPDATE jot_sync_state SET ${columnName} = JSON_OBJECT() WHERE ${columnName} IS NULL`);
+    await db.execute(`ALTER TABLE jot_sync_state MODIFY COLUMN ${columnName} JSON NOT NULL`);
+  } catch (error) {
+    if (!isDuplicateColumnError(error)) {
+      throw error;
+    }
+  }
+}
+
+function isDuplicateColumnError(error) {
+  return error?.code === 'ER_DUP_FIELDNAME' || /Duplicate column/i.test(error?.message ?? '');
 }
 
 async function readJotSyncState(installationId) {
@@ -973,7 +1267,8 @@ async function readJotSyncState(installationId) {
   await ensureJotSyncState(installationId);
   const [rows] = await db.execute(
     `SELECT jot_database_id, jot_data_source_id, jot_parent_page_id, jot_database_title,
-            note_pages_json, block_mappings_json, parent_pages_json, project_pages_json
+            note_pages_json, block_mappings_json, parent_pages_json, project_pages_json,
+            project_blocks_json, thread_blocks_json
      FROM jot_sync_state
      WHERE installation_id = ?`,
     [installationId],
@@ -981,7 +1276,7 @@ async function readJotSyncState(installationId) {
   const row = rows[0] ?? {};
 
   return {
-    jotRootPage: row.jot_database_id
+    jotRootPage: row.jot_database_id && !row.jot_data_source_id
       ? {
           id: row.jot_database_id,
           parentPageId: row.jot_parent_page_id,
@@ -1000,6 +1295,8 @@ async function readJotSyncState(installationId) {
     blockMappings: parseJsonColumn(row.block_mappings_json, {}),
     parentPages: parseJsonColumn(row.parent_pages_json, {}),
     projectPages: parseJsonColumn(row.project_pages_json, {}),
+    projectBlocks: parseJsonColumn(row.project_blocks_json, {}),
+    threadBlocks: parseJsonColumn(row.thread_blocks_json, {}),
   };
 }
 
@@ -1015,17 +1312,21 @@ async function writeJotSyncState(installationId, store) {
          note_pages_json = ?,
          block_mappings_json = ?,
          parent_pages_json = ?,
-         project_pages_json = ?
+         project_pages_json = ?,
+         project_blocks_json = ?,
+         thread_blocks_json = ?
      WHERE installation_id = ?`,
     [
-      store.jotRootPage?.id ?? store.jotDatabase?.databaseId ?? null,
+      store.jotDatabase?.databaseId ?? store.jotRootPage?.id ?? null,
       store.jotDatabase?.dataSourceId ?? null,
-      store.jotRootPage?.parentPageId ?? store.jotDatabase?.parentPageId ?? null,
-      store.jotRootPage?.title ?? store.jotDatabase?.title ?? null,
+      store.jotDatabase?.parentPageId ?? store.jotRootPage?.id ?? store.jotRootPage?.parentPageId ?? null,
+      store.jotDatabase?.title ?? store.jotRootPage?.title ?? null,
       JSON.stringify(store.notePages ?? {}),
       JSON.stringify(store.blockMappings ?? {}),
       JSON.stringify(store.parentPages ?? {}),
       JSON.stringify(store.projectPages ?? {}),
+      JSON.stringify(store.projectBlocks ?? {}),
+      JSON.stringify(store.threadBlocks ?? {}),
       installationId,
     ],
   );
@@ -1238,6 +1539,12 @@ function mediaUrlFromNotionBlock(block) {
 }
 
 async function importManagedBlocks(store, page) {
+  const threadContent = await importThreadContent(store, page).catch(() => null);
+
+  if (threadContent) {
+    return threadContent;
+  }
+
   const mappings = store.blockMappings[page.id] ?? [];
 
   if (!mappings.length) {

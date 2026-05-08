@@ -85,6 +85,8 @@ CREATE TABLE IF NOT EXISTS jot_sync_state (
   block_mappings_json JSON NOT NULL,
   parent_pages_json JSON NOT NULL,
   project_pages_json JSON NOT NULL,
+  project_blocks_json JSON NOT NULL,
+  thread_blocks_json JSON NOT NULL,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   CONSTRAINT fk_jot_sync_state_installation

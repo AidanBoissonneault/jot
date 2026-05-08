@@ -33,7 +33,7 @@ export function createRootPageHelpers({
         appendLog(store, 'root_page_adopted', store.jotRootPage.title);
         return pageSummary(store.jotRootPage);
       } catch (error) {
-        if (!isNotionObjectNotFound(error)) {
+        if (!isNotionObjectNotFound(error) && !isBlockNotPageError(error)) {
           throw error;
         }
 
@@ -231,4 +231,11 @@ export function pageSummary(page) {
 
 function parentPageIdFromNotionPage(page) {
   return page?.parent?.type === 'page_id' ? page.parent.page_id : undefined;
+}
+
+function isBlockNotPageError(error) {
+  return (
+    error?.code === 'validation_error' &&
+    /is a block, not a page|retrieve block API/i.test(error?.message ?? '')
+  );
 }

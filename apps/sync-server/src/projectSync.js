@@ -3,11 +3,23 @@ export async function syncProjectFolder({
   project,
   selectedParentPageId,
   ensureJotRootPage,
+  ensureProjectPage,
   ensureProjectRootPage,
   archiveProjectRootPage,
   pageSummary,
 }) {
   if (project.status === 'archived') {
+    if (ensureProjectPage) {
+      const projectPage = await ensureProjectPage(store, project, { selectedParentPageId });
+
+      return {
+        project: projectPage.project,
+        projectPage,
+        status: 'saved',
+        message: 'Archived project in Notion.',
+      };
+    }
+
     const stored = store.projectPages?.[project.id];
 
     if (!stored?.notionPageId) {
@@ -28,6 +40,17 @@ export async function syncProjectFolder({
       }),
       status: 'saved',
       message: 'Archived project in Notion.',
+    };
+  }
+
+  if (ensureProjectPage) {
+    const projectPage = await ensureProjectPage(store, project, { selectedParentPageId });
+
+    return {
+      project: projectPage.project,
+      projectPage,
+      status: 'saved',
+      message: 'Synced project to Notion database.',
     };
   }
 

@@ -43,6 +43,22 @@ type SyncPageResponse = {
 type SyncProjectResponse = {
   message?: string;
   parentPage?: NotionParentPage;
+  project?: Project;
+  status: Exclude<SaveStatus, 'idle' | 'saving'>;
+};
+
+type SyncValidationResponse = {
+  clearSelectedParentPage?: boolean;
+  uncachedPageIds?: string[];
+  uncachedProjectIds?: string[];
+};
+
+type SyncReloadResponse = {
+  activePageIdsByProject: Record<string, string>;
+  clearSelectedParentPage?: boolean;
+  currentProjectId?: string;
+  pages: ProjectPage[];
+  projects: Project[];
   status: Exclude<SaveStatus, 'idle' | 'saving'>;
 };
 
@@ -78,6 +94,10 @@ const defaultProjects: Project[] = [
     id: 'project-jot',
     name: 'Jot',
     status: 'active',
+    category: 'General',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    stateContent: emptyDocument(),
     tags: ['jot'],
   },
 ];
@@ -211,26 +231,57 @@ function createDefaultPages(projects: Project[]): ProjectPage[] {
 }
 
 function createProjectRecord(name: string, id = `project-${crypto.randomUUID()}`): Project {
+  const now = new Date().toISOString();
+
   return {
     id,
     name: name.trim() || 'Untitled Project',
     status: 'active',
+    category: '',
+    createdAt: now,
+    updatedAt: now,
+    stateContent: emptyDocument(),
     tags: [],
     syncState: 'saved',
   };
 }
 
+function normalizeProject(project: Project): Project {
+  const now = new Date().toISOString();
+  const createdAt = project.createdAt ?? now;
+
+  return {
+    ...project,
+    category: project.category ?? project.tags?.[0] ?? '',
+    createdAt,
+    updatedAt: project.updatedAt ?? createdAt,
+    stateContent: project.stateContent ?? emptyDocument(),
+    tags: project.tags ?? [],
+    syncState: project.syncState ?? 'saved',
+  };
+}
+
+function touchProject(project: Project, updates: Partial<Project> = {}): Project {
+  return {
+    ...project,
+    ...updates,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function sortProjectsByUpdatedDesc(first: Project, second: Project) {
+  return new Date(second.updatedAt).getTime() - new Date(first.updatedAt).getTime();
+}
+
 async function readStorage(): Promise<Required<JotStorage>> {
   const stored = (await browser.storage.local.get(STORAGE_KEYS)) as JotStorage;
 
-  const storedProjects = stored.projects?.length ? stored.projects : defaultProjects;
+  const storedProjects = stored.projects !== undefined ? stored.projects : defaultProjects;
   const projects = (isLegacyStubProjectSet(storedProjects)
     ? defaultProjects
     : storedProjects
-  ).map((project) => ({
-    ...project,
-    syncState: project.syncState ?? 'saved',
-  }));
+  ).map(normalizeProject)
+    .sort(sortProjectsByUpdatedDesc);
   const captures = stored.captures ?? [];
   const shouldCreatePages =
     !stored.pages?.length ||
@@ -336,7 +387,7 @@ function createCompatibleActivePageIds(
   }, {});
 }
 
-async function syncProject(project: Project): Promise<void> {
+async function syncProject(project: Project): Promise<Project | undefined> {
   const { syncConfig } = await readStorage();
 
   if (!syncConfig.connected) {
@@ -361,6 +412,8 @@ async function syncProject(project: Project): Promise<void> {
   if (response.status === 'error') {
     throw new Error(response.message ?? 'Unable to sync this project.');
   }
+
+  return response.project;
 }
 
 function createEmptyPage(projectId: string, title: string): ProjectPage {
@@ -422,6 +475,20 @@ function withSyncStatus(
     ...page,
     syncMessage: message,
     syncState: status,
+  };
+}
+
+function uncachePageNotionMetadata(page: ProjectPage): ProjectPage {
+  return {
+    ...page,
+    notionPageId: undefined,
+    notionDatabaseId: undefined,
+    notionDataSourceId: undefined,
+    notionParentPageId: undefined,
+    notionLastEditedTime: undefined,
+    remoteRevision: undefined,
+    syncMessage: undefined,
+    syncState: 'saved',
   };
 }
 
@@ -576,9 +643,11 @@ async function replaceTempProject({
           ? { ...page, projectId: realProject.id }
           : page,
     ),
-    projects: projects.map((project) =>
-      project.id === tempProject.id ? realProject : project,
-    ),
+    projects: projects
+      .map((project) =>
+        project.id === tempProject.id ? realProject : project,
+      )
+      .sort(sortProjectsByUpdatedDesc),
   });
 }
 
@@ -601,9 +670,10 @@ async function rollbackTempProject(
       .filter((project) => project.id !== tempProject.id)
       .map((project) =>
         project.id === previousProjectId
-          ? { ...project, syncState: 'error', syncMessage: message }
+          ? { ...project, syncState: 'error' as const, syncMessage: message }
           : project,
-      ),
+      )
+      .sort(sortProjectsByUpdatedDesc),
   });
 }
 
@@ -691,7 +761,9 @@ export const notionClient = {
   async listProjects(): Promise<Project[]> {
     await waitForStub();
     const { projects } = await readStorage();
-    return projects.filter((project) => project.status !== 'archived');
+    return projects
+      .filter((project) => project.status !== 'archived')
+      .sort(sortProjectsByUpdatedDesc);
   },
 
   async getCurrentProjectId(): Promise<string> {
@@ -721,7 +793,7 @@ export const notionClient = {
       },
       currentProjectId: project.id,
       pages: [...pages, page],
-      projects: [...projects, project],
+      projects: [...projects, project].sort(sortProjectsByUpdatedDesc),
     });
 
     const settled = (async () => {
@@ -734,15 +806,16 @@ export const notionClient = {
       };
 
       try {
-        await syncProject(realProject);
+        const syncedProject = await syncProject(realProject);
+        const savedProject = syncedProject ?? realProject;
         await replaceTempProject({
           tempPage: page,
           tempProject: project,
           realPage,
-          realProject,
+          realProject: savedProject,
         });
         const savedPage = await replayTempPageSave(page.id, realPage);
-        return { page: savedPage, project: realProject };
+        return { page: savedPage, project: savedProject };
       } catch (error) {
         const message =
           error instanceof Error ? error.message : 'Unable to create this project.';
@@ -768,20 +841,22 @@ export const notionClient = {
       throw new Error('This project is no longer available.');
     }
 
-    const updatedProject = {
-      ...project,
+    const updatedProject = touchProject(project, {
       name: name.trim() || 'Untitled Project',
-    };
-
-    await syncProject(updatedProject);
-
-    await writeStorage({
-      projects: projects.map((storedProject) =>
-        storedProject.id === projectId ? updatedProject : storedProject,
-      ),
     });
 
-    return updatedProject;
+    const syncedProject = await syncProject(updatedProject);
+    const savedProject = syncedProject ?? updatedProject;
+
+    await writeStorage({
+      projects: projects
+        .map((storedProject) =>
+          storedProject.id === projectId ? savedProject : storedProject,
+        )
+        .sort(sortProjectsByUpdatedDesc),
+    });
+
+    return savedProject;
   },
 
   async archiveProject(projectId: string): Promise<{ currentProjectId: string; project: Project }> {
@@ -798,10 +873,9 @@ export const notionClient = {
       throw new Error('Create another project before archiving this one.');
     }
 
-    const archivedProject = {
-      ...project,
+    const archivedProject = touchProject(project, {
       status: 'archived' as const,
-    };
+    });
     const replacementProject = activeProjects.find(
       (storedProject) => storedProject.id !== projectId,
     );
@@ -819,12 +893,13 @@ export const notionClient = {
         )
       : undefined;
 
-    await syncProject(archivedProject);
+    const syncedProject = await syncProject(archivedProject);
+    const savedProject = syncedProject ?? archivedProject;
 
     await writeStorage({
       currentProjectId: replacementProject?.id ?? '',
       projects: projects.map((storedProject) =>
-        storedProject.id === projectId ? archivedProject : storedProject,
+        storedProject.id === projectId ? savedProject : storedProject,
       ),
       activePageIdsByProject: {
         ...activePageIdsByProject,
@@ -836,8 +911,38 @@ export const notionClient = {
 
     return {
       currentProjectId: replacementProject?.id ?? '',
-      project: archivedProject,
+      project: savedProject,
     };
+  },
+
+  async updateProjectMetadata(
+    projectId: string,
+    metadata: { category?: string; stateContent?: DocumentContent },
+  ): Promise<Project> {
+    const { projects } = await readStorage();
+    const project = projects.find((storedProject) => storedProject.id === projectId);
+
+    if (!project || project.status === 'archived') {
+      throw new Error('This project is no longer available.');
+    }
+
+    const updatedProject = touchProject(project, {
+      category: metadata.category?.trim() ?? project.category,
+      stateContent: metadata.stateContent ?? project.stateContent,
+    });
+
+    const syncedProject = await syncProject(updatedProject);
+    const savedProject = syncedProject ?? updatedProject;
+
+    await writeStorage({
+      projects: projects
+        .map((storedProject) =>
+          storedProject.id === projectId ? savedProject : storedProject,
+        )
+        .sort(sortProjectsByUpdatedDesc),
+    });
+
+    return savedProject;
   },
 
   async getSyncConfig(): Promise<SyncConfig> {
@@ -865,6 +970,111 @@ export const notionClient = {
       workspaceId: session.workspaceId,
       workspaceName: session.workspaceName,
     });
+  },
+
+  async validateNotionCache(): Promise<void> {
+    const { pages, projects, syncConfig } = await readStorage();
+
+    if (!syncConfig.connected) {
+      return;
+    }
+
+    const response = await requestServer<SyncValidationResponse>('/sync/validate', {
+      method: 'POST',
+      body: JSON.stringify({ pages, projects }),
+    }, syncConfig);
+    const uncachedProjectIds = new Set(response.uncachedProjectIds ?? []);
+    const uncachedPageIds = new Set(response.uncachedPageIds ?? []);
+
+    if (!uncachedProjectIds.size && !uncachedPageIds.size && !response.clearSelectedParentPage) {
+      return;
+    }
+
+    await writeStorage({
+      ...(response.clearSelectedParentPage
+        ? {
+            syncConfig: {
+              ...syncConfig,
+              selectedParentPageId: undefined,
+              selectedParentPageTitle: undefined,
+            },
+          }
+        : {}),
+      projects: projects.map((project) =>
+        uncachedProjectIds.has(project.id)
+          ? {
+              ...project,
+              stateRemoteRevision: undefined,
+              syncMessage: undefined,
+              syncState: 'saved' as const,
+            }
+          : project,
+      ),
+      pages: pages.map((page) =>
+        uncachedPageIds.has(page.id)
+          ? uncachePageNotionMetadata(page)
+          : page,
+      ),
+    });
+  },
+
+  async reloadFromNotion(): Promise<{
+    currentProjectId: string;
+    pages: ProjectPage[];
+    projects: Project[];
+    syncConfig: SyncConfig;
+  }> {
+    const { syncConfig } = await readStorage();
+
+    if (!syncConfig.connected) {
+      throw new Error('Connect Notion before reloading from Notion.');
+    }
+
+    const response = await requestServer<SyncReloadResponse>('/sync/reload', {
+      method: 'POST',
+      body: JSON.stringify({
+        selectedParentPageId: syncConfig.selectedParentPageId,
+      }),
+    }, syncConfig);
+    const projects = response.projects.map(normalizeProject).sort(sortProjectsByUpdatedDesc);
+    const pages = response.pages.map((page) => ({
+      ...page,
+      content: markUnrecoverableTransientMedia(page.content),
+      localRevision: page.localRevision ?? crypto.randomUUID(),
+      status: page.status ?? 'active',
+      syncState: page.syncState ?? 'saved',
+    }));
+    const activePageIdsByProject = createCompatibleActivePageIds(
+      projects,
+      pages,
+      response.activePageIdsByProject,
+    );
+    const currentProjectId = projects.some((project) => project.id === response.currentProjectId)
+      ? response.currentProjectId ?? ''
+      : projects[0]?.id ?? '';
+    const nextSyncConfig = response.clearSelectedParentPage
+      ? {
+          ...syncConfig,
+          selectedParentPageId: undefined,
+          selectedParentPageTitle: undefined,
+        }
+      : syncConfig;
+
+    await writeStorage({
+      activePageIdsByProject,
+      currentProjectId,
+      hasMigratedCapturesToPages: true,
+      pages,
+      projects,
+      syncConfig: nextSyncConfig,
+    });
+
+    return {
+      currentProjectId,
+      pages,
+      projects,
+      syncConfig: nextSyncConfig,
+    };
   },
 
   async logoutSyncSession(): Promise<SyncConfig> {
@@ -1106,11 +1316,17 @@ export const notionClient = {
   },
 
   async archiveProjectPage(pageId: string): Promise<ProjectPage> {
-    const { activePageIdsByProject, pages } = await readStorage();
+    const { activePageIdsByProject, pages, projects } = await readStorage();
     const page = pages.find((storedPage) => storedPage.id === pageId);
 
     if (!page) {
       throw new Error('This page is no longer available.');
+    }
+
+    const project = projects.find((storedProject) => storedProject.id === page.projectId);
+
+    if (!project) {
+      throw new Error('This project is no longer available.');
     }
 
     const archivedPage = markPageDirty({
@@ -1138,6 +1354,14 @@ export const notionClient = {
       },
       pages: nextPages,
     });
+
+    if (!isTempPage(archivedPage) && !isTempProject(project)) {
+      const syncedArchivedPage = await syncPushPage(archivedPage, project);
+
+      if (syncedArchivedPage.syncState === 'error') {
+        throw new Error(syncedArchivedPage.syncMessage ?? 'Unable to archive this page in Notion.');
+      }
+    }
 
     return replacementPage;
   },

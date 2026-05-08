@@ -82,6 +82,8 @@ const store = useJotStore();
 const saveTimer = ref<number>();
 const pageTitleDraft = ref('');
 const projectNameDraft = ref('');
+const projectCategoryDraft = ref('');
+const projectStateDraft = ref('');
 const newProjectNameDraft = ref('');
 const linkUrlDraft = ref('');
 const imageUrlDraft = ref('');
@@ -508,6 +510,16 @@ watch(
 );
 
 watch(
+  () => store.currentProject,
+  (project) => {
+    projectNameDraft.value = project?.name ?? '';
+    projectCategoryDraft.value = project?.category ?? '';
+    projectStateDraft.value = plainTextFromDocument(project?.stateContent);
+  },
+  { immediate: true },
+);
+
+watch(
   () => store.syncConfig.serverUrl,
   (serverUrl) => {
     serverUrlDraft.value = serverUrl;
@@ -586,6 +598,29 @@ async function renameProject() {
   await store.renameCurrentProject(projectNameDraft.value);
 }
 
+async function saveProjectMetadata() {
+  const project = store.currentProject;
+
+  if (!project) {
+    return;
+  }
+
+  const stateText = projectStateDraft.value;
+
+  if (
+    projectCategoryDraft.value === (project.category ?? '') &&
+    stateText === plainTextFromDocument(project.stateContent)
+  ) {
+    return;
+  }
+
+  await flushEditorContent();
+  await store.updateCurrentProjectMetadata({
+    category: projectCategoryDraft.value,
+    stateText,
+  });
+}
+
 async function archiveProject() {
   if (!store.currentProject) {
     return;
@@ -655,11 +690,8 @@ function cancelArchive() {
 }
 
 async function resync() {
-  if (store.currentPage) {
-    await store.refreshSelectedPage(store.currentPage.id);
-  } else {
-    await initializePanel();
-  }
+  await flushEditorContent();
+  await store.reloadFromNotion();
 }
 
 async function loginWithNotion() {
@@ -1256,6 +1288,25 @@ function insertLinkedHeadingAtDrop(
 
 function kebabCase(value: string) {
   return value.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`);
+}
+
+function plainTextFromDocument(document: DocumentContent | undefined) {
+  return (document?.content ?? [])
+    .map((node) => textFromNode(node))
+    .join('\n')
+    .trim();
+}
+
+function textFromNode(node: DocumentContent): string {
+  if (node.text) {
+    return node.text;
+  }
+
+  if (node.type === 'hardBreak') {
+    return '\n';
+  }
+
+  return (node.content ?? []).map((child) => textFromNode(child)).join('');
 }
 </script>
 
@@ -1870,6 +1921,28 @@ function kebabCase(value: string) {
             @blur="renameProject"
             @keydown.enter="blurTitleInput"
           >
+        </label>
+
+        <label class="field-label">
+          Category
+          <input
+            v-model="projectCategoryDraft"
+            aria-label="Project category"
+            :disabled="store.isLoading || !store.currentProject"
+            @blur="saveProjectMetadata"
+            @keydown.enter="blurTitleInput"
+          >
+        </label>
+
+        <label class="field-label">
+          Project state
+          <textarea
+            v-model="projectStateDraft"
+            aria-label="Project state"
+            rows="5"
+            :disabled="store.isLoading || !store.currentProject"
+            @blur="saveProjectMetadata"
+          />
         </label>
 
         <div class="item-list">
@@ -2661,6 +2734,13 @@ function kebabCase(value: string) {
   color: var(--jot-text);
   font-size: 1rem;
   font-weight: 500;
+}
+
+.field-label textarea {
+  min-width: 0;
+  resize: vertical;
+  color: var(--jot-text);
+  font: inherit;
 }
 
 .stack-form {

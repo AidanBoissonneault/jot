@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "node src/server.js",
     "start": "node src/server.js",
-    "test": "node test/blockConversion.test.js && node test/managedBlocks.test.js && node test/rootPages.test.js && node test/projectSync.test.js && node test/notionRequest.test.js && node test/syncQueue.test.js && node test/pageSync.test.js"
+    "test": "node test/blockConversion.test.js && node test/managedBlocks.test.js && node test/rootPages.test.js && node test/projectSync.test.js && node test/projectDatabase.test.js && node test/notionRequest.test.js && node test/syncQueue.test.js && node test/pageSync.test.js"
   },
   "dependencies": {
     "@fastify/cors": "^11.2.0",

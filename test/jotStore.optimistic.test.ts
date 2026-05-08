@@ -1,6 +1,7 @@
 import { setActivePinia, createPinia } from 'pinia';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 import { nextTick } from 'vue';
+import { notionClient } from '@/src/services/notionClient';
 import { useJotStore } from '@/src/stores/jot';
 import type { DocumentContent, Project, ProjectPage, SyncConfig } from '@/src/types/capture';
 import { readBrowserStorage, resetBrowserStorage } from './setup';
@@ -15,6 +16,10 @@ const baseProject: Project = {
   id: 'project-jot',
   name: 'Jot',
   status: 'active',
+  category: 'General',
+  createdAt: '2026-01-01T00:00:00.000Z',
+  updatedAt: '2026-01-01T00:00:00.000Z',
+  stateContent: emptyDocument(),
   tags: ['jot'],
   syncState: 'saved',
 };
@@ -49,6 +54,25 @@ beforeEach(() => {
 });
 
 describe('optimistic project creation', () => {
+  test('sync payload includes project database metadata defaults', async () => {
+    const projectSync = deferred<Response>();
+    const fetchMock = vi.fn(() => projectSync.promise);
+    vi.stubGlobal('fetch', fetchMock);
+    const store = useJotStore();
+
+    await seedStore(store);
+    await store.createProject('Roadmap');
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    const requestBody = JSON.parse(String(
+      (fetchMock.mock.calls as unknown as Array<[string, RequestInit]>)[0][1]?.body,
+    ));
+
+    expect(requestBody.project.category).toBe('');
+    expect(requestBody.project.createdAt).toEqual(expect.any(String));
+    expect(requestBody.project.updatedAt).toEqual(expect.any(String));
+    expect(requestBody.project.stateContent).toEqual(emptyDocument());
+  });
+
   test('appears and is selected before project sync settles', async () => {
     const projectSync = deferred<Response>();
     vi.stubGlobal('fetch', vi.fn(() => projectSync.promise));
@@ -103,6 +127,217 @@ describe('optimistic project creation', () => {
     expect(store.currentProjectId).toBe('project-jot');
     expect(store.projects.some((project) => project.id === tempProjectId)).toBe(false);
     expect(store.errorMessage).toBe('Notion unavailable');
+  });
+});
+
+describe('project metadata', () => {
+  test('validateNotionCache uncaches missing Notion project and page metadata', async () => {
+    const fetchMock = vi.fn(async () =>
+      jsonResponse({
+        clearSelectedParentPage: true,
+        uncachedProjectIds: ['project-jot'],
+        uncachedPageIds: ['page-jot'],
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    resetBrowserStorage({
+      activePageIdsByProject: { 'project-jot': 'page-jot' },
+      currentProjectId: 'project-jot',
+      hasMigratedCapturesToPages: true,
+      pages: [
+        {
+          ...basePage,
+          notionPageId: 'missing-thread',
+          notionParentPageId: 'missing-project-page',
+          notionLastEditedTime: 'remote-time',
+          remoteRevision: 'remote-time',
+          syncMessage: 'Stale',
+          syncState: 'stale',
+        },
+      ],
+      projects: [
+        {
+          ...baseProject,
+          stateRemoteRevision: 'remote-state',
+          syncMessage: 'Stale',
+          syncState: 'stale',
+        },
+      ],
+      syncConfig: {
+        ...connectedConfig,
+        selectedParentPageId: 'missing-root',
+        selectedParentPageTitle: 'Missing root',
+      },
+    });
+
+    await notionClient.validateNotionCache();
+    const storage = readBrowserStorage();
+    const [page] = storage.pages as ProjectPage[];
+    const [project] = storage.projects as Project[];
+
+    expect(page.notionPageId).toBeUndefined();
+    expect(page.notionParentPageId).toBeUndefined();
+    expect(page.remoteRevision).toBeUndefined();
+    expect(page.syncState).toBe('saved');
+    expect(project.stateRemoteRevision).toBeUndefined();
+    expect(project.syncState).toBe('saved');
+    expect((storage.syncConfig as SyncConfig).selectedParentPageId).toBeUndefined();
+  });
+
+  test('reloadFromNotion replaces local projects and pages and preserves sync config', async () => {
+    const reloadedProject: Project = {
+      ...baseProject,
+      id: 'project-remote',
+      name: 'Remote',
+      category: 'Remote',
+      updatedAt: '2026-01-03T00:00:00.000Z',
+      tags: ['Remote'],
+    };
+    const reloadedPage: ProjectPage = {
+      ...basePage,
+      id: 'page-remote',
+      projectId: 'project-remote',
+      title: 'Remote page',
+      notionPageId: 'thread-remote',
+      notionParentPageId: 'project-page-remote',
+      notionLastEditedTime: '2026-01-03T00:00:00.000Z',
+      remoteRevision: '2026-01-03T00:00:00.000Z',
+    };
+    const syncConfig = {
+      ...connectedConfig,
+      selectedParentPageId: 'parent-page',
+      selectedParentPageTitle: 'Parent',
+    };
+    const fetchMock = vi.fn(async () =>
+      jsonResponse({
+        activePageIdsByProject: { 'project-remote': 'page-remote' },
+        currentProjectId: 'missing-local-project',
+        pages: [reloadedPage],
+        projects: [reloadedProject],
+        status: 'saved',
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    resetBrowserStorage({
+      activePageIdsByProject: { 'project-jot': 'page-jot' },
+      currentProjectId: 'project-jot',
+      hasMigratedCapturesToPages: true,
+      pages: [basePage, { ...basePage, id: 'page-deleted' }],
+      projects: [baseProject],
+      syncConfig,
+    });
+    const store = useJotStore();
+
+    await seedStore(store);
+    store.syncConfig = syncConfig;
+    await store.reloadFromNotion();
+    const storage = readBrowserStorage();
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(store.currentProjectId).toBe('project-remote');
+    expect(store.currentPage?.id).toBe('page-remote');
+    expect(store.pages.map((page) => page.id)).toEqual(['page-remote']);
+    expect((storage.pages as ProjectPage[]).map((page) => page.id)).toEqual(['page-remote']);
+    expect((storage.projects as Project[]).map((project) => project.id)).toEqual(['project-remote']);
+    expect((storage.syncConfig as SyncConfig).selectedParentPageId).toBe('parent-page');
+  });
+
+  test('reloadFromNotion clears selected parent when server reports it invalid', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () =>
+      jsonResponse({
+        activePageIdsByProject: {},
+        clearSelectedParentPage: true,
+        currentProjectId: '',
+        pages: [],
+        projects: [],
+        status: 'saved',
+      }),
+    ));
+    resetBrowserStorage({
+      activePageIdsByProject: { 'project-jot': 'page-jot' },
+      currentProjectId: 'project-jot',
+      hasMigratedCapturesToPages: true,
+      pages: [basePage],
+      projects: [baseProject],
+      syncConfig: {
+        ...connectedConfig,
+        selectedParentPageId: 'missing-parent',
+        selectedParentPageTitle: 'Missing',
+      },
+    });
+
+    await notionClient.reloadFromNotion();
+    const storage = readBrowserStorage();
+
+    expect((storage.syncConfig as SyncConfig).selectedParentPageId).toBeUndefined();
+    expect((storage.syncConfig as SyncConfig).selectedParentPageTitle).toBeUndefined();
+    await expect(notionClient.listProjects()).resolves.toEqual([]);
+  });
+
+  test('listProjects sorts by updated date descending', async () => {
+    const olderProject = {
+      ...baseProject,
+      id: 'project-older',
+      name: 'Older',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    };
+    const newerProject = {
+      ...baseProject,
+      id: 'project-newer',
+      name: 'Newer',
+      updatedAt: '2026-01-03T00:00:00.000Z',
+    };
+
+    resetBrowserStorage({
+      activePageIdsByProject: {
+        'project-older': 'page-jot',
+        'project-newer': 'page-jot',
+      },
+      currentProjectId: 'project-older',
+      hasMigratedCapturesToPages: true,
+      pages: [basePage],
+      projects: [olderProject, newerProject],
+      syncConfig: connectedConfig,
+    });
+
+    const projects = await notionClient.listProjects();
+
+    expect(projects.map((project) => project.id)).toEqual([
+      'project-newer',
+      'project-older',
+    ]);
+  });
+
+  test('updating category and state persists locally and syncs metadata', async () => {
+    const metadataSync = deferred<Response>();
+    const fetchMock = vi.fn(() => metadataSync.promise);
+    vi.stubGlobal('fetch', fetchMock);
+    const store = useJotStore();
+
+    await seedStore(store);
+    const updatePromise = store.updateCurrentProjectMetadata({
+      category: 'Research',
+      stateText: 'Todo\nShip database sync',
+    });
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    const requestBody = JSON.parse(String(
+      (fetchMock.mock.calls as unknown as Array<[string, RequestInit]>)[0][1]?.body,
+    ));
+
+    expect(requestBody.project.category).toBe('Research');
+    expect(requestBody.project.stateContent).toEqual(docWithParagraphs([
+      'Todo',
+      'Ship database sync',
+    ]));
+
+    metadataSync.resolve(jsonResponse({ status: 'saved' }));
+    await updatePromise;
+
+    expect(store.currentProject?.category).toBe('Research');
+    expect((readBrowserStorage().projects as Project[])[0].stateContent).toEqual(docWithParagraphs([
+      'Todo',
+      'Ship database sync',
+    ]));
   });
 });
 
@@ -510,6 +745,16 @@ function docWithText(text: string): DocumentContent {
         content: [{ type: 'text', text }],
       },
     ],
+  };
+}
+
+function docWithParagraphs(lines: string[]): DocumentContent {
+  return {
+    type: 'doc',
+    content: lines.map((line) => ({
+      type: 'paragraph',
+      content: [{ type: 'text', text: line }],
+    })),
   };
 }
 

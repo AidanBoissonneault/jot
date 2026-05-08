@@ -6,17 +6,39 @@ export async function pushPageToNotionCore({
   dependencies,
 }) {
   const {
+    archiveThreadToggle,
     appendLog,
     createChildPage,
     ensureJotRootPage,
+    ensureProjectPage,
     ensureProjectRootPage,
+    ensureThreadToggle,
     notionRequest,
     replaceManagedBlocks,
     requireConnectedStore,
+    updateThreadToggleTitle,
     updateChildNotePage,
     writeStore,
   } = dependencies;
   const store = await requireConnectedStore(request);
+
+  if (ensureProjectPage && ensureThreadToggle) {
+    return pushPageToProjectDatabase({
+      appendLog,
+      archiveThreadToggle,
+      ensureProjectPage,
+      ensureThreadToggle,
+      notionRequest,
+      page,
+      project,
+      replaceManagedBlocks,
+      selectedParentPageId,
+      store,
+      updateThreadToggleTitle,
+      writeStore,
+    });
+  }
+
   const jotRootPage = await ensureJotRootPage(store, { selectedParentPageId });
   const projectRootPage = await ensureProjectRootPage(store, jotRootPage.id, project, {
     candidateNotionPageId: page.notionParentPageId,
@@ -87,6 +109,106 @@ export async function pushPageToNotionCore({
     page: syncedPage,
     status: 'saved',
     message: 'Synced to Notion.',
+  };
+}
+
+async function pushPageToProjectDatabase({
+  appendLog,
+  archiveThreadToggle,
+  ensureProjectPage,
+  ensureThreadToggle,
+  notionRequest,
+  page,
+  project,
+  replaceManagedBlocks,
+  selectedParentPageId,
+  store,
+  updateThreadToggleTitle,
+  writeStore,
+}) {
+  const projectPage = await ensureProjectPage(store, project, { selectedParentPageId });
+
+  if (page.status === 'archived') {
+    await archiveThreadToggle?.(store, page);
+    store.notePages[page.id] = {
+      ...(store.notePages[page.id] ?? {}),
+      parentPageId: projectPage.id,
+      title: page.title,
+      archived: true,
+    };
+    appendLog(store, 'sync_thread_archived', page.title);
+    await writeStore(store);
+    return {
+      projectPage,
+      page: {
+        ...page,
+        notionParentPageId: projectPage.id,
+        syncState: 'saved',
+      },
+      status: 'saved',
+      message: 'Archived thread in Notion.',
+    };
+  }
+
+  const toggle = await ensureThreadToggle(store, projectPage.id, page);
+
+  if (
+    toggle?.last_edited_time &&
+    page.remoteRevision &&
+    toggle.last_edited_time !== page.remoteRevision
+  ) {
+    appendLog(store, 'sync_stale', `${page.title} changed in Notion.`);
+    await writeStore(store);
+    return {
+      projectPage,
+      page: {
+        ...page,
+        notionPageId: toggle.id,
+        notionDatabaseId: undefined,
+        notionDataSourceId: undefined,
+        notionParentPageId: projectPage.id,
+        notionLastEditedTime: toggle.last_edited_time,
+        remoteRevision: toggle.last_edited_time,
+      },
+      status: 'stale',
+      message: 'This thread changed in Notion. Pull or review it before saving over it.',
+    };
+  }
+
+  await updateThreadToggleTitle?.(store, page);
+  const replacement = await replaceManagedBlocks(store, page.id, toggle.id, page.content);
+  const refreshedBlock = await notionRequest(store, `/blocks/${toggle.id}`).catch(() => toggle);
+  const syncedContent = normalizeSyncedMediaContent(
+    page.content,
+    replacement?.createdBlocks ?? [],
+  );
+  const syncedPage = {
+    ...page,
+    content: syncedContent,
+    notionPageId: toggle.id,
+    notionDatabaseId: undefined,
+    notionDataSourceId: undefined,
+    notionParentPageId: projectPage.id,
+    notionLastEditedTime: refreshedBlock.last_edited_time,
+    remoteRevision: refreshedBlock.last_edited_time,
+    syncState: 'saved',
+  };
+
+  store.notePages[page.id] = {
+    notionPageId: toggle.id,
+    parentPageId: projectPage.id,
+    title: page.title,
+    lastEditedTime: refreshedBlock.last_edited_time,
+    kind: 'thread',
+  };
+  appendLog(store, 'sync_thread_push', page.title);
+  await writeStore(store);
+
+  return {
+    projectPage,
+    page: syncedPage,
+    status: 'saved',
+    message: 'Synced thread to Notion.',
   };
 }
 

@@ -19,7 +19,7 @@ function createPage(id, title, parentPageId) {
   };
 }
 
-function createHelpers({ calls = [], pages = {}, children = {} } = {}) {
+function createHelpers({ calls = [], pages = {}, children = {}, responses = {} } = {}) {
   return createRootPageHelpers({
     appendLog: (_store, event, message) => calls.push(['log', event, message]),
     createChildPage: async (_store, parentPageId, title) => {
@@ -34,6 +34,10 @@ function createHelpers({ calls = [], pages = {}, children = {} } = {}) {
     listAllBlockChildren: async (_store, blockId) => children[blockId] ?? [],
     notionRequest: async (_store, endpoint) => {
       calls.push(['notion', endpoint]);
+      if (responses[endpoint]) {
+        return responses[endpoint]();
+      }
+
       const id = endpoint.replace('/pages/', '');
       const page = pages[id];
 
@@ -93,6 +97,34 @@ test('ensureJotRootPage falls back to workspace root when selected page is inacc
   assert.deepEqual(calls.filter((call) => call[0].startsWith('create')), [
     ['create-workspace', 'Jot'],
   ]);
+});
+
+test('ensureJotRootPage falls back when selected id is a block', async () => {
+  const calls = [];
+  const store = { logs: [], projectPages: {} };
+  const helpers = createHelpers({
+    calls,
+    pages: {},
+    responses: {
+      '/pages/block-id': () => {
+        throw Object.assign(
+          new Error('Provided ID block-id is a block, not a page. Use the retrieve block API instead'),
+          { code: 'validation_error', status: 400 },
+        );
+      },
+    },
+  });
+
+  const root = await helpers.ensureJotRootPage(store, {
+    selectedParentPageId: 'block-id',
+  });
+
+  assert.equal(root.id, 'workspace-root');
+  assert(calls.some((call) =>
+    call[0] === 'log' &&
+    call[1] === 'root_parent_inaccessible' &&
+    call[2].includes('block, not a page'),
+  ));
 });
 
 test('ensureProjectRootPage reuses existing project child under adopted root by title', async () => {
