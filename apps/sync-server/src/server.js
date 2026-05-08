@@ -13,6 +13,7 @@ import {
   notionBlocksToTiptapDocument,
   tiptapDocumentToNotionBlocks,
 } from './blockConversion.js';
+import { importManagedBlocks as importManagedBlocksWithDependencies } from './importManagedBlocks.js';
 import { replaceManagedBlocks as replaceManagedBlocksWithDependencies } from './managedBlocks.js';
 import { createNotionRequester, uploadFileToNotion } from './notionRequest.js';
 import { pushPageToNotionCore } from './pageSync.js';
@@ -63,7 +64,6 @@ const {
   ensureProjectDatabase,
   ensureProjectPage,
   ensureThreadToggle,
-  importThreadContent,
   reloadProjectDatabaseFromNotion,
   updateThreadToggleTitle,
 } = createProjectDatabaseHelpers({
@@ -1452,6 +1452,7 @@ async function replaceManagedBlocks(store, localPageId, notionPageId, content) {
     listAllBlockChildren,
     deleteManagedBlock,
     appendManagedBlocks,
+    updateManagedBlock,
     tiptapDocumentToNotionBlocks,
     kindFromNotionBlock,
     hash,
@@ -1464,7 +1465,14 @@ async function deleteManagedBlock(store, blockId) {
   });
 }
 
-async function appendManagedBlocks(store, notionPageId, notionBlocks) {
+async function updateManagedBlock(store, blockId, notionBlock) {
+  return notionRequest(store, `/blocks/${blockId}`, {
+    method: 'PATCH',
+    body: updateBodyFromNotionBlock(notionBlock),
+  });
+}
+
+async function appendManagedBlocks(store, notionPageId, notionBlocks, position) {
   const createdBlocks = [];
 
   for (const batch of chunks(notionBlocks, 100)) {
@@ -1473,37 +1481,40 @@ async function appendManagedBlocks(store, notionPageId, notionBlocks) {
     try {
       const response = await notionRequest(store, `/blocks/${notionPageId}/children`, {
         method: 'PATCH',
-        body: { children: batch },
+        body: { children: batch, ...(position ? { position } : {}) },
       });
       results = response.results;
     } catch {
-      results = await appendBlocksWithFallback(store, notionPageId, batch);
+      results = await appendBlocksWithFallback(store, notionPageId, batch, position);
     }
 
     createdBlocks.push(...results);
+    position = positionAfterCreatedBlocks(position, results);
   }
 
   return createdBlocks;
 }
 
-async function appendBlocksWithFallback(store, notionPageId, blocks) {
+async function appendBlocksWithFallback(store, notionPageId, blocks, position) {
   const results = [];
 
   for (const block of blocks) {
     try {
       const response = await notionRequest(store, `/blocks/${notionPageId}/children`, {
         method: 'PATCH',
-        body: { children: [block] },
+        body: { children: [block], ...(position ? { position } : {}) },
       });
       results.push(...response.results);
+      position = positionAfterCreatedBlocks(position, response.results);
     } catch {
       const fallback = mediaFallbackBlock(block);
       try {
         const response = await notionRequest(store, `/blocks/${notionPageId}/children`, {
           method: 'PATCH',
-          body: { children: [fallback] },
+          body: { children: [fallback], ...(position ? { position } : {}) },
         });
         results.push(...response.results);
+        position = positionAfterCreatedBlocks(position, response.results);
       } catch {
         // fallback also rejected — skip block rather than aborting the whole page
       }
@@ -1511,6 +1522,27 @@ async function appendBlocksWithFallback(store, notionPageId, blocks) {
   }
 
   return results;
+}
+
+function updateBodyFromNotionBlock(block) {
+  if (!block?.type) {
+    return {};
+  }
+
+  return {
+    [block.type]: block[block.type] ?? {},
+  };
+}
+
+function positionAfterCreatedBlocks(position, createdBlocks) {
+  const lastBlock = createdBlocks?.[createdBlocks.length - 1];
+
+  return lastBlock?.id
+    ? {
+        type: 'after_block',
+        after_block: { id: lastBlock.id },
+      }
+    : position;
 }
 
 function mediaFallbackBlock(block) {
@@ -1539,28 +1571,12 @@ function mediaUrlFromNotionBlock(block) {
 }
 
 async function importManagedBlocks(store, page) {
-  const threadContent = await importThreadContent(store, page).catch(() => null);
-
-  if (threadContent) {
-    return threadContent;
-  }
-
-  const mappings = store.blockMappings[page.id] ?? [];
-
-  if (!mappings.length) {
-    return null;
-  }
-
-  const children = await listAllBlockChildren(store, page.notionPageId);
-  const managedIds = new Set(mappings.map((mapping) => mapping.notionBlockId));
-  const managedBlocks = children.filter((block) => managedIds.has(block.id));
-
-  if (managedBlocks.length !== mappings.length) {
-    return null;
-  }
-
-  const imported = notionBlocksToTiptapDocument(managedBlocks);
-  return imported.content?.length ? imported : null;
+  return importManagedBlocksWithDependencies({
+    hash,
+    listAllBlockChildren,
+    page,
+    store,
+  });
 }
 
 async function listAllBlockChildren(store, blockId) {

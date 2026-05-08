@@ -15,6 +15,7 @@ import {
   hasPendingTransientMedia,
   sanitizeMediaForSync,
 } from '@/src/extensions/mediaContent';
+import { JotBlockIds, normalizeJotBlockIds } from '@/src/extensions/jotBlockIds';
 import {
   AUDIO_UPLOAD_MAX_BYTES,
   IMAGE_UPLOAD_MAX_BYTES,
@@ -136,6 +137,7 @@ const editor = useEditor({
       link: false,
     }),
     JotLink,
+    JotBlockIds,
     PortableTextEditingKit,
     MediaKit,
   ],
@@ -1007,7 +1009,7 @@ function saveEditorContentInBackground() {
     return;
   }
 
-  const content = sanitizeMediaForSync(editorContent);
+  const content = normalizeJotBlockIds(sanitizeMediaForSync(editorContent));
   const title = pageTitleDraft.value;
 
   lastAppliedContent = JSON.stringify(content);
@@ -1050,7 +1052,7 @@ async function runEditorSaveLoop() {
         return;
       }
 
-      const content = sanitizeMediaForSync(editorContent);
+      const content = normalizeJotBlockIds(sanitizeMediaForSync(editorContent));
       lastAppliedContent = JSON.stringify(content);
       await store.saveCurrentPageContent(content, {
         preserveLocalContent: true,

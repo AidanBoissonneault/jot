@@ -97,10 +97,48 @@ function mergeNode(localNode: DocumentContent, syncedNode: DocumentContent): Doc
 
   return {
     ...localNode,
-    content: localNode.content.map((child, index) =>
-      syncedNode.content?.[index] ? mergeNode(child, syncedNode.content[index]) : child,
-    ),
+    content: mergeContent(localNode.content, syncedNode.content),
   };
+}
+
+function mergeContent(
+  localContent: DocumentContent[],
+  syncedContent: DocumentContent[],
+): DocumentContent[] {
+  const localMediaIds = new Set(
+    localContent
+      .filter(isRenderableMediaNode)
+      .map(nodeId)
+      .filter((id): id is string => Boolean(id)),
+  );
+  const localMediaSources = new Set(
+    localContent
+      .filter(isRenderableMediaNode)
+      .map(mediaSrc)
+      .filter((src): src is string => Boolean(src)),
+  );
+  const merged = localContent.map((child, index) =>
+    syncedContent[index] ? mergeNode(child, syncedContent[index]) : child,
+  );
+
+  syncedContent.forEach((syncedNode, index) => {
+    if (
+      !isRenderableMediaNode(syncedNode) ||
+      hasMatchingMediaNode(syncedNode, localContent[index], localMediaIds, localMediaSources)
+    ) {
+      return;
+    }
+
+    const insertAt = Math.min(index, merged.length);
+    merged.splice(insertAt, 0, syncedNode);
+    const id = nodeId(syncedNode);
+    const src = mediaSrc(syncedNode);
+
+    if (id) localMediaIds.add(id);
+    if (src) localMediaSources.add(src);
+  });
+
+  return merged;
 }
 
 function markNode(node: DocumentContent): DocumentContent {
@@ -139,4 +177,39 @@ function isHttpUrl(value: string) {
 
 function isUploadableMediaNode(node: DocumentContent) {
   return node.type === 'image' || node.type === 'audio';
+}
+
+function isRenderableMediaNode(node: DocumentContent) {
+  if (!['image', 'audio', 'youtube'].includes(String(node.type))) {
+    return false;
+  }
+
+  return isHttpUrl(mediaSrc(node) ?? '');
+}
+
+function hasMatchingMediaNode(
+  node: DocumentContent,
+  localNodeAtSameIndex: DocumentContent | undefined,
+  localIds: Set<string>,
+  localSources: Set<string>,
+) {
+  const id = nodeId(node);
+  const src = mediaSrc(node);
+
+  return Boolean(
+    (isUploadableMediaNode(localNodeAtSameIndex ?? {}) &&
+      localNodeAtSameIndex?.type === node.type) ||
+    (id && localIds.has(id)) ||
+    (src && localSources.has(src)),
+  );
+}
+
+function nodeId(node: DocumentContent) {
+  const value = node.attrs?.jotBlockId;
+  return typeof value === 'string' && value ? value : undefined;
+}
+
+function mediaSrc(node: DocumentContent) {
+  const value = node.attrs?.src;
+  return typeof value === 'string' && value ? value : undefined;
 }

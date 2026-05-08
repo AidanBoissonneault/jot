@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   notionBlocksToTiptapDocument,
+  notionBlocksToTiptapDocumentStrict,
   tiptapDocumentToNotionBlocks,
 } from '../src/blockConversion.js';
 
@@ -143,6 +144,40 @@ test('Notion file image imports as Tiptap image with file URL', () => {
       },
     },
   ]);
+});
+
+test('strict Notion block import keeps supported image blocks', () => {
+  const doc = notionBlocksToTiptapDocumentStrict([
+    {
+      type: 'image',
+      image: {
+        type: 'file',
+        file: {
+          url: 'https://secure.notion-static.com/image.png',
+        },
+      },
+    },
+  ]);
+
+  assert.deepEqual(doc.content, [
+    {
+      type: 'image',
+      attrs: {
+        src: 'https://secure.notion-static.com/image.png',
+      },
+    },
+  ]);
+});
+
+test('strict Notion block import rejects unsupported blocks', () => {
+  const doc = notionBlocksToTiptapDocumentStrict([
+    {
+      type: 'table',
+      table: {},
+    },
+  ]);
+
+  assert.equal(doc, null);
 });
 
 test('tiptap YouTube syncs to Notion external video block', () => {

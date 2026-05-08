@@ -13,6 +13,7 @@ import type {
   SourceOpenPayload,
 } from '@/src/types/messages';
 import { markUnrecoverableTransientMedia } from '@/src/extensions/mediaContent';
+import { normalizeJotBlockIds } from '@/src/extensions/jotBlockIds';
 
 type JotStorage = {
   activePageIdsByProject?: Record<string, string>;
@@ -107,14 +108,14 @@ const pendingTempPageSaves = new Map<string, ProjectPage>();
 const projectReconciliations = new Map<string, Promise<string>>();
 
 function emptyDocument(): DocumentContent {
-  return {
+  return normalizeJotBlockIds({
     type: 'doc',
     content: [
       {
         type: 'paragraph',
       },
     ],
-  };
+  });
 }
 
 function textParagraph(text: string, marks?: DocumentContent['marks']): DocumentContent {
@@ -292,7 +293,7 @@ async function readStorage(): Promise<Required<JotStorage>> {
     : stored.pages ?? createDefaultPages(projects)
   ).map((page) => ({
     ...page,
-    content: markUnrecoverableTransientMedia(page.content),
+    content: normalizeJotBlockIds(markUnrecoverableTransientMedia(page.content)),
     localRevision: page.localRevision ?? crypto.randomUUID(),
     status: page.status ?? 'active',
     syncState: page.syncState ?? 'saved',
@@ -362,11 +363,11 @@ function appendContent(page: ProjectPage, content: DocumentContent[]): ProjectPa
 
   return markPageDirty({
     ...page,
-    content: {
+    content: normalizeJotBlockIds({
       ...page.content,
       type: 'doc',
       content: [...existingContent, ...content],
-    },
+    }),
   });
 }
 
@@ -526,16 +527,20 @@ async function requestServer<T>(
 
 async function syncPushPage(page: ProjectPage, project: Project): Promise<ProjectPage> {
   const { syncConfig } = await readStorage();
+  const normalizedPage = {
+    ...page,
+    content: normalizeJotBlockIds(page.content),
+  };
 
   if (!syncConfig.connected) {
-    return withSyncStatus(page, 'stale', 'Connect Notion to sync this page.');
+    return withSyncStatus(normalizedPage, 'stale', 'Connect Notion to sync this page.');
   }
 
   try {
     const response = await requestServer<SyncPageResponse>('/sync/push', {
       method: 'POST',
       body: JSON.stringify({
-        page,
+        page: normalizedPage,
         project,
         selectedParentPageId: syncConfig.selectedParentPageId,
         defaultParentTitle: project.name,
@@ -551,15 +556,15 @@ async function syncPushPage(page: ProjectPage, project: Project): Promise<Projec
 
     return response.page
       ? {
-          ...page,
+          ...normalizedPage,
           ...response.page,
           syncMessage: response.message,
           syncState: response.status,
         }
-      : withSyncStatus(page, response.status, response.message);
+      : withSyncStatus(normalizedPage, response.status, response.message);
   } catch (error) {
     return withSyncStatus(
-      page,
+      normalizedPage,
       'error',
       error instanceof Error ? error.message : 'Unable to sync this page.',
     );
@@ -1039,7 +1044,7 @@ export const notionClient = {
     const projects = response.projects.map(normalizeProject).sort(sortProjectsByUpdatedDesc);
     const pages = response.pages.map((page) => ({
       ...page,
-      content: markUnrecoverableTransientMedia(page.content),
+      content: normalizeJotBlockIds(markUnrecoverableTransientMedia(page.content)),
       localRevision: page.localRevision ?? crypto.randomUUID(),
       status: page.status ?? 'active',
       syncState: page.syncState ?? 'saved',
@@ -1374,7 +1379,10 @@ export const notionClient = {
       throw new Error('This project is no longer available.');
     }
 
-    const updatedPage = markPageDirty(page);
+    const updatedPage = markPageDirty({
+      ...page,
+      content: normalizeJotBlockIds(page.content),
+    });
 
     await writeStorage({
       pages: pages.map((storedPage) =>

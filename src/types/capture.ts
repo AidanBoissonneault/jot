@@ -77,11 +77,15 @@ export type CreateCaptureInput = Omit<Capture, 'id' | 'createdAt'> & {
 
 export type NotionBlockMapping = {
   localPageId: string;
+  jotBlockId?: string;
   localNodeId?: string;
   captureId?: string;
   notionBlockId: string;
-  kind: 'page-title' | 'paragraph' | 'heading' | 'quote' | 'task' | 'source';
+  kind: 'page-title' | 'paragraph' | 'heading' | 'quote' | 'task' | 'source' | 'media' | 'divider' | 'code';
   lastSyncedHash: string;
+  oldState?: unknown;
+  newState?: unknown;
+  order?: number;
 };
 
 export type SyncConfig = {

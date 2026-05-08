@@ -82,6 +82,34 @@ describe('media content helpers', () => {
       uploadState: 'done',
     });
   });
+
+  it('keeps newly synced Notion images when preserving newer local content', () => {
+    const local = doc([paragraph('Local draft')]);
+    const synced = doc([
+      paragraph('Local draft'),
+      image({
+        src: 'https://secure.notion-static.com/image.png',
+        jotBlockId: 'remote-image',
+      }),
+    ]);
+
+    expect(mergeSyncedMediaContent(local, synced).content).toEqual([
+      paragraph('Local draft'),
+      image({
+        src: 'https://secure.notion-static.com/image.png',
+        jotBlockId: 'remote-image',
+      }),
+    ]);
+  });
+
+  it('does not append non-media remote content while preserving local drafts', () => {
+    const local = doc([paragraph('Local draft')]);
+    const synced = doc([paragraph('Remote edit'), paragraph('Remote addition')]);
+
+    expect(mergeSyncedMediaContent(local, synced).content).toEqual([
+      paragraph('Local draft'),
+    ]);
+  });
 });
 
 function doc(content: DocumentContent[]): DocumentContent {

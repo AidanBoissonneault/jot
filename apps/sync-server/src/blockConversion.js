@@ -192,6 +192,25 @@ export function notionBlocksToTiptapDocument(blocks) {
   };
 }
 
+export function notionBlocksToTiptapDocumentStrict(blocks) {
+  const content = [];
+
+  for (const block of blocks) {
+    const node = notionBlockToTiptapNode(block);
+
+    if (!node) {
+      return null;
+    }
+
+    content.push(node);
+  }
+
+  return {
+    type: 'doc',
+    content,
+  };
+}
+
 function notionBlockToTiptapNode(block) {
   if (block.type?.startsWith('heading_')) {
     return {

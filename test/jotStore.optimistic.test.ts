@@ -70,7 +70,7 @@ describe('optimistic project creation', () => {
     expect(requestBody.project.category).toBe('');
     expect(requestBody.project.createdAt).toEqual(expect.any(String));
     expect(requestBody.project.updatedAt).toEqual(expect.any(String));
-    expect(requestBody.project.stateContent).toEqual(emptyDocument());
+    expect(stripJotBlockIds(requestBody.project.stateContent)).toEqual(emptyDocument());
   });
 
   test('appears and is selected before project sync settles', async () => {
@@ -351,7 +351,7 @@ describe('optimistic page creation', () => {
     await store.createPage();
 
     expect(store.currentPage?.id).toMatch(/^temp-page-/);
-    expect(store.currentPage?.content).toEqual(emptyDocument());
+    expect(stripJotBlockIds(store.currentPage?.content)).toEqual(emptyDocument());
     expect(store.pages.some((page) => page.id === store.currentPage?.id)).toBe(true);
     expect(store.saveStatus).toBe('creating');
   });
@@ -401,7 +401,7 @@ describe('optimistic page creation', () => {
       expect(store.currentPage?.id).not.toBe(tempPageId),
     );
 
-    expect(store.currentPage?.content).toEqual(editedContent);
+    expect(stripJotBlockIds(store.currentPage?.content)).toEqual(editedContent);
     expect(store.currentPage?.notionPageId).toBe('notion-page');
   });
 
@@ -576,7 +576,7 @@ describe('project page caching', () => {
 
     await store.selectPage('page-two');
 
-    expect(store.currentPage?.content).toEqual(docWithText('cached body'));
+    expect(stripJotBlockIds(store.currentPage?.content)).toEqual(docWithText('cached body'));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
 
     pagePull.resolve(jsonResponse({
@@ -681,6 +681,61 @@ describe('project page caching', () => {
     expect(store.currentPage?.remoteRevision).toBe('remote-2');
   });
 
+  test('refreshing a selected page keeps Notion-added images with newer local content', async () => {
+    const pagePull = deferred<Response>();
+    vi.stubGlobal('fetch', vi.fn(() => pagePull.promise));
+    const syncedBasePage = {
+      ...basePage,
+      localRevision: 'local-1',
+      notionPageId: 'notion-page',
+      remoteRevision: 'remote-1',
+    };
+    const store = useJotStore();
+
+    resetBrowserStorage({
+      activePageIdsByProject: { 'project-jot': 'page-jot' },
+      currentProjectId: 'project-jot',
+      hasMigratedCapturesToPages: true,
+      pages: [syncedBasePage],
+      projects: [baseProject],
+      syncConfig: connectedConfig,
+    });
+    await seedStore(store, [syncedBasePage]);
+
+    const refreshPromise = store.refreshSelectedPage('page-jot');
+    store.currentPage = {
+      ...store.currentPage!,
+      content: docWithText('newer local draft'),
+      localRevision: 'local-2',
+    };
+
+    pagePull.resolve(jsonResponse({
+      status: 'saved',
+      page: {
+        ...syncedBasePage,
+        content: docWithNodes([
+          paragraph('remote content'),
+          image({
+            src: 'https://secure.notion-static.com/image.png',
+            jotBlockId: 'remote-image',
+          }),
+        ]),
+        remoteRevision: 'remote-2',
+        syncState: 'saved',
+      },
+    }));
+    await refreshPromise;
+
+    expect(store.currentPage?.content.content).toEqual([
+      paragraph('newer local draft'),
+      image({
+        src: 'https://secure.notion-static.com/image.png',
+        jotBlockId: 'remote-image',
+      }),
+    ]);
+    expect(store.currentPage?.remoteRevision).toBe('remote-2');
+  });
+
   test('runtime page updates do not overwrite newer active page content', async () => {
     const store = useJotStore();
     const localPage = {
@@ -755,6 +810,52 @@ function docWithParagraphs(lines: string[]): DocumentContent {
       type: 'paragraph',
       content: [{ type: 'text', text: line }],
     })),
+  };
+}
+
+function docWithNodes(content: DocumentContent[]): DocumentContent {
+  return {
+    type: 'doc',
+    content,
+  };
+}
+
+function paragraph(text: string): DocumentContent {
+  return {
+    type: 'paragraph',
+    content: [{ type: 'text', text }],
+  };
+}
+
+function image(attrs: Record<string, unknown>): DocumentContent {
+  return {
+    type: 'image',
+    attrs,
+  };
+}
+
+function stripJotBlockIds(content: DocumentContent | undefined): DocumentContent | undefined {
+  if (!content) {
+    return content;
+  }
+
+  const rest = { ...content };
+  const originalContent = content.content;
+  delete rest.attrs;
+  delete rest.content;
+  const attrs = content.attrs
+    ? Object.fromEntries(
+        Object.entries(content.attrs).filter(([key]) => key !== 'jotBlockId'),
+      )
+    : undefined;
+  const children = originalContent
+    ?.map(stripJotBlockIds)
+    .filter((child): child is DocumentContent => Boolean(child));
+
+  return {
+    ...rest,
+    ...(attrs && Object.keys(attrs).length ? { attrs } : {}),
+    ...(children ? { content: children } : {}),
   };
 }
 
