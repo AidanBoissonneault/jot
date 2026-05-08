@@ -1,0 +1,18 @@
+name = "jot-sync"
+main = "src/worker.js"
+compatibility_date = "2025-05-01"
+compatibility_flags = ["nodejs_compat"]
+
+[vars]
+NOTION_VERSION = "2026-03-11"
+JOT_ROOT_PAGE_TITLE = "Jot"
+# Set this to your actual workers.dev URL after deploying once
+WORKER_URL = "https://jot-sync.YOUR_SUBDOMAIN.workers.dev"
+
+# Secrets — set with: wrangler secret put <NAME>
+#   NOTION_OAUTH_CLIENT_ID
+#   NOTION_OAUTH_CLIENT_SECRET
+#   SESSION_SECRET            (any random 32+ char string)
+#   JOT_EXTENSION_ORIGIN      (chrome-extension://YOUR_EXTENSION_ID)
+#   SUPABASE_URL              (Project Settings → API → Project URL)
+#   SUPABASE_SERVICE_KEY      (Project Settings → API → service_role key)

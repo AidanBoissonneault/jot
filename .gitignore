@@ -1,3 +1,7 @@
+.dev.vars
+.env
+.env.local
+
 # Logs
 logs
 *.log
