@@ -13,8 +13,19 @@ import type {
   CaptureSelectionPayload,
   SourceOpenPayload,
 } from '@/src/types/messages';
+import type {
+  CreateNotionPageResponse,
+  ListNotionPagesResponse,
+  MediaUploadResponse,
+  SyncPageResponse,
+  SyncProjectResponse,
+  SyncReloadResponse,
+  SyncSessionResponse,
+  SyncValidationResponse,
+} from '@/src/types/sync';
 import { markUnrecoverableTransientMedia } from '@/src/extensions/mediaContent';
 import { normalizeJotBlockIds } from '@/src/extensions/jotBlockIds';
+import { addPendingSync, listPendingSyncs, removePendingSync } from '@/src/services/syncQueue';
 
 type JotStorage = {
   activePageIdsByProject?: Record<string, string>;
@@ -24,44 +35,6 @@ type JotStorage = {
   pages?: ProjectPage[];
   projects?: Project[];
   syncConfig?: SyncConfig;
-};
-
-type SyncSessionResponse = {
-  authenticated?: boolean;
-  userName?: string;
-  userEmail?: string;
-  connected: boolean;
-  workspaceId?: string;
-  workspaceName?: string;
-};
-
-type SyncPageResponse = {
-  message?: string;
-  page?: ProjectPage;
-  parentPage?: NotionParentPage;
-  status: Exclude<SaveStatus, 'idle' | 'saving'>;
-};
-
-type SyncProjectResponse = {
-  message?: string;
-  parentPage?: NotionParentPage;
-  project?: Project;
-  status: Exclude<SaveStatus, 'idle' | 'saving'>;
-};
-
-type SyncValidationResponse = {
-  clearSelectedParentPage?: boolean;
-  uncachedPageIds?: string[];
-  uncachedProjectIds?: string[];
-};
-
-type SyncReloadResponse = {
-  activePageIdsByProject: Record<string, string>;
-  clearSelectedParentPage?: boolean;
-  currentProjectId?: string;
-  pages: ProjectPage[];
-  projects: Project[];
-  status: Exclude<SaveStatus, 'idle' | 'saving'>;
 };
 
 export type OptimisticProjectCreation = {
@@ -575,6 +548,11 @@ async function syncPushPage(page: ProjectPage, project: Project): Promise<Projec
         }
       : withSyncStatus(normalizedPage, response.status, response.message);
   } catch (error) {
+    // Network failure (TypeError) while connected — queue for replay on reconnect.
+    if (error instanceof TypeError) {
+      await addPendingSync(normalizedPage, project).catch(() => undefined);
+    }
+
     return withSyncStatus(
       normalizedPage,
       'error',
@@ -758,6 +736,38 @@ async function replayTempPageSave(tempPageId: string, realPage: ProjectPage) {
     title: pendingPage.title,
     content: pendingPage.content,
   });
+}
+
+async function replayPendingSyncs(): Promise<void> {
+  const ops = await listPendingSyncs();
+  if (!ops.length) return;
+
+  const { pages } = await readStorage();
+
+  for (const op of ops) {
+    const currentPage = pages.find((p) => p.id === op.id);
+
+    if (!currentPage || currentPage.localRevision !== op.page.localRevision) {
+      await removePendingSync(op.id).catch(() => undefined);
+      continue;
+    }
+
+    try {
+      const { projects } = await readStorage();
+      const project = projects.find((p) => p.id === op.project.id);
+      if (!project) {
+        await removePendingSync(op.id).catch(() => undefined);
+        continue;
+      }
+
+      const result = await syncPushPage(op.page, project);
+      if (result.syncState !== 'error') {
+        await persistPage(result);
+      }
+    } finally {
+      await removePendingSync(op.id).catch(() => undefined);
+    }
+  }
 }
 
 async function updateStoredSyncConfig(config: Partial<SyncConfig>): Promise<SyncConfig> {
@@ -979,7 +989,7 @@ export const notionClient = {
       syncConfig,
     );
 
-    return updateStoredSyncConfig({
+    const nextConfig = await updateStoredSyncConfig({
       authenticated: session.authenticated,
       userName: session.userName,
       userEmail: session.userEmail,
@@ -987,6 +997,12 @@ export const notionClient = {
       workspaceId: session.workspaceId,
       workspaceName: session.workspaceName,
     });
+
+    if (session.connected) {
+      replayPendingSyncs().catch(() => undefined);
+    }
+
+    return nextConfig;
   },
 
   async validateNotionCache(): Promise<void> {
@@ -1119,14 +1135,14 @@ export const notionClient = {
     const search = query.trim()
       ? `?query=${encodeURIComponent(query.trim())}`
       : '';
-    const response = await requestServer<{ pages: NotionParentPage[] }>(
+    const response = await requestServer<ListNotionPagesResponse>(
       `/notion/pages${search}`,
     );
     return response.pages;
   },
 
   async createNotionParentPage(title: string): Promise<NotionParentPage> {
-    const response = await requestServer<{ page: NotionParentPage }>('/notion/pages', {
+    const response = await requestServer<CreateNotionPageResponse>('/notion/pages', {
       method: 'POST',
       body: JSON.stringify({ title }),
     });
@@ -1463,7 +1479,7 @@ export const notionClient = {
     }
     const dataBase64 = btoa(binary);
 
-    const response = await requestServer<{ fileUploadId: string }>('/media/upload', {
+    const response = await requestServer<MediaUploadResponse>('/media/upload', {
       method: 'POST',
       body: JSON.stringify({ dataBase64, mimeType, filename }),
     });

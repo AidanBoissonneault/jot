@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2022", "DOM"],
+    "types": ["node"],
+    "allowImportingTsExtensions": false,
+    "isolatedModules": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "strict": false,
+    "paths": {
+      "@/*": ["../../*"]
+    }
+  },
+  "include": ["src/**/*.ts", "test/**/*.ts", "../../src/types/capture.ts", "../../src/types/sync.ts"]
+}

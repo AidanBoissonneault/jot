@@ -4,9 +4,10 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "node src/server.js",
-    "start": "node src/server.js",
-    "test": "node test/blockConversion.test.js && node test/importManagedBlocks.test.js && node test/managedBlocks.test.js && node test/rootPages.test.js && node test/projectSync.test.js && node test/projectDatabase.test.js && node test/notionRequest.test.js && node test/syncQueue.test.js && node test/pageSync.test.js"
+    "dev": "tsx src/server.ts",
+    "start": "tsx src/server.ts",
+    "test": "tsx --test test/blockConversion.test.ts test/importManagedBlocks.test.ts test/managedBlocks.test.ts test/rootPages.test.ts test/projectSync.test.ts test/projectDatabase.test.ts test/notionRequest.test.ts test/syncQueue.test.ts test/pageSync.test.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
     "@fastify/cors": "^11.2.0",
