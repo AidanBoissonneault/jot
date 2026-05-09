@@ -2,13 +2,17 @@ import { describe, expect, it } from 'vitest';
 import {
   AUDIO_UPLOAD_MAX_BYTES,
   IMAGE_UPLOAD_MAX_BYTES,
+  JOT_IMAGE_MOVE_MIME,
   isUploadableAudioFile,
   isUploadableImageFile,
+  isEditorInternalDrop,
   peekUploadableAudioDrop,
   peekUploadableImageDrop,
+  readJotImageMovePayload,
   readAudioDropSrc,
   readImageDropSrc,
   readYoutubeDropSrc,
+  rememberJotImageMovePayload,
 } from '@/src/extensions/mediaDrop';
 
 describe('media drop helpers', () => {
@@ -114,6 +118,95 @@ describe('media drop helpers', () => {
     ).toBeNull();
   });
 
+  it('detects editor-internal ProseMirror drags', () => {
+    expect(
+      isEditorInternalDrop(dropData({
+        'text/html': '<img src="https://example.com/capture.png">',
+      })),
+    ).toBe(false);
+
+    expect(
+      isEditorInternalDrop(
+        dropData({
+          'application/x-prosemirror-slice': '0 0 []',
+          'text/html': '<img src="https://example.com/capture.png">',
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it('reads explicit image move drag payloads', () => {
+    expect(
+      readJotImageMovePayload(
+        dropData({
+          [JOT_IMAGE_MOVE_MIME]: JSON.stringify({
+            kind: 'image',
+            pos: 3,
+            attrs: { src: 'https://example.com/capture.png', width: '42%' },
+          }),
+        }),
+      ),
+    ).toEqual({
+      kind: 'image',
+      pos: 3,
+      attrs: { src: 'https://example.com/capture.png', width: '42%' },
+    });
+
+    expect(
+      readJotImageMovePayload(
+        dropData({
+          [JOT_IMAGE_MOVE_MIME]: JSON.stringify({ kind: 'image', pos: -1, attrs: {} }),
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  it('falls back to remembered same-session image move payloads', () => {
+    rememberJotImageMovePayload({
+      kind: 'image',
+      pos: 7,
+      attrs: { src: 'https://example.com/remembered.png', width: '55%' },
+    });
+
+    expect(
+      readJotImageMovePayload(
+        dropData({
+          'application/x-prosemirror-slice': '0 0 []',
+          'text/html': '<img src="https://example.com/remembered.png">',
+        }),
+      ),
+    ).toEqual({
+      kind: 'image',
+      pos: 7,
+      attrs: { src: 'https://example.com/remembered.png', width: '55%' },
+    });
+  });
+
+  it('treats remembered chrome-extension blob image drops as image moves', () => {
+    rememberJotImageMovePayload({
+      kind: 'image',
+      pos: 11,
+      attrs: {
+        src: 'https://fanatical.imgix.net/product/original/photo.jpg?auto=compress,format',
+      },
+    });
+
+    expect(
+      readJotImageMovePayload(
+        dropData({
+          'text/plain':
+            'blob:chrome-extension://aenmkafokhhihmlkeoijbbnbfneohnkj/f534f216-f53e-4ec7-b0e8-baf322412d8b',
+        }),
+      ),
+    ).toEqual({
+      kind: 'image',
+      pos: 11,
+      attrs: {
+        src: 'https://fanatical.imgix.net/product/original/photo.jpg?auto=compress,format',
+      },
+    });
+  });
+
   it('selects only image files for upload and applies the 20 MB limit', () => {
     const image = new File(['pixels'], 'capture.png', { type: 'image/png' });
     const text = new File(['notes'], 'notes.txt', { type: 'text/plain' });
@@ -148,6 +241,7 @@ describe('media drop helpers', () => {
 function dropData(values: Record<string, string>, files: File[] = []) {
   return {
     files,
+    types: Object.keys(values),
     getData(type: string) {
       return values[type] ?? '';
     },

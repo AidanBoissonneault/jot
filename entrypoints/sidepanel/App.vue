@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { EditorContent, useEditor } from '@tiptap/vue-3';
-import { TextSelection } from '@tiptap/pm/state';
+import { NodeSelection, TextSelection } from '@tiptap/pm/state';
 import type { EditorView } from '@tiptap/pm/view';
 import StarterKit from '@tiptap/starter-kit';
 import {
@@ -19,10 +19,13 @@ import { JotBlockIds, normalizeJotBlockIds } from '@/src/extensions/jotBlockIds'
 import {
   AUDIO_UPLOAD_MAX_BYTES,
   IMAGE_UPLOAD_MAX_BYTES,
+  type JotImageMovePayload,
+  isEditorInternalDrop,
   isUploadableAudioFile,
   isUploadableImageFile,
   peekUploadableAudioDrop,
   peekUploadableImageDrop,
+  readJotImageMovePayload,
   readAudioDropSrc,
   readImageDropSrc,
   readYoutubeDropSrc,
@@ -137,6 +140,7 @@ const editor = useEditor({
         levels: [1, 2, 3, 4, 5, 6],
       },
       link: false,
+      underline: false,
     }),
     JotLink,
     JotBlockIds,
@@ -193,6 +197,28 @@ const editor = useEditor({
         event.preventDefault();
         insertCapturedTextAtDrop(view, event, jotPayload);
         return true;
+      }
+
+      const imageMovePayload = readJotImageMovePayload(event.dataTransfer);
+      if (imageMovePayload) {
+        event.preventDefault();
+        if (moveImageNodeAtDrop(view, event, imageMovePayload)) {
+          void saveEditorContentOptimistically();
+        }
+        return true;
+      }
+
+      const selectedImageMovePayload = readSelectedImageMovePayload(view, event);
+      if (selectedImageMovePayload) {
+        event.preventDefault();
+        if (moveImageNodeAtDrop(view, event, selectedImageMovePayload)) {
+          void saveEditorContentOptimistically();
+        }
+        return true;
+      }
+
+      if (isEditorInternalDrop(event.dataTransfer)) {
+        return false;
       }
 
       const uploadableInfo = peekUploadableImageDrop(event.dataTransfer);
@@ -1028,6 +1054,132 @@ function moveEditorSelectionToDrop(view: EditorView, event: DragEvent) {
       ),
     );
   }
+}
+
+function moveImageNodeAtDrop(
+  view: EditorView,
+  event: DragEvent,
+  payload: JotImageMovePayload,
+): boolean {
+  const imageType = view.state.schema.nodes.image;
+  const source = findImageMoveSource(view, payload);
+  const dropPos = view.posAtCoords({ left: event.clientX, top: event.clientY });
+
+  if (!imageType || !source || typeof dropPos?.pos !== 'number') {
+    return false;
+  }
+
+  const sourceFrom = source.pos;
+  const sourceTo = sourceFrom + source.node.nodeSize;
+
+  if (dropPos.pos >= sourceFrom && dropPos.pos <= sourceTo) {
+    view.dispatch(
+      view.state.tr.setSelection(NodeSelection.create(view.state.doc, sourceFrom)),
+    );
+    return true;
+  }
+
+  const rawInsertPos = imageBlockInsertPos(view.state.doc, dropPos.pos);
+  const movedNode = imageType.create(payload.attrs);
+  const insertPos = clampDocumentPosition(
+    dropPos.pos > sourceFrom ? rawInsertPos - source.node.nodeSize : rawInsertPos,
+    view.state.doc.content.size - source.node.nodeSize,
+  );
+  const tr = view.state.tr.delete(sourceFrom, sourceTo).insert(insertPos, movedNode);
+
+  if (tr.doc.nodeAt(insertPos)?.type === imageType) {
+    tr.setSelection(NodeSelection.create(tr.doc, insertPos));
+  } else {
+    tr.setSelection(TextSelection.near(tr.doc.resolve(insertPos)));
+  }
+
+  view.dispatch(tr.scrollIntoView());
+  return true;
+}
+
+function imageBlockInsertPos(doc: EditorView['state']['doc'], pos: number) {
+  const safePos = clampDocumentPosition(pos, doc.content.size);
+  const $pos = doc.resolve(safePos);
+
+  if ($pos.depth === 0) {
+    return safePos;
+  }
+
+  const blockStart = $pos.before(1);
+  const blockEnd = $pos.after(1);
+  const blockMiddle = blockStart + (blockEnd - blockStart) / 2;
+
+  return safePos <= blockMiddle ? blockStart : blockEnd;
+}
+
+function clampDocumentPosition(pos: number, max: number) {
+  return Math.min(Math.max(pos, 0), Math.max(max, 0));
+}
+
+function readSelectedImageMovePayload(
+  view: EditorView,
+  event: DragEvent,
+): JotImageMovePayload | null {
+  const { selection } = view.state;
+
+  if (
+    !(selection instanceof NodeSelection) ||
+    selection.node.type !== view.state.schema.nodes.image ||
+    !isChromeExtensionBlobImageDrop(event)
+  ) {
+    return null;
+  }
+
+  return {
+    kind: 'image',
+    pos: selection.from,
+    attrs: selection.node.attrs,
+  };
+}
+
+function isChromeExtensionBlobImageDrop(event: DragEvent) {
+  const plainText = event.dataTransfer?.getData('text/plain') ?? '';
+  const html = event.dataTransfer?.getData('text/html') ?? '';
+
+  return (
+    /^blob:chrome-extension:\/\//i.test(plainText.trim()) ||
+    /\bsrc\s*=\s*(?:"blob:chrome-extension:\/\/|'blob:chrome-extension:\/\/|blob:chrome-extension:\/\/)/i.test(
+      html,
+    )
+  );
+}
+
+function findImageMoveSource(view: EditorView, payload: JotImageMovePayload) {
+  const imageType = view.state.schema.nodes.image;
+  const nodeAtPayloadPos = view.state.doc.nodeAt(payload.pos);
+
+  if (nodeAtPayloadPos?.type === imageType) {
+    return { pos: payload.pos, node: nodeAtPayloadPos };
+  }
+
+  const payloadBlockId = String(payload.attrs.jotBlockId ?? '');
+  const payloadSrc = String(payload.attrs.src ?? '');
+  let fallback: { pos: number; node: NonNullable<typeof nodeAtPayloadPos> } | null = null;
+
+  view.state.doc.descendants((node, pos) => {
+    if (fallback || node.type !== imageType) {
+      return true;
+    }
+
+    if (payloadBlockId && node.attrs.jotBlockId === payloadBlockId) {
+      fallback = { pos, node };
+      return false;
+    }
+
+    if (payloadSrc && node.attrs.src === payloadSrc) {
+      fallback = { pos, node };
+      return false;
+    }
+
+    return true;
+  });
+
+  return fallback;
 }
 
 function clearFormatting() {
@@ -3223,6 +3375,49 @@ function textFromNode(node: DocumentContent): string {
 
 .editor :deep(.tiptap .jot-image-wrapper) {
   margin: 0 0 0.85rem;
+  max-width: 100%;
+  position: relative;
+  width: fit-content;
+}
+
+.editor :deep(.tiptap .jot-image-wrapper.is-selected) {
+  outline: 2px solid var(--jot-accent);
+  outline-offset: 3px;
+}
+
+.editor :deep(.tiptap .jot-image-wrapper.is-selected[data-jot-block-id]::before) {
+  background: var(--jot-accent);
+  border-radius: 4px;
+  color: var(--jot-surface);
+  content: attr(data-jot-block-id);
+  font-size: 0.68rem;
+  left: 0;
+  line-height: 1.25;
+  max-width: min(100%, 28ch);
+  overflow: hidden;
+  padding: 2px 5px;
+  position: absolute;
+  text-overflow: ellipsis;
+  top: -1.45rem;
+  white-space: nowrap;
+}
+
+.editor :deep(.tiptap .jot-image-wrapper .jot-image-resize-handle) {
+  background: var(--jot-accent);
+  border: 2px solid var(--jot-surface);
+  border-radius: 999px;
+  bottom: -7px;
+  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.22);
+  cursor: nwse-resize;
+  display: none;
+  height: 12px;
+  position: absolute;
+  right: -7px;
+  width: 12px;
+}
+
+.editor :deep(.tiptap .jot-image-wrapper.is-selected .jot-image-resize-handle) {
+  display: block;
 }
 
 .editor :deep(.tiptap .jot-image-wrapper.is-error),

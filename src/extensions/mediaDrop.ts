@@ -3,15 +3,134 @@ export const AUDIO_UPLOAD_MAX_BYTES = 20 * 1024 * 1024;
 
 export type UploadableImageDrop = { kind: 'file'; file: File };
 export type UploadableAudioDrop = { kind: 'file'; file: File };
+export type JotImageMovePayload = {
+  kind: 'image';
+  pos: number;
+  attrs: Record<string, unknown>;
+};
+
+type RememberedImageMovePayload = JotImageMovePayload & {
+  createdAt: number;
+};
 
 type DropData = {
   files?: FileList | File[] | null;
+  types?: readonly string[] | null;
   getData(type: string): string;
 };
 
 const IMAGE_URL_PATTERN = /\.(png|jpe?g|gif|webp|svg|avif)(\?[^#]*)?(#.*)?$/i;
 const AUDIO_URL_PATTERN = /\.(mp3|mpeg|m4a|aac|wav|ogg|oga|opus|webm)(\?[^#]*)?(#.*)?$/i;
 const YOUTUBE_HOST_PATTERN = /(^|\.)youtube(?:-nocookie)?\.com$|(^|\.)youtu\.be$/i;
+export const JOT_IMAGE_MOVE_MIME = 'application/x-jot-image-move';
+const PROSEMIRROR_SLICE_MIME = 'application/x-prosemirror-slice';
+const IMAGE_MOVE_MEMORY_TTL_MS = 30_000;
+
+let rememberedImageMovePayload: RememberedImageMovePayload | null = null;
+
+export function isEditorInternalDrop(dataTransfer: DropData | null | undefined): boolean {
+  return Array.from(dataTransfer?.types ?? []).includes(PROSEMIRROR_SLICE_MIME);
+}
+
+export function rememberJotImageMovePayload(payload: JotImageMovePayload) {
+  rememberedImageMovePayload = {
+    ...payload,
+    createdAt: Date.now(),
+  };
+}
+
+export function readJotImageMovePayload(
+  dataTransfer: DropData | null | undefined,
+): JotImageMovePayload | null {
+  const raw = dataTransfer?.getData(JOT_IMAGE_MOVE_MIME) ?? '';
+  const parsedPayload = parseJotImageMovePayload(raw);
+
+  if (parsedPayload) {
+    rememberedImageMovePayload = null;
+    return parsedPayload;
+  }
+
+  const rememberedPayload = readRememberedImageMovePayload(dataTransfer);
+
+  if (rememberedPayload) {
+    rememberedImageMovePayload = null;
+    return rememberedPayload;
+  }
+
+  return null;
+}
+
+function parseJotImageMovePayload(raw: string): JotImageMovePayload | null {
+  if (!raw) {
+    return null;
+  }
+
+  try {
+    const payload = JSON.parse(raw) as Partial<JotImageMovePayload>;
+
+    if (
+      payload.kind === 'image' &&
+      typeof payload.pos === 'number' &&
+      Number.isInteger(payload.pos) &&
+      payload.pos >= 0 &&
+      payload.attrs &&
+      typeof payload.attrs === 'object' &&
+      !Array.isArray(payload.attrs)
+    ) {
+      return {
+        kind: 'image',
+        pos: payload.pos,
+        attrs: payload.attrs as Record<string, unknown>,
+      };
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+}
+
+function readRememberedImageMovePayload(
+  dataTransfer: DropData | null | undefined,
+): JotImageMovePayload | null {
+  if (
+    !rememberedImageMovePayload ||
+    Date.now() - rememberedImageMovePayload.createdAt > IMAGE_MOVE_MEMORY_TTL_MS
+  ) {
+    rememberedImageMovePayload = null;
+    return null;
+  }
+
+  if (hasImageLikeDropData(dataTransfer)) {
+    return rememberedImageMovePayloadWithoutTimestamp();
+  }
+
+  return null;
+}
+
+function hasImageLikeDropData(dataTransfer: DropData | null | undefined): boolean {
+  const types = Array.from(dataTransfer?.types ?? []);
+  const src = String(rememberedImageMovePayload?.attrs.src ?? '');
+  const html = dataTransfer?.getData('text/html') ?? '';
+  const plainText = dataTransfer?.getData('text/plain') ?? '';
+  const droppedImageSrc = imageSrcFromHtml(html);
+
+  return (
+    isEditorInternalDrop(dataTransfer) ||
+    types.includes('Files') ||
+    Boolean(droppedImageSrc) ||
+    plainText.trim() === src ||
+    /^blob:chrome-extension:\/\//i.test(plainText.trim())
+  );
+}
+
+function rememberedImageMovePayloadWithoutTimestamp(): JotImageMovePayload {
+  return {
+    kind: rememberedImageMovePayload?.kind ?? 'image',
+    pos: rememberedImageMovePayload?.pos ?? 0,
+    attrs: rememberedImageMovePayload?.attrs ?? {},
+  };
+}
 
 export function readImageDropSrc(dataTransfer: DropData | null | undefined): string | null {
   const html = dataTransfer?.getData('text/html') ?? '';

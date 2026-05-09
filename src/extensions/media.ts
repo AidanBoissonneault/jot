@@ -2,6 +2,8 @@ import { Extension } from '@tiptap/core';
 import { Image } from '@tiptap/extension-image';
 import { Youtube } from '@tiptap/extension-youtube';
 import { Audio } from '@tiptap/extension-audio';
+import { NodeSelection } from '@tiptap/pm/state';
+import { JOT_IMAGE_MOVE_MIME, rememberJotImageMovePayload } from '@/src/extensions/mediaDrop';
 import { notionClient } from '@/src/services/notionClient';
 
 const DEFAULT_SYNC_SERVER_URL = 'http://localhost:8787';
@@ -16,15 +18,26 @@ export const JotImage = Image.extend({
       mimeType: { default: '' },
       kind: { default: 'image' },
       notionFileUploadId: { default: '' },
+      width: {
+        default: '',
+        parseHTML: (element: HTMLElement) => element.getAttribute('data-width') ?? '',
+        renderHTML: (attributes: Record<string, unknown>) => {
+          const width = normalizeImageWidth(attributes.width);
+          return width ? { 'data-width': width, style: `width: ${width}` } : {};
+        },
+      },
     };
   },
 
   addNodeView() {
-    return ({ node }) => {
+    return ({ node, editor, getPos }) => {
       const wrapper = document.createElement('div');
       wrapper.className = 'jot-image-wrapper';
+      wrapper.draggable = true;
+      wrapper.tabIndex = -1;
       const uploadState = String(node.attrs.uploadState ?? 'idle');
       const src = node.attrs.src ?? '';
+      let currentNode = node;
 
       if (uploadState === 'error') {
         wrapper.classList.add('is-error');
@@ -37,9 +50,12 @@ export const JotImage = Image.extend({
       }
 
       const img = document.createElement('img');
+      img.draggable = false;
       img.src = src;
       if (node.attrs.alt) img.alt = node.attrs.alt;
       if (node.attrs.title) img.title = node.attrs.title;
+      applyImageWidth(wrapper, img, node.attrs.width);
+      applyImageUploadState(wrapper, uploadState);
 
       img.addEventListener('error', () => {
         wrapper.removeChild(img);
@@ -52,8 +68,137 @@ export const JotImage = Image.extend({
       });
 
       wrapper.appendChild(img);
+      const resizeHandle = document.createElement('span');
+      resizeHandle.className = 'jot-image-resize-handle';
+      resizeHandle.setAttribute('aria-hidden', 'true');
+      wrapper.appendChild(resizeHandle);
 
-      return { dom: wrapper };
+      const selectImage = (event?: Event) => {
+        const pos = typeof getPos === 'function' ? getPos() : undefined;
+
+        if (typeof pos !== 'number') {
+          return;
+        }
+
+        event?.preventDefault();
+        editor.view.focus();
+        editor.view.dispatch(
+          editor.view.state.tr.setSelection(NodeSelection.create(editor.view.state.doc, pos)),
+        );
+      };
+
+      const onClick = (event: MouseEvent) => {
+        selectImage(event);
+      };
+
+      const onDragStart = (event: DragEvent) => {
+        const pos = typeof getPos === 'function' ? getPos() : undefined;
+
+        if (typeof pos !== 'number') {
+          return;
+        }
+
+        selectImage();
+        const payload = {
+          kind: 'image' as const,
+          pos,
+          attrs: currentNode.attrs,
+        };
+        rememberJotImageMovePayload(payload);
+        event.dataTransfer?.setData(
+          JOT_IMAGE_MOVE_MIME,
+          JSON.stringify(payload),
+        );
+        event.dataTransfer?.setData('text/plain', String(currentNode.attrs.src ?? ''));
+        event.dataTransfer?.setDragImage(img, 0, 0);
+      };
+
+      const onResizePointerDown = (event: PointerEvent) => {
+        const pos = typeof getPos === 'function' ? getPos() : undefined;
+
+        if (typeof pos !== 'number') {
+          return;
+        }
+
+        event.preventDefault();
+        event.stopPropagation();
+        selectImage();
+        resizeHandle.setPointerCapture(event.pointerId);
+
+        const parentWidth = wrapper.parentElement?.getBoundingClientRect().width ?? 0;
+        const maxWidth = Math.max(48, parentWidth || wrapper.getBoundingClientRect().width);
+        const ownerDocument = wrapper.ownerDocument;
+
+        const onPointerMove = (moveEvent: PointerEvent) => {
+          const left = wrapper.getBoundingClientRect().left;
+          const nextPixels = clamp(moveEvent.clientX - left, 48, maxWidth);
+          const nextWidth = `${((nextPixels / maxWidth) * 100).toFixed(2)}%`;
+
+          currentNode = currentNode.type.create(
+            { ...currentNode.attrs, width: nextWidth },
+            currentNode.content,
+            currentNode.marks,
+          );
+          applyImageWidth(wrapper, img, nextWidth);
+          editor.view.dispatch(
+            editor.view.state.tr.setNodeMarkup(pos, undefined, currentNode.attrs),
+          );
+        };
+
+        const onPointerUp = (upEvent: PointerEvent) => {
+          resizeHandle.releasePointerCapture(upEvent.pointerId);
+          ownerDocument.removeEventListener('pointermove', onPointerMove);
+          ownerDocument.removeEventListener('pointerup', onPointerUp);
+        };
+
+        ownerDocument.addEventListener('pointermove', onPointerMove);
+        ownerDocument.addEventListener('pointerup', onPointerUp);
+      };
+
+      wrapper.addEventListener('click', onClick);
+      wrapper.addEventListener('dragstart', onDragStart, true);
+      img.addEventListener('dragstart', onDragStart, true);
+      resizeHandle.addEventListener('pointerdown', onResizePointerDown);
+      applyImageBlockId(wrapper, currentNode.attrs.jotBlockId);
+
+      return {
+        dom: wrapper,
+        selectNode() {
+          wrapper.classList.add('is-selected');
+        },
+        deselectNode() {
+          wrapper.classList.remove('is-selected');
+        },
+        update(nextNode) {
+          if (
+            nextNode.type !== currentNode.type ||
+            String(nextNode.attrs.uploadState ?? 'idle') === 'error'
+          ) {
+            return false;
+          }
+
+          currentNode = nextNode;
+          applyImageBlockId(wrapper, nextNode.attrs.jotBlockId);
+          applyImageUploadState(wrapper, String(nextNode.attrs.uploadState ?? 'idle'));
+          img.src = String(nextNode.attrs.src ?? '');
+          img.alt = String(nextNode.attrs.alt ?? '');
+          img.title = String(nextNode.attrs.title ?? '');
+          applyImageWidth(wrapper, img, nextNode.attrs.width);
+          return true;
+        },
+        stopEvent(event) {
+          return (
+            event.target instanceof Element &&
+            event.target.closest('.jot-image-resize-handle') !== null
+          );
+        },
+        destroy() {
+          wrapper.removeEventListener('click', onClick);
+          wrapper.removeEventListener('dragstart', onDragStart, true);
+          img.removeEventListener('dragstart', onDragStart, true);
+          resizeHandle.removeEventListener('pointerdown', onResizePointerDown);
+        },
+      };
     };
   },
 });
@@ -234,6 +379,48 @@ function youtubeStartSeconds(value: string): number {
     Number(match[2] ?? 0) * 60 +
     Number(match[3] ?? 0)
   );
+}
+
+function normalizeImageWidth(value: unknown): string {
+  const width = String(value ?? '').trim();
+
+  if (/^\d+(?:\.\d+)?%$/.test(width)) {
+    return `${clamp(Number.parseFloat(width), 5, 100)}%`;
+  }
+
+  if (/^\d+(?:\.\d+)?px$/.test(width)) {
+    return `${Math.max(48, Number.parseFloat(width))}px`;
+  }
+
+  return '';
+}
+
+function applyImageWidth(wrapper: HTMLElement, img: HTMLImageElement, value: unknown) {
+  const width = normalizeImageWidth(value);
+  wrapper.style.width = width;
+  img.style.width = width ? '100%' : '';
+}
+
+function applyImageUploadState(wrapper: HTMLElement, uploadState: string) {
+  wrapper.classList.toggle('is-uploading', uploadState === 'uploading');
+}
+
+function applyImageBlockId(wrapper: HTMLElement, value: unknown) {
+  const blockId = typeof value === 'string' ? value : '';
+
+  if (blockId) {
+    wrapper.setAttribute('data-jot-block-id', blockId);
+    wrapper.setAttribute('data-jot-image-block-id', blockId);
+    wrapper.title = blockId;
+  } else {
+    wrapper.removeAttribute('data-jot-block-id');
+    wrapper.removeAttribute('data-jot-image-block-id');
+    wrapper.removeAttribute('title');
+  }
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(Math.max(value, min), max);
 }
 
 export const MediaKit = Extension.create({
