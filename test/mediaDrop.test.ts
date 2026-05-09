@@ -64,6 +64,12 @@ describe('media drop helpers', () => {
         'text/plain': 'https://www.youtube.com/shorts/dQw4w9WgXcQ',
       })),
     ).toBe('https://www.youtube.com/shorts/dQw4w9WgXcQ');
+
+    expect(
+      readYoutubeDropSrc(dropData({
+        'text/plain': 'https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ',
+      })),
+    ).toBe('https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ');
   });
 
   it('rejects non-video and non-YouTube URLs as YouTube drops', () => {

@@ -182,6 +182,23 @@ app.get('/logs', async (c) => {
 
 // ─── Notion routes ─────────────────────────────────────────────────────────────
 
+app.get('/youtube/embed', (c) => {
+  const src = c.req.query('src') ?? '';
+  const embedUrl = youtubeEmbedUrl(src);
+
+  if (!embedUrl) {
+    return c.text('Invalid YouTube URL.', 400);
+  }
+
+  c.header('Referrer-Policy', 'strict-origin-when-cross-origin');
+  c.header(
+    'Content-Security-Policy',
+    "default-src 'none'; frame-src https://www.youtube.com https://www.youtube-nocookie.com; style-src 'unsafe-inline';",
+  );
+
+  return c.html(youtubeEmbedPage(embedUrl));
+});
+
 app.get('/notion/pages', async (c) => {
   const query = c.req.query('query') ?? '';
   const store = await requireConnectedStore(c);
@@ -1164,6 +1181,102 @@ function mediaExtensionFromMimeType(mimeType) {
     'audio/mp4': 'm4a', 'audio/aac': 'aac', 'audio/wav': 'wav', 'audio/x-wav': 'wav',
     'audio/ogg': 'ogg', 'audio/opus': 'opus', 'audio/webm': 'webm',
   }[String(mimeType).toLowerCase()] ?? (String(mimeType).toLowerCase().startsWith('audio/') ? 'mp3' : 'png');
+}
+
+function youtubeEmbedUrl(value) {
+  const info = youtubeVideoInfo(value);
+
+  if (!info) {
+    return '';
+  }
+
+  const url = new URL(`https://www.youtube-nocookie.com/embed/${info.id}`);
+  url.searchParams.set('rel', '1');
+
+  if (info.start > 0) {
+    url.searchParams.set('start', String(info.start));
+  }
+
+  return url.toString();
+}
+
+function youtubeVideoInfo(value) {
+  try {
+    const url = new URL(value);
+    const host = url.hostname.toLowerCase();
+    let id = '';
+
+    if (host.endsWith('youtu.be')) {
+      id = url.pathname.split('/').filter(Boolean)[0] ?? '';
+    } else if (
+      host === 'youtube.com' ||
+      host.endsWith('.youtube.com') ||
+      host === 'youtube-nocookie.com' ||
+      host.endsWith('.youtube-nocookie.com')
+    ) {
+      id =
+        url.searchParams.get('v') ??
+        url.pathname.match(/^\/(?:embed|shorts|v)\/([\w-]+)/i)?.[1] ??
+        '';
+    }
+
+    if (!/^[\w-]+$/.test(id)) {
+      return null;
+    }
+
+    return {
+      id,
+      start: youtubeStartSeconds(url.searchParams.get('start') ?? url.searchParams.get('t') ?? ''),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function youtubeStartSeconds(value) {
+  if (!value) {
+    return 0;
+  }
+
+  if (/^\d+$/.test(value)) {
+    return Number(value);
+  }
+
+  const match = value.match(/^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s?)?$/i);
+
+  if (!match) {
+    return 0;
+  }
+
+  return (
+    Number(match[1] ?? 0) * 3600 +
+    Number(match[2] ?? 0) * 60 +
+    Number(match[3] ?? 0)
+  );
+}
+
+function youtubeEmbedPage(embedUrl) {
+  return `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="referrer" content="strict-origin-when-cross-origin">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>YouTube video</title>
+  <style>
+    html, body { width: 100%; height: 100%; margin: 0; background: #111113; overflow: hidden; }
+    iframe { width: 100%; height: 100%; border: 0; display: block; }
+  </style>
+</head>
+<body>
+  <iframe
+    src="${escapeHtml(embedUrl)}"
+    title="YouTube video player"
+    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+    referrerpolicy="strict-origin-when-cross-origin"
+    allowfullscreen></iframe>
+</body>
+</html>`;
 }
 
 function closePage(message) {

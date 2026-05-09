@@ -922,7 +922,14 @@ function insertVideo() {
     return;
   }
 
-  editor.value?.chain().focus().setYoutubeVideo({ src }).run();
+  const inserted = editor.value?.chain().focus().setYoutubeVideo({ src }).run();
+
+  if (!inserted) {
+    uiMessage.value = 'Paste a YouTube video URL.';
+    return;
+  }
+
+  uiMessage.value = '';
   videoUrlDraft.value = '';
   activeTab.value = 'editor';
   void saveEditorContentOptimistically();
@@ -3273,43 +3280,4 @@ function textFromNode(node: DocumentContent): string {
   border: 0;
 }
 
-.editor :deep(.tiptap .jot-youtube-wrapper) {
-  width: 100%;
-  max-width: 640px;
-  aspect-ratio: 16 / 9;
-  margin: 0 0 0.85rem;
-  overflow: hidden;
-  border-radius: 4px;
-  background: #111113;
-}
-
-.editor :deep(.tiptap .jot-youtube-link) {
-  position: relative;
-  display: grid;
-  width: 100%;
-  height: 100%;
-  place-items: center;
-  color: white;
-  text-decoration: none;
-}
-
-.editor :deep(.tiptap .jot-youtube-link img) {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  opacity: 0.78;
-}
-
-.editor :deep(.tiptap .jot-youtube-play) {
-  position: absolute;
-  display: inline-flex;
-  align-items: center;
-  min-height: 34px;
-  padding: 0 14px;
-  border-radius: 4px;
-  background: #dc2626;
-  color: white;
-  font-size: 0.88rem;
-  font-weight: 800;
-}
 </style>

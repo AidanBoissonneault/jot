@@ -1,3 +1,4 @@
+import type { Queue } from '@cloudflare/workers-types';
 import type { Project, ProjectPage, NotionBlockMapping, NotionParentPage } from '../../../src/types/capture.js';
 
 export type SyncJob = {
