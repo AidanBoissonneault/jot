@@ -3,10 +3,12 @@ import type {
   HeadingDragStartedMessage,
   JotRuntimeMessage,
   RestoreHighlightMessage,
+  TextDragStartedMessage,
 } from '@/src/types/messages';
 
 const BUTTON_ID = 'jot-inline-save';
 const JOT_DRAG_MIME = 'application/x-jot-capture';
+const JOT_HEADING_DRAG_MIME = 'application/x-jot-heading-capture';
 const JOT_SOURCE_DATA_ATTR = 'data-jot-source';
 const LARGE_TEXT_PX = 22;
 type HeadingLevel = 1 | 2 | 3 | 4 | 5 | 6;
@@ -454,19 +456,35 @@ export default defineContentScript({
           return;
         }
 
-        const payload = buildHeadingDragPayload(event);
+        const headingPayload = buildHeadingDragPayload(event);
 
-        if (!payload) {
+        if (headingPayload) {
+          event.dataTransfer.setData(JOT_DRAG_MIME, JSON.stringify(headingPayload));
+          event.dataTransfer.setData(JOT_HEADING_DRAG_MIME, '1');
+          event.dataTransfer.setData('text/html', linkedHeadingHtml(headingPayload));
+          void browser.runtime
+            .sendMessage({
+              type: 'jot.headingDragStarted',
+              payload: headingPayload,
+            } satisfies HeadingDragStartedMessage)
+            .catch(() => undefined);
           return;
         }
 
-        event.dataTransfer.setData(JOT_DRAG_MIME, JSON.stringify(payload));
-        event.dataTransfer.setData('text/html', linkedHeadingHtml(payload));
+        const selection = window.getSelection();
+        const selectedText = selection?.toString().trim();
+
+        if (!selection || !selectedText) {
+          return;
+        }
+
+        const textPayload = buildCapturePayload(selection, selectedText);
+        event.dataTransfer.setData(JOT_DRAG_MIME, JSON.stringify(textPayload));
         void browser.runtime
           .sendMessage({
-            type: 'jot.headingDragStarted',
-            payload,
-          } satisfies HeadingDragStartedMessage)
+            type: 'jot.textDragStarted',
+            payload: textPayload,
+          } satisfies TextDragStartedMessage)
           .catch(() => undefined);
       },
       true,

@@ -68,6 +68,38 @@ CREATE TABLE IF NOT EXISTS jot_sync_state (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS notion_block_sync (
+  installation_id BIGINT NOT NULL REFERENCES notion_installations(id) ON DELETE CASCADE,
+  local_id        TEXT NOT NULL,
+  notion_block_id TEXT,
+  entity_type     TEXT NOT NULL,
+  local_version   BIGINT NOT NULL DEFAULT 0,
+  synced_version  BIGINT,
+  status          TEXT NOT NULL DEFAULT 'pending',
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (installation_id, local_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_notion_block_sync_status ON notion_block_sync(status);
+
+CREATE OR REPLACE FUNCTION increment_block_version(
+  p_installation_id BIGINT,
+  p_local_id TEXT,
+  p_entity_type TEXT
+) RETURNS BIGINT LANGUAGE plpgsql AS $$
+DECLARE v_version BIGINT;
+BEGIN
+  INSERT INTO notion_block_sync (installation_id, local_id, entity_type, local_version, status)
+  VALUES (p_installation_id, p_local_id, p_entity_type, 1, 'pending')
+  ON CONFLICT (installation_id, local_id) DO UPDATE
+    SET local_version = notion_block_sync.local_version + 1,
+        status = 'pending',
+        updated_at = now()
+  RETURNING local_version INTO v_version;
+  RETURN v_version;
+END;
+$$;
+
 -- Row Level Security
 ALTER TABLE "user" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE session ENABLE ROW LEVEL SECURITY;
@@ -81,3 +113,6 @@ CREATE POLICY "service_role_session"            ON session              FOR ALL 
 CREATE POLICY "service_role_account"            ON account              FOR ALL TO service_role USING (true) WITH CHECK (true);
 CREATE POLICY "service_role_notion_installs"    ON notion_installations FOR ALL TO service_role USING (true) WITH CHECK (true);
 CREATE POLICY "service_role_jot_sync_state"     ON jot_sync_state      FOR ALL TO service_role USING (true) WITH CHECK (true);
+
+ALTER TABLE notion_block_sync ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "service_role_notion_block_sync" ON notion_block_sync FOR ALL TO service_role USING (true) WITH CHECK (true);

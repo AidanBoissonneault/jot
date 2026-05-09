@@ -3,16 +3,25 @@ import type {
   CaptureSelectionMessage,
   CaptureSelectionPayload,
   ConsumeHeadingDragMessage,
+  ConsumeTextDragMessage,
   HeadingDragStartedMessage,
   InsertCaptureRequestMessage,
   JotRuntimeMessage,
   OpenSourceRequestMessage,
   ProjectPageUpdatedMessage,
   RestoreHighlightMessage,
+  TextDragStartedMessage,
 } from '@/src/types/messages';
 
 const HEADING_DRAG_TTL_MS = 8000;
+const TEXT_DRAG_TTL_MS = 8000;
 let lastHeadingDrag:
+  | {
+      payload: CaptureSelectionPayload;
+      createdAt: number;
+    }
+  | undefined;
+let lastTextDrag:
   | {
       payload: CaptureSelectionPayload;
       createdAt: number;
@@ -35,6 +44,14 @@ export default defineBackground(() => {
 
     if (message?.type === 'jot.consumeHeadingDrag') {
       return handleConsumeHeadingDrag(message);
+    }
+
+    if (message?.type === 'jot.textDragStarted') {
+      return handleTextDragStarted(message);
+    }
+
+    if (message?.type === 'jot.consumeTextDrag') {
+      return handleConsumeTextDrag(message);
     }
 
     if (message?.type === 'jot.openSourceRequest') {
@@ -78,6 +95,38 @@ function handleConsumeHeadingDrag(message: ConsumeHeadingDragMessage) {
   }
 
   lastHeadingDrag = undefined;
+  return drag.payload;
+}
+
+function handleTextDragStarted(message: TextDragStartedMessage) {
+  lastTextDrag = {
+    payload: message.payload,
+    createdAt: Date.now(),
+  };
+
+  return true;
+}
+
+function handleConsumeTextDrag(message: ConsumeTextDragMessage) {
+  if (!lastTextDrag) {
+    return null;
+  }
+
+  const drag = lastTextDrag;
+  const requestedText = message.payload?.text?.replace(/\s+/g, ' ').trim();
+  const draggedText = drag.payload.text.replace(/\s+/g, ' ').trim();
+  const isFresh = Date.now() - drag.createdAt <= TEXT_DRAG_TTL_MS;
+  const isMatchingText =
+    !requestedText ||
+    requestedText === draggedText ||
+    draggedText.includes(requestedText) ||
+    requestedText.includes(draggedText);
+
+  if (!isFresh || !isMatchingText) {
+    return null;
+  }
+
+  lastTextDrag = undefined;
   return drag.payload;
 }
 

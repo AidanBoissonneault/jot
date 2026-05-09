@@ -51,6 +51,10 @@ export const JotBlockIds = Extension.create({
           let changed = false;
 
           newState.doc.forEach((node, offset) => {
+            if (!TOP_LEVEL_BLOCK_TYPES.includes(node.type.name)) {
+              return;
+            }
+
             const value = node.attrs[JOT_BLOCK_ID_ATTR];
             const id = typeof value === 'string' && value ? value : '';
 
@@ -61,7 +65,7 @@ export const JotBlockIds = Extension.create({
 
             const nextId = createJotBlockId();
             seen.add(nextId);
-            transaction = transaction.setNodeMarkup(offset + 1, undefined, {
+            transaction = transaction.setNodeMarkup(offset, undefined, {
               ...node.attrs,
               [JOT_BLOCK_ID_ATTR]: nextId,
             });

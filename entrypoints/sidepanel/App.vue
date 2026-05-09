@@ -37,10 +37,12 @@ import type { DocumentContent } from '@/src/types/capture';
 import type {
   CaptureSelectionPayload,
   ConsumeHeadingDragMessage,
+  ConsumeTextDragMessage,
   OpenSourceRequestMessage,
 } from '@/src/types/messages';
 
 const JOT_DRAG_MIME = 'application/x-jot-capture';
+const JOT_HEADING_DRAG_MIME = 'application/x-jot-heading-capture';
 const blockTypes = [
   { label: 'Paragraph', value: 'paragraph' },
   { label: 'Heading 1', value: 'heading-1' },
@@ -175,11 +177,21 @@ const editor = useEditor({
       return true;
     },
     handleDrop: (view, event) => {
-      const payload = readHeadingDropPayload(event);
+      const types = [...(event.dataTransfer?.types ?? [])];
+      const plain = event.dataTransfer?.getData('text/plain') ?? '';
+      console.log('[jot] handleDrop', { types, plain: plain.slice(0, 100) });
 
-      if (payload) {
+      const jotPayload = readJotDropPayload(event);
+
+      if (jotPayload?.highlightMeta.isHeading) {
         event.preventDefault();
-        insertLinkedHeadingAtDrop(view, event, payload);
+        insertLinkedHeadingAtDrop(view, event, jotPayload);
+        return true;
+      }
+
+      if (jotPayload) {
+        event.preventDefault();
+        insertCapturedTextAtDrop(view, event, jotPayload);
         return true;
       }
 
@@ -226,6 +238,32 @@ const editor = useEditor({
         moveEditorSelectionToDrop(view, event);
         editor.value?.chain().focus().setImage({ src: imageSrc }).run();
         void saveEditorContentOptimistically();
+        return true;
+      }
+
+      if (isLikelyTextCaptureDrop(event)) {
+        // Capture synchronously — dataTransfer is cleared after the event handler returns
+        // text/plain is set by the browser automatically and is accessible cross-origin
+        const fallbackText = event.dataTransfer?.getData('text/plain') ?? '';
+
+        event.preventDefault();
+
+        void consumeTextDragPayload(fallbackText).then((dragPayload) => {
+          if (dragPayload) {
+            insertCapturedTextAtDrop(view, event, dragPayload);
+          } else if (fallbackText) {
+            moveEditorSelectionToDrop(view, event);
+            shouldSkipNextUpdateSave = true;
+            editor.value?.chain().focus().insertContent(fallbackText).run();
+            queueMicrotask(() => {
+              shouldSkipNextUpdateSave = false;
+            });
+            if (editor.value) {
+              void saveEditorContentOptimistically();
+            }
+          }
+        });
+
         return true;
       }
 
@@ -1212,7 +1250,7 @@ function isHttpAudioUrl(value: string) {
   return /^https?:\/\/.+\.(mp3|mpeg|m4a|aac|wav|ogg|oga|opus|webm)(\?[^#]*)?(#.*)?$/i.test(value);
 }
 
-function readHeadingDropPayload(event: DragEvent) {
+function readJotDropPayload(event: DragEvent): CaptureSelectionPayload | null {
   const rawPayload = event.dataTransfer?.getData(JOT_DRAG_MIME);
 
   if (!rawPayload) {
@@ -1220,17 +1258,51 @@ function readHeadingDropPayload(event: DragEvent) {
   }
 
   try {
-    const payload = JSON.parse(rawPayload) as CaptureSelectionPayload;
-    return payload.highlightMeta.isHeading ? payload : null;
+    return JSON.parse(rawPayload) as CaptureSelectionPayload;
   } catch {
     return null;
   }
 }
 
-function isLikelyHeadingDrop(event: DragEvent) {
-  const html = event.dataTransfer?.getData('text/html') ?? '';
+function insertCapturedTextAtDrop(
+  view: EditorView,
+  event: DragEvent,
+  payload: CaptureSelectionPayload,
+) {
+  moveEditorSelectionToDrop(view, event);
+  shouldSkipNextUpdateSave = true;
+  editor.value?.chain().focus().insertContent(createCapturedContent(payload)).run();
+  queueMicrotask(() => {
+    shouldSkipNextUpdateSave = false;
+  });
 
-  return /<h[1-6](\s|>)/i.test(html);
+  if (editor.value) {
+    void saveEditorContentOptimistically();
+  }
+}
+
+function isLikelyHeadingDrop(event: DragEvent) {
+  return event.dataTransfer?.types.includes(JOT_HEADING_DRAG_MIME) ?? false;
+}
+
+function isLikelyTextCaptureDrop(event: DragEvent) {
+  const types = event.dataTransfer?.types ?? [];
+  return types.includes(JOT_DRAG_MIME) && !types.includes(JOT_HEADING_DRAG_MIME);
+}
+
+async function consumeTextDragPayload(text: string) {
+
+  return browser.runtime
+    .sendMessage({
+      type: 'jot.consumeTextDrag',
+      payload: { text },
+    } satisfies ConsumeTextDragMessage)
+    .then((payload: unknown) => {
+      const dragPayload = payload as CaptureSelectionPayload | null;
+
+      return dragPayload && !dragPayload.highlightMeta?.isHeading ? dragPayload : null;
+    })
+    .catch(() => null);
 }
 
 async function consumeHeadingDropPayload(event: DragEvent) {

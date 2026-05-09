@@ -1,5 +1,18 @@
 import type { Project, ProjectPage, NotionBlockMapping, NotionParentPage } from '../../../src/types/capture.js';
 
+export type SyncJob = {
+  type: 'page' | 'project';
+  localId: string;
+  projectId: string;
+  installationId: number;
+  queuedVersion: number;
+  payload: {
+    page?: ProjectPage;
+    project: Project;
+    selectedParentPageId?: string;
+  };
+};
+
 export type WorkerEnv = {
   NOTION_VERSION?: string;
   JOT_ROOT_PAGE_TITLE?: string;
@@ -11,6 +24,7 @@ export type WorkerEnv = {
   TRUSTED_ORIGINS?: string;
   SUPABASE_URL: string;
   SUPABASE_SERVICE_KEY: string;
+  SYNC_QUEUE: Queue<SyncJob>;
 };
 
 export type JsonRecord = Record<string, unknown>;

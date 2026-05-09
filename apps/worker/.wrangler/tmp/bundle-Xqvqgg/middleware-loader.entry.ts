@@ -3,12 +3,12 @@
 // export dynamically through wrangler, or we can potentially let users directly
 // add them as a sort of "plugin" system.
 
-import ENTRY, { __INTERNAL_WRANGLER_MIDDLEWARE__ } from "C:\\Users\\aidan\\OneDrive\\Documents\\programming\\projects\\jot\\apps\\worker\\.wrangler\\tmp\\bundle-gZIhuX\\middleware-insertion-facade.js";
+import ENTRY, { __INTERNAL_WRANGLER_MIDDLEWARE__ } from "C:\\Users\\aidan\\OneDrive\\Documents\\programming\\projects\\jot\\apps\\worker\\.wrangler\\tmp\\bundle-Xqvqgg\\middleware-insertion-facade.js";
 import { __facade_invoke__, __facade_register__, Dispatcher } from "C:\\Users\\aidan\\OneDrive\\Documents\\programming\\projects\\jot\\node_modules\\.pnpm\\wrangler@4.90.0_@cloudflare+workers-types@4.20260509.1\\node_modules\\wrangler\\templates\\middleware\\common.ts";
-import type { WorkerEntrypointConstructor } from "C:\\Users\\aidan\\OneDrive\\Documents\\programming\\projects\\jot\\apps\\worker\\.wrangler\\tmp\\bundle-gZIhuX\\middleware-insertion-facade.js";
+import type { WorkerEntrypointConstructor } from "C:\\Users\\aidan\\OneDrive\\Documents\\programming\\projects\\jot\\apps\\worker\\.wrangler\\tmp\\bundle-Xqvqgg\\middleware-insertion-facade.js";
 
 // Preserve all the exports from the worker
-export * from "C:\\Users\\aidan\\OneDrive\\Documents\\programming\\projects\\jot\\apps\\worker\\.wrangler\\tmp\\bundle-gZIhuX\\middleware-insertion-facade.js";
+export * from "C:\\Users\\aidan\\OneDrive\\Documents\\programming\\projects\\jot\\apps\\worker\\.wrangler\\tmp\\bundle-Xqvqgg\\middleware-insertion-facade.js";
 
 class __Facade_ScheduledController__ implements ScheduledController {
 	readonly #noRetry: ScheduledController["noRetry"];

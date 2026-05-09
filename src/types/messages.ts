@@ -47,6 +47,18 @@ export type ConsumeHeadingDragMessage = {
   };
 };
 
+export type TextDragStartedMessage = {
+  type: 'jot.textDragStarted';
+  payload: CaptureSelectionPayload;
+};
+
+export type ConsumeTextDragMessage = {
+  type: 'jot.consumeTextDrag';
+  payload?: {
+    text?: string;
+  };
+};
+
 export type ProjectPageUpdatedMessage = {
   type: 'jot.projectPageUpdated';
   payload: {
@@ -67,8 +79,10 @@ export type RestoreHighlightMessage = {
 export type JotRuntimeMessage =
   | CaptureSelectionMessage
   | ConsumeHeadingDragMessage
+  | ConsumeTextDragMessage
   | HeadingDragStartedMessage
   | InsertCaptureRequestMessage
   | ProjectPageUpdatedMessage
   | OpenSourceRequestMessage
-  | RestoreHighlightMessage;
+  | RestoreHighlightMessage
+  | TextDragStartedMessage;

@@ -17,10 +17,12 @@ import type {
   CreateNotionPageResponse,
   ListNotionPagesResponse,
   MediaUploadResponse,
+  SyncEnqueueResponse,
   SyncPageResponse,
   SyncProjectResponse,
   SyncReloadResponse,
   SyncSessionResponse,
+  SyncStatusResponse,
   SyncValidationResponse,
 } from '@/src/types/sync';
 import { markUnrecoverableTransientMedia } from '@/src/extensions/mediaContent';
@@ -522,7 +524,7 @@ async function syncPushPage(page: ProjectPage, project: Project): Promise<Projec
   }
 
   try {
-    const response = await requestServer<SyncPageResponse>('/sync/push', {
+    const response = await requestServer<SyncEnqueueResponse | SyncPageResponse>('/sync/push', {
       method: 'POST',
       body: JSON.stringify({
         page: normalizedPage,
@@ -532,21 +534,30 @@ async function syncPushPage(page: ProjectPage, project: Project): Promise<Projec
       }),
     }, syncConfig);
 
-    if (response.parentPage) {
+    if ('queued' in response && response.queued) {
+      const savingPage = withSyncStatus(normalizedPage, 'saving', 'Syncing to Notion...');
+      // Fire-and-forget — poll until the queue consumer finishes
+      pollSyncStatus(page.id, project, syncConfig).catch(() => undefined);
+      return savingPage;
+    }
+
+    // Fallback for non-queued response shape
+    const syncResponse = response as SyncPageResponse;
+    if (syncResponse.parentPage) {
       await updateStoredSyncConfig({
-        selectedParentPageId: response.parentPage.id,
-        selectedParentPageTitle: response.parentPage.title,
+        selectedParentPageId: syncResponse.parentPage.id,
+        selectedParentPageTitle: syncResponse.parentPage.title,
       });
     }
 
-    return response.page
+    return syncResponse.page
       ? {
           ...normalizedPage,
-          ...response.page,
-          syncMessage: response.message,
-          syncState: response.status,
+          ...syncResponse.page,
+          syncMessage: syncResponse.message,
+          syncState: syncResponse.status,
         }
-      : withSyncStatus(normalizedPage, response.status, response.message);
+      : withSyncStatus(normalizedPage, syncResponse.status, syncResponse.message);
   } catch (error) {
     // Network failure (TypeError) while connected — queue for replay on reconnect.
     if (error instanceof TypeError) {
@@ -558,6 +569,58 @@ async function syncPushPage(page: ProjectPage, project: Project): Promise<Projec
       'error',
       error instanceof Error ? error.message : 'Unable to sync this page.',
     );
+  }
+}
+
+async function pollSyncStatus(pageId: string, project: Project, syncConfig: SyncConfig): Promise<void> {
+  const MAX_POLLS = 10;
+  const POLL_INTERVAL_MS = 3000;
+
+  for (let i = 0; i < MAX_POLLS; i++) {
+    await new Promise<void>((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+
+    try {
+      const { syncConfig: currentConfig } = await readStorage();
+      if (!currentConfig.connected) return;
+
+      const status = await requestServer<SyncStatusResponse>(
+        `/sync/status?pageId=${encodeURIComponent(pageId)}`,
+        undefined,
+        currentConfig,
+      );
+
+      if (status.status === 'synced') {
+        const { pages } = await readStorage();
+        const currentPage = pages.find((p) => p.id === pageId);
+        if (!currentPage) return;
+
+        await persistPage({
+          ...currentPage,
+          ...(status.notionBlockId ? { notionPageId: status.notionBlockId } : {}),
+          syncState: 'saved',
+          syncMessage: undefined,
+        });
+        return;
+      }
+
+      if (status.status === 'failed') {
+        const { pages } = await readStorage();
+        const currentPage = pages.find((p) => p.id === pageId);
+        if (!currentPage) return;
+
+        await persistPage(withSyncStatus(currentPage, 'error', 'Notion sync failed. Will retry.'));
+        return;
+      }
+    } catch {
+      // Ignore transient poll errors — try again next iteration
+    }
+  }
+
+  // Max polls reached — mark stale so user knows sync is delayed
+  const { pages } = await readStorage();
+  const currentPage = pages.find((p) => p.id === pageId);
+  if (currentPage?.syncState === 'saving') {
+    await persistPage(withSyncStatus(currentPage, 'stale', 'Sync is taking longer than expected.')).catch(() => undefined);
   }
 }
 

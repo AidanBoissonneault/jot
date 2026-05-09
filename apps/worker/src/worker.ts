@@ -20,7 +20,6 @@ import {
 } from './projectDatabase.js';
 import { syncProjectFolder } from './projectSync.js';
 import { createRootPageHelpers } from './rootPages.js';
-import { createSyncQueue } from './syncQueue.js';
 import type {
   CreateNotionPageRequest,
   MediaUploadRequest,
@@ -219,7 +218,6 @@ app.post('/notion/pages', async (c) => {
 // ─── Sync routes ───────────────────────────────────────────────────────────────
 
 app.post('/sync/push', async (c) => {
-  // TODO: enqueue via Cloudflare Queue for rate-limit-aware Notion retry
   const body = await c.req.json<SyncPageRequest>().catch(() => ({}));
   const { page, project, selectedParentPageId } = body ?? {};
 
@@ -227,13 +225,16 @@ app.post('/sync/push', async (c) => {
     return c.json({ status: 'error', message: 'Missing page or project.' });
   }
 
-  return c.json(
-    await syncQueue.enqueue(
-      `page:${project.id}:${page.id}`,
-      { c, page, project, selectedParentPageId },
-      pushPageToNotion,
-    ),
-  );
+  const store = await requireConnectedStore(c);
+  const version = await enqueueSync(c.env, {
+    type: 'page',
+    localId: page.id,
+    projectId: project.id,
+    installationId: store.installationId,
+    payload: { page, project, selectedParentPageId },
+  });
+
+  return c.json({ queued: true, version });
 });
 
 app.post('/sync/project', async (c) => {
@@ -244,13 +245,36 @@ app.post('/sync/project', async (c) => {
     return c.json({ status: 'error', message: 'Missing project.' });
   }
 
-  return c.json(
-    await syncQueue.enqueue(
-      `project:${project.id}`,
-      { c, project, selectedParentPageId },
-      syncProjectToNotion,
-    ),
-  );
+  try {
+    return c.json(await syncProjectToNotion({ c, project, selectedParentPageId }));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error('[sync/project] failed:', message, error);
+    return c.json({ status: 'error', message }, 500);
+  }
+});
+
+app.get('/sync/status', async (c) => {
+  const pageId = c.req.query('pageId');
+
+  if (!pageId) return c.json({ error: 'Missing pageId' }, 400);
+
+  const store = await requireConnectedStore(c);
+  const { data: row } = await supabase
+    .from('notion_block_sync')
+    .select('local_version, synced_version, status, notion_block_id')
+    .eq('installation_id', store.installationId)
+    .eq('local_id', pageId)
+    .maybeSingle();
+
+  if (!row) return c.json({ status: 'synced', localVersion: 0, syncedVersion: 0 });
+
+  return c.json({
+    status: row.status,
+    localVersion: row.local_version,
+    syncedVersion: row.synced_version,
+    notionBlockId: row.notion_block_id ?? null,
+  });
 });
 
 app.post('/sync/validate', async (c) => {
@@ -380,7 +404,6 @@ app.post('/media/upload', async (c) => {
 let supabase;
 let auth;
 let notionRequest;
-let syncQueue;
 let ensureJotRootPage, ensureProjectRootPage, pageSummary;
 let archiveThreadToggle, ensureProjectDatabase, ensureProjectPage, ensureThreadToggle,
     reloadProjectDatabaseFromNotion, updateThreadToggleTitle;
@@ -393,7 +416,6 @@ function initSingletons(env) {
   const JOT_ROOT_PAGE_TITLE = env.JOT_ROOT_PAGE_TITLE ?? 'Jot';
 
   notionRequest = createNotionRequester({ notionVersion: NOTION_VERSION });
-  syncQueue = createSyncQueue();
 
   const rootHelpers = createRootPageHelpers({
     appendLog,
@@ -474,6 +496,101 @@ async function syncProjectToNotion({ c, project, selectedParentPageId }) {
       pageSummary,
     });
 
+    appendLog(freshStore, project.status === 'archived' ? 'project_archived' : 'project_synced', project.name);
+    await writeStore(freshStore);
+    return response;
+  });
+}
+
+// ─── Queue helpers ─────────────────────────────────────────────────────────────
+
+async function enqueueSync(env, job) {
+  const { data: version } = await supabase.rpc('increment_block_version', {
+    p_installation_id: job.installationId,
+    p_local_id: job.localId,
+    p_entity_type: job.type,
+  });
+  await env.SYNC_QUEUE.send({ ...job, queuedVersion: version });
+  return version;
+}
+
+async function getInstallationById(installationId) {
+  const { data: installRow } = await supabase
+    .from('notion_installations')
+    .select('id, user_id')
+    .eq('id', installationId)
+    .eq('active', 1)
+    .maybeSingle();
+
+  if (!installRow) return null;
+
+  const { data: accountRow } = await supabase
+    .from('account')
+    .select('accessToken')
+    .eq('userId', installRow.user_id)
+    .eq('providerId', 'notion')
+    .limit(1)
+    .maybeSingle();
+
+  if (!accountRow?.accessToken) return null;
+
+  return { id: installRow.id, tokens: { access_token: accountRow.accessToken } };
+}
+
+async function pushPageToNotionForInstallation(installationId, { page, project, selectedParentPageId }) {
+  const installation = await getInstallationById(installationId);
+  if (!installation) throw new Error('Installation not found or revoked.');
+
+  const store = await freshConnectedStore({
+    installationId,
+    tokens: installation.tokens,
+  });
+
+  return withFreshInstallationStore(store, (freshStore) =>
+    pushPageToNotionCore({
+      request: {},
+      page,
+      project,
+      selectedParentPageId,
+      dependencies: {
+        appendLog,
+        archiveThreadToggle,
+        createChildPage,
+        ensureJotRootPage,
+        ensureProjectPage,
+        ensureProjectRootPage,
+        ensureThreadToggle,
+        notionRequest,
+        replaceManagedBlocks,
+        requireConnectedStore: async () => freshStore,
+        updateThreadToggleTitle,
+        updateChildNotePage,
+        writeStore,
+      },
+    }),
+  );
+}
+
+async function syncProjectToNotionForInstallation(installationId, { project, selectedParentPageId }) {
+  const installation = await getInstallationById(installationId);
+  if (!installation) throw new Error('Installation not found or revoked.');
+
+  const store = await freshConnectedStore({
+    installationId,
+    tokens: installation.tokens,
+  });
+
+  return withFreshInstallationStore(store, async (freshStore) => {
+    const response = await syncProjectFolder({
+      store: freshStore,
+      project,
+      selectedParentPageId,
+      ensureJotRootPage,
+      ensureProjectPage,
+      ensureProjectRootPage,
+      archiveProjectRootPage,
+      pageSummary,
+    });
     appendLog(freshStore, project.status === 'archived' ? 'project_archived' : 'project_synced', project.name);
     await writeStore(freshStore);
     return response;
@@ -1064,5 +1181,71 @@ export default {
   async fetch(request, env, ctx) {
     initSingletons(env);
     return app.fetch(request, env, ctx);
+  },
+
+  async queue(batch, env) {
+    initSingletons(env);
+
+    for (const msg of batch.messages) {
+      const job = msg.body;
+      try {
+        const { data: row } = await supabase
+          .from('notion_block_sync')
+          .select('local_version')
+          .eq('installation_id', job.installationId)
+          .eq('local_id', job.localId)
+          .maybeSingle();
+
+        // Stale check — a newer edit was enqueued after this one
+        if (row && row.local_version > job.queuedVersion) {
+          msg.ack();
+          continue;
+        }
+
+        await supabase
+          .from('notion_block_sync')
+          .update({ status: 'syncing', updated_at: new Date().toISOString() })
+          .eq('installation_id', job.installationId)
+          .eq('local_id', job.localId);
+
+        let notionBlockId = null;
+
+        if (job.type === 'page') {
+          const result = await pushPageToNotionForInstallation(job.installationId, {
+            page: job.payload.page,
+            project: job.payload.project,
+            selectedParentPageId: job.payload.selectedParentPageId,
+          });
+          notionBlockId = result?.page?.notionPageId ?? null;
+        } else if (job.type === 'project') {
+          await syncProjectToNotionForInstallation(job.installationId, {
+            project: job.payload.project,
+            selectedParentPageId: job.payload.selectedParentPageId,
+          });
+        }
+
+        await supabase
+          .from('notion_block_sync')
+          .update({
+            status: 'synced',
+            synced_version: job.queuedVersion,
+            notion_block_id: notionBlockId,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('installation_id', job.installationId)
+          .eq('local_id', job.localId);
+
+        msg.ack();
+      } catch (err) {
+        console.error('Queue sync failed', job.localId, err);
+        await supabase
+          .from('notion_block_sync')
+          .update({ status: 'failed', updated_at: new Date().toISOString() })
+          .eq('installation_id', job.installationId)
+          .eq('local_id', job.localId)
+          .catch(() => undefined);
+        msg.retry();
+      }
+    }
   },
 };

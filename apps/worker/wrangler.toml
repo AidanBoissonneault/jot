@@ -3,6 +3,18 @@ main = "src/worker.ts"
 compatibility_date = "2025-05-01"
 compatibility_flags = ["nodejs_compat"]
 
+# Create queues before deploying: wrangler queues create jot-sync-queue && wrangler queues create jot-sync-dlq
+[[queues.producers]]
+queue   = "jot-sync-queue"
+binding = "SYNC_QUEUE"
+
+[[queues.consumers]]
+queue             = "jot-sync-queue"
+max_batch_size    = 5
+max_batch_timeout = 30
+max_retries       = 3
+dead_letter_queue = "jot-sync-dlq"
+
 [vars]
 NOTION_VERSION = "2026-03-11"
 JOT_ROOT_PAGE_TITLE = "Jot"

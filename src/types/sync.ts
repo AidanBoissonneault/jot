@@ -92,3 +92,15 @@ export type SyncErrorResponse = {
   error?: string;
   message?: string;
 };
+
+export type SyncEnqueueResponse = {
+  queued: true;
+  version: number;
+};
+
+export type SyncStatusResponse = {
+  status: 'pending' | 'syncing' | 'synced' | 'failed' | 'conflict';
+  localVersion?: number;
+  syncedVersion?: number;
+  notionBlockId?: string | null;
+};
