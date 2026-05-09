@@ -237,6 +237,19 @@ export const JotYoutube = Youtube.configure({
 });
 
 export const JotAudio = Audio.extend({
+  addCommands() {
+    return {
+      setAudio:
+        (options) =>
+        ({ commands }) => {
+          return commands.insertContent({
+            type: this.name,
+            attrs: options,
+          });
+        },
+    };
+  },
+
   addAttributes() {
     return {
       ...this.parent?.(),
