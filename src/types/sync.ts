@@ -57,12 +57,16 @@ export type SyncProjectResponse = {
 export type SyncValidationRequest = {
   pages?: ProjectPage[];
   projects?: Project[];
+  knownVersions?: Record<string, number>;
 };
 
 export type SyncValidationResponse = {
   clearSelectedParentPage?: boolean;
   uncachedPageIds?: string[];
   uncachedProjectIds?: string[];
+  stalePageIds?: string[];
+  aheadPageIds?: string[];
+  serverVersions?: Record<string, number>;
 };
 
 export type SyncReloadRequest = {
@@ -104,3 +108,8 @@ export type SyncStatusResponse = {
   syncedVersion?: number;
   notionBlockId?: string | null;
 };
+
+export type SyncEventMessage =
+  | { status: 'synced'; pageId: string; notionBlockId?: string | null }
+  | { status: 'failed'; pageId: string }
+  | { status: 'stale'; pageId: string };

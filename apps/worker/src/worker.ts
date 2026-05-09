@@ -130,6 +130,7 @@ app.get('/auth/notion/callback', async (c) => {
 
     if (installationId) {
       await ensureJotSyncStateRow(installationId);
+      await registerNotionWebhook(env, installationId, tokens.access_token).catch(() => undefined);
     }
 
     setCookie(c, JOT_SESSION_COOKIE, sessionToken, {
@@ -168,6 +169,10 @@ app.post('/auth/notion/logout', async (c) => {
   if (!session) return;
 
   const token = getCookie(c, JOT_SESSION_COOKIE);
+  const installation = await auth.getActiveInstallation(session.user.id).catch(() => undefined);
+  if (installation?.id) {
+    await deleteNotionWebhook(c.env, installation.id).catch(() => undefined);
+  }
   await auth.revokeInstallation(session.user.id);
   await auth.deleteCustomSession(token);
   deleteCookie(c, JOT_SESSION_COOKIE, { path: '/' });
@@ -294,9 +299,16 @@ app.get('/sync/status', async (c) => {
   });
 });
 
+app.get('/sync/events', async (c) => {
+  const store = await requireConnectedStore(c);
+  const doId = c.env.SYNC_EVENTS.idFromName(store.installationId);
+  const stub = c.env.SYNC_EVENTS.get(doId);
+  return stub.fetch(new Request('http://do/connect'));
+});
+
 app.post('/sync/validate', async (c) => {
   const body = await c.req.json<SyncValidationRequest>().catch(() => ({}));
-  const { pages = [], projects = [] } = body ?? {};
+  const { pages = [], projects = [], knownVersions = {} } = body ?? {};
   const store = await requireConnectedStore(c);
   const result = await validateNotionCache(store, {
     pages: Array.isArray(pages) ? pages : [],
@@ -312,11 +324,36 @@ app.post('/sync/validate', async (c) => {
     await writeStore(store);
   }
 
+  // Fetch stale + version info from notion_block_sync
+  const { data: syncRows } = await supabase
+    .from('notion_block_sync')
+    .select('local_id, local_version, is_stale')
+    .eq('installation_id', store.installationId);
+
+  const stalePageIds: string[] = [];
+  const aheadPageIds: string[] = [];
+  const serverVersions: Record<string, number> = {};
+
+  for (const row of syncRows ?? []) {
+    serverVersions[row.local_id] = row.local_version;
+    if (row.is_stale) {
+      stalePageIds.push(row.local_id);
+    } else if (
+      typeof knownVersions[row.local_id] === 'number' &&
+      row.local_version > knownVersions[row.local_id]
+    ) {
+      aheadPageIds.push(row.local_id);
+    }
+  }
+
   return c.json({
     status: 'saved',
     clearSelectedParentPage: result.clearSelectedParentPage,
     uncachedProjectIds: result.uncachedProjectIds,
     uncachedPageIds: result.uncachedPageIds,
+    stalePageIds,
+    aheadPageIds,
+    serverVersions,
   });
 });
 
@@ -344,9 +381,23 @@ app.post('/sync/pull', async (c) => {
   }
 
   const store = await requireConnectedStore(c);
+
+  // Keep notion_block_id in sync so webhooks can route back to this local page
+  await Promise.all([
+    supabase.from('notion_block_sync').upsert(
+      { installation_id: store.installationId, local_id: page.id, notion_block_id: page.notionPageId, entity_type: 'page' },
+      { onConflict: 'installation_id,local_id', ignoreDuplicates: true },
+    ),
+    supabase.from('notion_block_sync')
+      .update({ notion_block_id: page.notionPageId })
+      .eq('installation_id', store.installationId)
+      .eq('local_id', page.id)
+      .is('notion_block_id', null),
+  ]).catch(() => {});
+
   const notionContainer = await retrieveNotionPageOrBlock(store, page);
 
-  if (!page.remoteRevision || notionContainer.last_edited_time === page.remoteRevision) {
+  if (page.remoteRevision && notionContainer.last_edited_time === page.remoteRevision) {
     return c.json({
       page: {
         ...page,
@@ -359,6 +410,7 @@ app.post('/sync/pull', async (c) => {
     });
   }
 
+  console.log('[sync/pull] importing blocks from Notion', page.notionPageId, 'revision changed', page.remoteRevision, '->', notionContainer.last_edited_time);
   const pulledContent = await importManagedBlocks(store, page);
 
   if (!pulledContent) {
@@ -388,6 +440,85 @@ app.post('/sync/pull', async (c) => {
     status: 'saved',
     message: 'Imported simple Notion edits.',
   });
+});
+
+app.post('/sync/clear-stale', async (c) => {
+  const body = await c.req.json<{ pageIds?: string[] }>().catch(() => ({}));
+  const pageIds = Array.isArray(body?.pageIds) ? body.pageIds : [];
+  if (!pageIds.length) return c.json({ cleared: true });
+
+  const store = await requireConnectedStore(c);
+  await supabase
+    .from('notion_block_sync')
+    .update({ is_stale: false, stale_since: null })
+    .eq('installation_id', store.installationId)
+    .in('local_id', pageIds);
+
+  return c.json({ cleared: true });
+});
+
+app.post('/webhooks/notion', async (c) => {
+  const rawBody = await c.req.text();
+  console.log('[webhooks/notion] body:', rawBody);
+
+  const signature = c.req.header('notion-signature') ?? '';
+  if (c.env.NOTION_WEBHOOK_SECRET) {
+    const expected = await computeHmacSignature(c.env.NOTION_WEBHOOK_SECRET, rawBody);
+    if (signature !== `v0=${expected}`) {
+      return c.json({ error: 'Invalid signature' }, 401);
+    }
+  }
+
+  let payload: Record<string, unknown>;
+  try {
+    payload = JSON.parse(rawBody);
+  } catch {
+    return c.json({ error: 'Invalid JSON' }, 400);
+  }
+
+  // Notion webhook URL verification challenge
+  if (payload.type === 'url_verification' && payload.challenge) {
+    return c.json({ challenge: payload.challenge });
+  }
+
+  const notionPageId = (payload.entity as Record<string, unknown> | undefined)?.id as string | undefined;
+  if (!notionPageId) return c.json({ ok: true });
+
+  // Skip changes made by our own bot integration (new format uses authors[], old format uses actor)
+  const authors = payload.authors as Array<Record<string, unknown>> | undefined;
+  const actor = payload.actor as Record<string, unknown> | undefined;
+  if (actor?.type === 'bot' || (authors?.length && authors.every((a) => a.type === 'bot'))) {
+    return c.json({ ok: true });
+  }
+
+  const { data: rows } = await supabase
+    .from('notion_block_sync')
+    .select('installation_id, local_id')
+    .eq('notion_block_id', notionPageId);
+
+  if (!rows?.length) {
+    console.log('[webhooks/notion] no local pages mapped to notion page', notionPageId);
+    return c.json({ ok: true });
+  }
+
+  console.log('[webhooks/notion] notifying', rows.length, 'page(s) stale for notion page', notionPageId);
+  for (const row of rows) {
+    await supabase
+      .from('notion_block_sync')
+      .update({ is_stale: true, stale_since: new Date().toISOString() })
+      .eq('installation_id', row.installation_id)
+      .eq('local_id', row.local_id);
+
+    const doStub = c.env.SYNC_EVENTS.get(
+      c.env.SYNC_EVENTS.idFromName(String(row.installation_id)),
+    );
+    await doStub.fetch(new Request('http://do/notify', {
+      method: 'POST',
+      body: JSON.stringify({ status: 'stale', pageId: row.local_id }),
+    })).catch(() => undefined);
+  }
+
+  return c.json({ ok: true });
 });
 
 // ─── Media upload ──────────────────────────────────────────────────────────────
@@ -780,6 +911,88 @@ async function writeJotSyncState(installationId, store) {
     thread_blocks_json: store.threadBlocks ?? {},
     updated_at: new Date().toISOString(),
   }).eq('installation_id', installationId);
+}
+
+// ─── Notion webhook helpers ────────────────────────────────────────────────────
+
+async function computeHmacSignature(secret: string, body: string): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+  const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(body));
+  return Array.from(new Uint8Array(sig)).map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+async function registerNotionWebhook(env, installationId: number, accessToken: string): Promise<void> {
+  if (!env.NOTION_WEBHOOK_SECRET) return;
+
+  const workerUrl = serverBaseUrl(env);
+  const response = await fetch('https://api.notion.com/v1/webhooks', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+      'Notion-Version': env.NOTION_VERSION ?? '2026-03-11',
+    },
+    body: JSON.stringify({
+      url: `${workerUrl}/webhooks/notion`,
+      filter: { event_types: ['page.content_updated', 'page.properties_updated'] },
+    }),
+  });
+
+  if (!response.ok) return;
+
+  const data = await response.json().catch(() => ({}));
+  if (data?.id) {
+    await supabase
+      .from('notion_installations')
+      .update({ notion_webhook_id: data.id })
+      .eq('id', installationId);
+  }
+}
+
+async function deleteNotionWebhook(env, installationId: number): Promise<void> {
+  const { data: row } = await supabase
+    .from('notion_installations')
+    .select('notion_webhook_id')
+    .eq('id', installationId)
+    .maybeSingle();
+
+  if (!row?.notion_webhook_id) return;
+
+  const { data: accountRow } = await supabase
+    .from('notion_installations')
+    .select('user_id')
+    .eq('id', installationId)
+    .maybeSingle();
+
+  if (!accountRow?.user_id) return;
+
+  const { data: account } = await supabase
+    .from('account')
+    .select('accessToken')
+    .eq('userId', accountRow.user_id)
+    .eq('providerId', 'notion')
+    .maybeSingle();
+
+  if (!account?.accessToken) return;
+
+  await fetch(`https://api.notion.com/v1/webhooks/${row.notion_webhook_id}`, {
+    method: 'DELETE',
+    headers: {
+      Authorization: `Bearer ${account.accessToken}`,
+      'Notion-Version': env.NOTION_VERSION ?? '2026-03-11',
+    },
+  }).catch(() => undefined);
+
+  await supabase
+    .from('notion_installations')
+    .update({ notion_webhook_id: null })
+    .eq('id', installationId);
 }
 
 // ─── Notion OAuth helpers ──────────────────────────────────────────────────────
@@ -1288,6 +1501,62 @@ function escapeHtml(value) {
     .replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
 }
 
+// ─── SSE Durable Object ────────────────────────────────────────────────────────
+
+export class SyncEventsDO {
+  private sessions = new Map<string, { writer: WritableStreamDefaultWriter<Uint8Array>; encoder: TextEncoder }>();
+
+  async fetch(request: Request): Promise<Response> {
+    const url = new URL(request.url);
+
+    if (url.pathname === '/connect') {
+      const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
+      const writer = writable.getWriter();
+      const encoder = new TextEncoder();
+      const id = crypto.randomUUID();
+      this.sessions.set(id, { writer, encoder });
+
+      const heartbeat = setInterval(() => {
+        writer.write(encoder.encode(': heartbeat\n\n')).catch(() => {
+          clearInterval(heartbeat);
+          this.sessions.delete(id);
+        });
+      }, 25000);
+
+      writer.closed.finally(() => {
+        clearInterval(heartbeat);
+        this.sessions.delete(id);
+      });
+
+      return new Response(readable, {
+        headers: {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+          'X-Accel-Buffering': 'no',
+        },
+      });
+    }
+
+    if (url.pathname === '/notify' && request.method === 'POST') {
+      const event = await request.json<object>();
+      const payload = `data: ${JSON.stringify(event)}\n\n`;
+      const dead: string[] = [];
+
+      for (const [id, { writer, encoder }] of this.sessions) {
+        try {
+          await writer.write(encoder.encode(payload));
+        } catch {
+          dead.push(id);
+        }
+      }
+      dead.forEach((id) => this.sessions.delete(id));
+      return new Response('ok');
+    }
+
+    return new Response('not found', { status: 404 });
+  }
+}
+
 // ─── Worker export ─────────────────────────────────────────────────────────────
 
 export default {
@@ -1301,6 +1570,7 @@ export default {
 
     for (const msg of batch.messages) {
       const job = msg.body;
+      console.log('[queue] processing', job.type, job.localId, 'v', job.queuedVersion);
       try {
         const { data: row } = await supabase
           .from('notion_block_sync')
@@ -1348,15 +1618,29 @@ export default {
           .eq('installation_id', job.installationId)
           .eq('local_id', job.localId);
 
+        const doStub = env.SYNC_EVENTS.get(env.SYNC_EVENTS.idFromName(job.installationId));
+        await doStub.fetch(new Request('http://do/notify', {
+          method: 'POST',
+          body: JSON.stringify({ status: 'synced', pageId: job.localId, notionBlockId }),
+        })).catch(() => undefined);
+
+        console.log('[queue] done', job.type, job.localId);
         msg.ack();
       } catch (err) {
-        console.error('Queue sync failed', job.localId, err);
+        console.error('[queue] failed', job.type, job.localId, err);
         await supabase
           .from('notion_block_sync')
           .update({ status: 'failed', updated_at: new Date().toISOString() })
           .eq('installation_id', job.installationId)
           .eq('local_id', job.localId)
-          .catch(() => undefined);
+          .then(() => {}).catch(() => {});
+
+        const doStub = env.SYNC_EVENTS.get(env.SYNC_EVENTS.idFromName(job.installationId));
+        await doStub.fetch(new Request('http://do/notify', {
+          method: 'POST',
+          body: JSON.stringify({ status: 'failed', pageId: job.localId }),
+        })).catch(() => undefined);
+
         msg.retry();
       }
     }

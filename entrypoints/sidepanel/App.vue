@@ -352,6 +352,10 @@ const currentProjectModel = computed({
 });
 
 const saveLabel = computed(() => {
+  if (store.pullMessage) {
+    return store.pullMessage;
+  }
+
   if (store.isLoading) {
     return 'Loading';
   }
@@ -372,7 +376,11 @@ const saveLabel = computed(() => {
     return 'Stale';
   }
 
-  return 'Saved';
+  if (store.syncConfig.connected && store.currentPage?.notionPageId) {
+    return 'Stored on Notion API';
+  }
+
+  return 'Saved locally';
 });
 
 const syncBadgeTitle = computed(() => {
@@ -384,13 +392,21 @@ const syncBadgeTitle = computed(() => {
     return 'Log in with Notion to sync across devices.';
   }
 
+  const sseNote = store.sseStatus === 'connected'
+    ? 'Live updates active'
+    : store.sseStatus === 'connecting'
+      ? 'Connecting…'
+      : 'Live updates disconnected';
+
   if (!store.syncConfig.selectedParentPageId) {
-    return 'Jot will create a root Notion page with project folders on first sync.';
+    return `Jot will create a root Notion page with project folders on first sync. · ${sseNote}`;
   }
 
-  return store.syncConfig.selectedParentPageTitle
+  const base = store.syncConfig.selectedParentPageTitle
     ? `Synced inside ${store.syncConfig.selectedParentPageTitle}`
     : saveLabel.value;
+
+  return `${base} · ${sseNote}`;
 });
 
 const syncBadgeClass = computed(() => ({
@@ -1689,6 +1705,28 @@ function textFromNode(node: DocumentContent): string {
       aria-label="Project page"
     >
       <header class="editor-header">
+        <div
+          v-if="store.currentPage && store.stalePageIds.includes(store.currentPage.id)"
+          class="sync-change-banner"
+          role="alert"
+        >
+          <span>This page was updated in Notion.</span>
+          <div class="sync-change-banner-actions">
+            <button type="button" class="sync-change-banner-btn primary" @click="store.confirmReloadPage(store.currentPage.id)">Sync</button>
+            <button type="button" class="sync-change-banner-btn" @click="store.dismissStalePage(store.currentPage.id)">Dismiss</button>
+          </div>
+        </div>
+        <div
+          v-else-if="store.currentPage && store.aheadPageIds.includes(store.currentPage.id)"
+          class="sync-change-banner"
+          role="alert"
+        >
+          <span>This page was edited on another device.</span>
+          <div class="sync-change-banner-actions">
+            <button type="button" class="sync-change-banner-btn primary" @click="store.confirmReloadPage(store.currentPage.id)">Sync</button>
+            <button type="button" class="sync-change-banner-btn" @click="store.dismissStalePage(store.currentPage.id)">Keep local</button>
+          </div>
+        </div>
         <div class="editor-title-row">
           <div class="page-title">
             <input
@@ -2665,6 +2703,50 @@ function textFromNode(node: DocumentContent): string {
 
 .sync-badge.stale .sync-dot {
   background: #f59e0b;
+}
+
+.sync-change-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 12px;
+  background: #fffbeb;
+  border-bottom: 1px solid #f59e0b;
+  font-size: 12px;
+  color: #92400e;
+  flex-shrink: 0;
+}
+
+.sync-change-banner-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.sync-change-banner-btn {
+  padding: 3px 10px;
+  border-radius: 5px;
+  border: 1px solid #d97706;
+  background: transparent;
+  color: #92400e;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.sync-change-banner-btn:hover {
+  background: #fef3c7;
+}
+
+.sync-change-banner-btn.primary {
+  background: #f59e0b;
+  color: #fff;
+  border-color: #d97706;
+}
+
+.sync-change-banner-btn.primary:hover {
+  background: #d97706;
 }
 
 .sync-badge.saving {

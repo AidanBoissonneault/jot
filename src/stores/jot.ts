@@ -1,7 +1,8 @@
 import { computed, ref } from 'vue';
 import { defineStore } from 'pinia';
 import { mergeSyncedMediaContent } from '@/src/extensions/mediaContent';
-import { notionClient } from '@/src/services/notionClient';
+import { notionClient, connectSyncEvents, applySyncResult, clearStalePages } from '@/src/services/notionClient';
+import type { SyncEventMessage } from '@/src/types/sync';
 import type {
   DocumentContent,
   NotionParentPage,
@@ -30,7 +31,12 @@ export const useJotStore = defineStore('jot', () => {
   const errorMessage = ref<string>('');
   const isLoading = ref(false);
   const saveStatus = ref<SaveStatus>('idle');
+  const sseStatus = ref<'disconnected' | 'connecting' | 'connected'>('disconnected');
+  const stalePageIds = ref<string[]>([]);
+  const aheadPageIds = ref<string[]>([]);
   const notionParentPages = ref<NotionParentPage[]>([]);
+  const pullMessage = ref('');
+  let pullMessageTimer: number | undefined;
   const syncConfig = ref<SyncConfig>({
     serverUrl: 'http://localhost:8787',
     authenticated: false,
@@ -38,6 +44,7 @@ export const useJotStore = defineStore('jot', () => {
   });
   let captureInsertHandler: CaptureInsertHandler | undefined;
   let isListeningForRuntimeMessages = false;
+  let syncEventsSource: EventSource | undefined;
 
   const currentProject = computed(() =>
     projects.value.find((project) => project.id === currentProjectId.value),
@@ -52,7 +59,9 @@ export const useJotStore = defineStore('jot', () => {
       syncConfig.value = await notionClient
         .refreshSyncSession()
         .catch(() => syncConfig.value);
-      await notionClient.validateNotionCache().catch(() => undefined);
+      const validateResult = await notionClient.validateNotionCache().catch(() => ({ stalePageIds: [], aheadPageIds: [] }));
+      stalePageIds.value = validateResult.stalePageIds;
+      aheadPageIds.value = validateResult.aheadPageIds;
       syncConfig.value = await notionClient.getSyncConfig();
       projects.value = await notionClient.listProjects();
       const storedProjectId = await notionClient.getCurrentProjectId();
@@ -62,6 +71,7 @@ export const useJotStore = defineStore('jot', () => {
         ? storedProjectId
         : projects.value[0]?.id ?? '';
       await loadCurrentPage();
+      openSyncEvents();
     } catch (error) {
       errorMessage.value =
         error instanceof Error ? error.message : 'Unable to load Jot data.';
@@ -466,6 +476,69 @@ export const useJotStore = defineStore('jot', () => {
     applyPageSyncState(currentPage.value?.id === updatedPage.id ? currentPage.value : nextPage);
   }
 
+  function openSyncEvents() {
+    syncEventsSource?.close();
+    sseStatus.value = 'disconnected';
+    if (!syncConfig.value.connected) return;
+    sseStatus.value = 'connecting';
+    const es = connectSyncEvents(syncConfig.value, handleSyncEvent);
+    es.onopen = () => { sseStatus.value = 'connected'; };
+    es.onerror = () => { sseStatus.value = 'disconnected'; };
+    syncEventsSource = es;
+  }
+
+  async function handleSyncEvent(event: SyncEventMessage) {
+    if (event.status === 'stale') {
+      if (event.pageId === currentPage.value?.id) {
+        await refreshSelectedPage(event.pageId);
+        if (currentPage.value?.syncState === 'saved') {
+          stalePageIds.value = stalePageIds.value.filter((id) => id !== event.pageId);
+          await clearStalePages([event.pageId]);
+          clearTimeout(pullMessageTimer);
+          pullMessage.value = 'Updated from Notion';
+          pullMessageTimer = window.setTimeout(() => { pullMessage.value = ''; }, 5000);
+        } else if (!stalePageIds.value.includes(event.pageId)) {
+          stalePageIds.value = [...stalePageIds.value, event.pageId];
+        }
+      } else if (!stalePageIds.value.includes(event.pageId)) {
+        stalePageIds.value = [...stalePageIds.value, event.pageId];
+      }
+      return;
+    }
+
+    const updated = await applySyncResult(event);
+    if (!updated) return;
+
+    pages.value = pages.value.map((p) => (p.id === updated.id ? updated : p));
+
+    if (currentPage.value?.id === updated.id) {
+      currentPage.value = updated;
+    }
+
+    applyPageSyncState(updated);
+  }
+
+  async function confirmReloadPage(pageId: string) {
+    const refreshed = await notionClient.syncProjectPage(pageId);
+
+    stalePageIds.value = stalePageIds.value.filter((id) => id !== pageId);
+    aheadPageIds.value = aheadPageIds.value.filter((id) => id !== pageId);
+    await clearStalePages([pageId]);
+
+    if (refreshed) {
+      pages.value = pages.value.map((p) => (p.id === pageId ? refreshed : p));
+      if (currentPage.value?.id === pageId) {
+        currentPage.value = refreshed;
+        applyPageSyncState(refreshed);
+      }
+    }
+  }
+
+  function dismissStalePage(pageId: string) {
+    stalePageIds.value = stalePageIds.value.filter((id) => id !== pageId);
+    aheadPageIds.value = aheadPageIds.value.filter((id) => id !== pageId);
+  }
+
   async function updateServerUrl(serverUrl: string) {
     syncConfig.value = await notionClient.updateSyncConfig({ serverUrl });
   }
@@ -498,6 +571,9 @@ export const useJotStore = defineStore('jot', () => {
     };
     saveStatus.value = 'stale';
     errorMessage.value = '';
+    syncEventsSource?.close();
+    syncEventsSource = undefined;
+    sseStatus.value = 'disconnected';
 
     try {
       await notionClient.logoutSyncSession();
@@ -708,7 +784,13 @@ export const useJotStore = defineStore('jot', () => {
     refreshSyncSession,
     savePageContentSnapshot,
     saveCurrentPageContent,
+    pullMessage,
     saveStatus,
+    sseStatus,
+    stalePageIds,
+    aheadPageIds,
+    confirmReloadPage,
+    dismissStalePage,
     selectPage,
     selectNotionParentPage,
     selectProject,

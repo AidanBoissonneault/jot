@@ -116,3 +116,14 @@ CREATE POLICY "service_role_jot_sync_state"     ON jot_sync_state      FOR ALL T
 
 ALTER TABLE notion_block_sync ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "service_role_notion_block_sync" ON notion_block_sync FOR ALL TO service_role USING (true) WITH CHECK (true);
+-- Migration v2: Notion webhook staleness + cross-device version tracking
+-- Run in Supabase SQL editor: project → SQL Editor → New query
+
+-- Add staleness columns to notion_block_sync
+ALTER TABLE notion_block_sync
+  ADD COLUMN IF NOT EXISTS is_stale BOOLEAN NOT NULL DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS stale_since TIMESTAMPTZ;
+
+-- Add webhook subscription ID to notion_installations
+ALTER TABLE notion_installations
+  ADD COLUMN IF NOT EXISTS notion_webhook_id TEXT;

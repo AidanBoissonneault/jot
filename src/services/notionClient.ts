@@ -18,11 +18,11 @@ import type {
   ListNotionPagesResponse,
   MediaUploadResponse,
   SyncEnqueueResponse,
+  SyncEventMessage,
   SyncPageResponse,
   SyncProjectResponse,
   SyncReloadResponse,
   SyncSessionResponse,
-  SyncStatusResponse,
   SyncValidationResponse,
 } from '@/src/types/sync';
 import { markUnrecoverableTransientMedia } from '@/src/extensions/mediaContent';
@@ -61,7 +61,7 @@ const STORAGE_KEYS: Array<keyof JotStorage> = [
 ];
 
 const DEFAULT_SYNC_CONFIG: SyncConfig = {
-  serverUrl: 'http://localhost:8787',
+  serverUrl: import.meta.env.VITE_API_URL ?? 'http://localhost:8787',
   authenticated: false,
   connected: false,
 };
@@ -535,10 +535,7 @@ async function syncPushPage(page: ProjectPage, project: Project): Promise<Projec
     }, syncConfig);
 
     if ('queued' in response && response.queued) {
-      const savingPage = withSyncStatus(normalizedPage, 'saving', 'Syncing to Notion...');
-      // Fire-and-forget — poll until the queue consumer finishes
-      pollSyncStatus(page.id, project, syncConfig).catch(() => undefined);
-      return savingPage;
+      return { ...withSyncStatus(normalizedPage, 'saved', undefined), knownSyncVersion: response.version };
     }
 
     // Fallback for non-queued response shape
@@ -572,56 +569,50 @@ async function syncPushPage(page: ProjectPage, project: Project): Promise<Projec
   }
 }
 
-async function pollSyncStatus(pageId: string, project: Project, syncConfig: SyncConfig): Promise<void> {
-  const MAX_POLLS = 10;
-  const POLL_INTERVAL_MS = 3000;
-
-  for (let i = 0; i < MAX_POLLS; i++) {
-    await new Promise<void>((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
-
+export function connectSyncEvents(
+  syncConfig: SyncConfig,
+  onEvent: (event: SyncEventMessage) => void,
+): EventSource {
+  const es = new EventSource(`${syncConfig.serverUrl}/sync/events`, { withCredentials: true });
+  es.onmessage = (e) => {
     try {
-      const { syncConfig: currentConfig } = await readStorage();
-      if (!currentConfig.connected) return;
+      onEvent(JSON.parse(e.data as string) as SyncEventMessage);
+    } catch { /* ignore malformed */ }
+  };
+  return es;
+}
 
-      const status = await requestServer<SyncStatusResponse>(
-        `/sync/status?pageId=${encodeURIComponent(pageId)}`,
-        undefined,
-        currentConfig,
-      );
-
-      if (status.status === 'synced') {
-        const { pages } = await readStorage();
-        const currentPage = pages.find((p) => p.id === pageId);
-        if (!currentPage) return;
-
-        await persistPage({
-          ...currentPage,
-          ...(status.notionBlockId ? { notionPageId: status.notionBlockId } : {}),
-          syncState: 'saved',
-          syncMessage: undefined,
-        });
-        return;
-      }
-
-      if (status.status === 'failed') {
-        const { pages } = await readStorage();
-        const currentPage = pages.find((p) => p.id === pageId);
-        if (!currentPage) return;
-
-        await persistPage(withSyncStatus(currentPage, 'error', 'Notion sync failed. Will retry.'));
-        return;
-      }
-    } catch {
-      // Ignore transient poll errors — try again next iteration
-    }
-  }
-
-  // Max polls reached — mark stale so user knows sync is delayed
+export async function applySyncResult(event: SyncEventMessage): Promise<ProjectPage | undefined> {
   const { pages } = await readStorage();
-  const currentPage = pages.find((p) => p.id === pageId);
-  if (currentPage?.syncState === 'saving') {
-    await persistPage(withSyncStatus(currentPage, 'stale', 'Sync is taking longer than expected.')).catch(() => undefined);
+  const page = pages.find((p) => p.id === event.pageId);
+  if (!page) return undefined;
+
+  if (event.status === 'stale') {
+    return page;
   }
+
+  const updated =
+    event.status === 'synced'
+      ? {
+          ...page,
+          ...(event.notionBlockId ? { notionPageId: event.notionBlockId } : {}),
+          syncState: 'saved' as const,
+          syncMessage: undefined,
+        }
+      : withSyncStatus(page, 'error', 'Notion sync failed. Will retry.');
+
+  await persistPage(updated);
+  return updated;
+}
+
+export async function clearStalePages(pageIds: string[]): Promise<void> {
+  if (!pageIds.length) return;
+  const { syncConfig } = await readStorage();
+  if (!syncConfig.connected) return;
+  await requestServer('/sync/clear-stale', {
+    method: 'POST',
+    body: JSON.stringify({ pageIds }),
+  }, syncConfig).catch(() => undefined);
 }
 
 async function syncPullPage(page: ProjectPage): Promise<ProjectPage> {
@@ -1068,50 +1059,65 @@ export const notionClient = {
     return nextConfig;
   },
 
-  async validateNotionCache(): Promise<void> {
+  async validateNotionCache(): Promise<{ stalePageIds: string[]; aheadPageIds: string[] }> {
     const { pages, projects, syncConfig } = await readStorage();
 
     if (!syncConfig.connected) {
-      return;
+      return { stalePageIds: [], aheadPageIds: [] };
+    }
+
+    const knownVersions: Record<string, number> = {};
+    for (const page of pages) {
+      if (typeof page.knownSyncVersion === 'number') {
+        knownVersions[page.id] = page.knownSyncVersion;
+      }
     }
 
     const response = await requestServer<SyncValidationResponse>('/sync/validate', {
       method: 'POST',
-      body: JSON.stringify({ pages, projects }),
+      body: JSON.stringify({ pages, projects, knownVersions }),
     }, syncConfig);
     const uncachedProjectIds = new Set(response.uncachedProjectIds ?? []);
     const uncachedPageIds = new Set(response.uncachedPageIds ?? []);
+    const serverVersions = response.serverVersions ?? {};
 
-    if (!uncachedProjectIds.size && !uncachedPageIds.size && !response.clearSelectedParentPage) {
-      return;
+    const needsWrite = uncachedProjectIds.size || uncachedPageIds.size || response.clearSelectedParentPage || Object.keys(serverVersions).length;
+
+    if (needsWrite) {
+      await writeStorage({
+        ...(response.clearSelectedParentPage
+          ? {
+              syncConfig: {
+                ...syncConfig,
+                selectedParentPageId: undefined,
+                selectedParentPageTitle: undefined,
+              },
+            }
+          : {}),
+        projects: projects.map((project) =>
+          uncachedProjectIds.has(project.id)
+            ? {
+                ...project,
+                stateRemoteRevision: undefined,
+                syncMessage: undefined,
+                syncState: 'saved' as const,
+              }
+            : project,
+        ),
+        pages: pages.map((page) => {
+          const withVersion =
+            typeof serverVersions[page.id] === 'number'
+              ? { ...page, knownSyncVersion: serverVersions[page.id] }
+              : page;
+          return uncachedPageIds.has(page.id) ? uncachePageNotionMetadata(withVersion) : withVersion;
+        }),
+      });
     }
 
-    await writeStorage({
-      ...(response.clearSelectedParentPage
-        ? {
-            syncConfig: {
-              ...syncConfig,
-              selectedParentPageId: undefined,
-              selectedParentPageTitle: undefined,
-            },
-          }
-        : {}),
-      projects: projects.map((project) =>
-        uncachedProjectIds.has(project.id)
-          ? {
-              ...project,
-              stateRemoteRevision: undefined,
-              syncMessage: undefined,
-              syncState: 'saved' as const,
-            }
-          : project,
-      ),
-      pages: pages.map((page) =>
-        uncachedPageIds.has(page.id)
-          ? uncachePageNotionMetadata(page)
-          : page,
-      ),
-    });
+    return {
+      stalePageIds: response.stalePageIds ?? [],
+      aheadPageIds: response.aheadPageIds ?? [],
+    };
   },
 
   async reloadFromNotion(): Promise<{

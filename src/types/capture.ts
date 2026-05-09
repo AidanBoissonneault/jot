@@ -67,6 +67,7 @@ export type ProjectPage = {
   notionLastEditedTime?: string;
   localRevision?: string;
   remoteRevision?: string;
+  knownSyncVersion?: number;
   syncMessage?: string;
   syncState?: SaveStatus;
 };

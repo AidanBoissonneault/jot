@@ -2,6 +2,15 @@ name = "jot-sync"
 main = "src/worker.ts"
 compatibility_date = "2025-05-01"
 compatibility_flags = ["nodejs_compat"]
+workers_dev = true
+
+[[durable_objects.bindings]]
+name = "SYNC_EVENTS"
+class_name = "SyncEventsDO"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["SyncEventsDO"]
 
 # Create queues before deploying: wrangler queues create jot-sync-queue && wrangler queues create jot-sync-dlq
 [[queues.producers]]
@@ -10,7 +19,7 @@ binding = "SYNC_QUEUE"
 
 [[queues.consumers]]
 queue             = "jot-sync-queue"
-max_batch_size    = 5
+max_batch_size    = 1
 max_batch_timeout = 30
 max_retries       = 3
 dead_letter_queue = "jot-sync-dlq"
@@ -19,7 +28,7 @@ dead_letter_queue = "jot-sync-dlq"
 NOTION_VERSION = "2026-03-11"
 JOT_ROOT_PAGE_TITLE = "Jot"
 # Set this to your actual workers.dev URL after deploying once
-WORKER_URL = "https://jot-sync.YOUR_SUBDOMAIN.workers.dev"
+WORKER_URL = "https://sync.jot.byaidan.com"
 
 # Secrets — set with: wrangler secret put <NAME>
 #   NOTION_OAUTH_CLIENT_ID
@@ -28,3 +37,4 @@ WORKER_URL = "https://jot-sync.YOUR_SUBDOMAIN.workers.dev"
 #   JOT_EXTENSION_ORIGIN      (chrome-extension://YOUR_EXTENSION_ID)
 #   SUPABASE_URL              (Project Settings → API → Project URL)
 #   SUPABASE_SERVICE_KEY      (Project Settings → API → service_role key)
+#   NOTION_WEBHOOK_SECRET     (from Notion integration dashboard → Webhooks)
