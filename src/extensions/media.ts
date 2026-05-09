@@ -244,6 +244,7 @@ export const JotAudio = Audio.extend({
       mimeType: { default: '' },
       kind: { default: 'audio' },
       notionFileUploadId: { default: '' },
+      duration: { default: 0 },
     };
   },
 

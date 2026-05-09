@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { EditorContent, useEditor } from '@tiptap/vue-3';
+import AudioRecorder from '@/src/components/AudioRecorder.vue';
 import { NodeSelection, TextSelection } from '@tiptap/pm/state';
 import type { EditorView } from '@tiptap/pm/view';
 import StarterKit from '@tiptap/starter-kit';
@@ -109,6 +110,7 @@ const activeEditorMenu = ref<
   | 'lists'
   | 'blocks'
   | 'history'
+  | 'record'
   | null
 >(null);
 const archiveTarget = ref<{
@@ -118,8 +120,9 @@ const archiveTarget = ref<{
 } | null>(null);
 const isSigningIn = ref(false);
 const editorStateVersion = ref(0);
-const isRecordingAudio = ref(false);
-const isPreparingAudioRecording = ref(false);
+type RecordingPhase = 'idle' | 'requesting_permission' | 'recording' | 'processing';
+const recordingPhase = ref<RecordingPhase>('idle');
+const audioStream = ref<MediaStream | null>(null);
 let activePageId = '';
 let isApplyingStoredContent = false;
 let lastAppliedContent = '';
@@ -130,7 +133,6 @@ let editorSavePromise: Promise<void> | undefined;
 let shouldSaveAgainAfterCurrentSave = false;
 let sessionPollTimer: number | undefined;
 let audioRecorder: MediaRecorder | undefined;
-let audioStream: MediaStream | undefined;
 let audioChunks: Blob[] = [];
 
 const editor = useEditor({
@@ -445,6 +447,7 @@ const activeToolbarItems = computed(() => {
       { id: 'link', label: 'Link', icon: ['fas', 'link'], title: 'Link' },
       { id: 'lists', label: 'Lists', icon: ['fas', 'list-ul'], title: 'Lists' },
       { id: 'blocks', label: 'Blocks', icon: ['fas', 'quote-left'], title: 'Blocks and divider' },
+      { id: 'record', label: 'Record', icon: ['fas', 'microphone'], title: 'Record audio note' },
     ] as const;
   }
 
@@ -808,10 +811,15 @@ function showEditorMenu(menu: NonNullable<typeof activeEditorMenu.value>) {
 }
 
 function toggleEditorMenu(menu: NonNullable<typeof activeEditorMenu.value>) {
-  activeEditorMenu.value = activeEditorMenu.value === menu ? null : menu;
+  const closing = activeEditorMenu.value === menu;
+  activeEditorMenu.value = closing ? null : menu;
 
   if (activeEditorMenu.value === 'link') {
     openLinkTools();
+  }
+
+  if (closing && menu === 'record' && recordingPhase.value === 'recording') {
+    audioRecorder?.stop();
   }
 }
 
@@ -996,33 +1004,44 @@ function insertAudio() {
   void saveEditorContentOptimistically();
 }
 
-async function toggleAudioRecording() {
-  if (isRecordingAudio.value) {
+function toggleAudioRecording() {
+  if (recordingPhase.value === 'recording') {
     audioRecorder?.stop();
     return;
   }
-
-  await startAudioRecording();
+  if (recordingPhase.value === 'idle') {
+    void startAudioRecording();
+  }
 }
 
 async function startAudioRecording() {
-  if (!editor.value || isPreparingAudioRecording.value) {
-    return;
-  }
+  if (!editor.value || recordingPhase.value !== 'idle') return;
 
   if (!navigator.mediaDevices?.getUserMedia) {
     uiMessage.value = 'Audio recording is not available in this browser.';
     return;
   }
 
-  isPreparingAudioRecording.value = true;
+  recordingPhase.value = 'requesting_permission';
 
   try {
-    audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const permState = await navigator.permissions
+      .query({ name: 'microphone' as PermissionName })
+      .then((r) => r.state)
+      .catch(() => 'prompt' as PermissionState);
+
+    if (permState === 'denied') {
+      uiMessage.value =
+        'Microphone access is blocked. Open Chrome settings → Privacy → Site settings → Microphone and allow this extension.';
+      recordingPhase.value = 'idle';
+      return;
+    }
+
+    audioStream.value = await navigator.mediaDevices.getUserMedia({ audio: true });
     audioChunks = [];
     const mimeType = preferredAudioRecordingMimeType();
     audioRecorder = new MediaRecorder(
-      audioStream,
+      audioStream.value,
       mimeType ? { mimeType } : undefined,
     );
 
@@ -1033,30 +1052,37 @@ async function startAudioRecording() {
     });
 
     audioRecorder.addEventListener('stop', () => {
+      recordingPhase.value = 'processing';
       const recorderMimeType = audioRecorder?.mimeType || mimeType || 'audio/webm';
       const audioBlob = new Blob(audioChunks, { type: recorderMimeType });
       const extension = audioExtensionFromMimeType(recorderMimeType);
-      const file = new File(
-        [audioBlob],
-        `jot-recording-${new Date().toISOString().replace(/[:.]/g, '-')}.${extension}`,
-        { type: recorderMimeType },
-      );
-
-      isRecordingAudio.value = false;
+      const now = new Date();
+      const date = now.toLocaleDateString('en-CA');
+      const hh = String(now.getHours()).padStart(2, '0');
+      const mm = String(now.getMinutes()).padStart(2, '0');
+      const filename = `Recording ${date} ${hh}.${mm}.${extension}`;
+      const file = new File([audioBlob], filename, { type: recorderMimeType });
       audioRecorder = undefined;
       audioChunks = [];
       stopAudioStream();
-      void handleUploadableAudioFile(file);
+      void handleUploadableAudioFile(file).finally(() => {
+        recordingPhase.value = 'idle';
+      });
     });
 
     audioRecorder.start();
-    isRecordingAudio.value = true;
+    recordingPhase.value = 'recording';
   } catch (error) {
-    uiMessage.value =
-      error instanceof Error ? error.message : 'Unable to start audio recording.';
+    const name = error instanceof DOMException ? error.name : '';
+    if (name === 'NotAllowedError') {
+      uiMessage.value =
+        'Microphone access was denied or dismissed. Look for the permission prompt in the Chrome toolbar and click Allow, then try again.';
+    } else {
+      uiMessage.value =
+        error instanceof Error ? error.message : 'Unable to start audio recording.';
+    }
     stopAudioStream();
-  } finally {
-    isPreparingAudioRecording.value = false;
+    recordingPhase.value = 'idle';
   }
 }
 
@@ -1347,12 +1373,16 @@ async function handleUploadableAudioFile(file: File): Promise<void> {
 
   const localSrc = URL.createObjectURL(file);
   shouldSkipNextUpdateSave = true;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  editor.value?.chain().focus().setAudio({
-    src: localSrc,
-    uploadState: 'uploading',
-    mimeType: file.type,
-  } as any).run();
+  const editorInstance = editor.value;
+  if (editorInstance) {
+    const insertPos = editorInstance.state.selection.from;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    editorInstance.chain().focus(insertPos || 'end').setAudio({
+      src: localSrc,
+      uploadState: 'uploading',
+      mimeType: file.type,
+    } as any).run();
+  }
   queueMicrotask(() => {
     shouldSkipNextUpdateSave = false;
   });
@@ -1394,8 +1424,8 @@ async function handleUploadableAudioFile(file: File): Promise<void> {
 }
 
 function stopAudioStream() {
-  audioStream?.getTracks().forEach((track) => track.stop());
-  audioStream = undefined;
+  audioStream.value?.getTracks().forEach((track) => track.stop());
+  audioStream.value = null;
 }
 
 function preferredAudioRecordingMimeType() {
@@ -2075,6 +2105,17 @@ function textFromNode(node: DocumentContent): string {
               </button>
             </div>
 
+            <div v-else-if="activeEditorMenu === 'record'" class="tool-panel record-panel">
+              <AudioRecorder
+                :disabled="!editor || !store.currentPage"
+                :phase="recordingPhase"
+                :stream="audioStream"
+                variant="panel"
+                @start="toggleAudioRecording"
+                @stop="toggleAudioRecording"
+              />
+            </div>
+
             <div v-else-if="activeEditorMenu === 'history'" class="tool-panel button-grid">
               <button
                 type="button"
@@ -2390,21 +2431,7 @@ function textFromNode(node: DocumentContent): string {
           </button>
         </form>
 
-        <div class="recording-row">
-          <button
-            type="button"
-            class="icon-label-button"
-            :class="{ active: isRecordingAudio }"
-            :disabled="!editor || isPreparingAudioRecording"
-            :title="isRecordingAudio ? 'Stop recording audio' : 'Record audio'"
-            :aria-label="isRecordingAudio ? 'Stop recording audio' : 'Record audio'"
-            @click="toggleAudioRecording"
-          >
-            <font-awesome-icon :icon="isRecordingAudio ? ['fas', 'xmark'] : ['fas', 'microphone']" fixed-width />
-            <span>{{ isRecordingAudio ? 'Stop recording' : 'Record audio' }}</span>
-          </button>
-          <small>{{ isPreparingAudioRecording ? 'Preparing microphone...' : 'Drop images, audio, or YouTube links into the editor.' }}</small>
-        </div>
+        <small>Drop images, audio, or YouTube links into the editor.</small>
       </div>
     </section>
 
@@ -2940,6 +2967,12 @@ function textFromNode(node: DocumentContent): string {
   border-radius: var(--jot-radius);
   background: var(--jot-surface);
   box-shadow: var(--jot-shadow);
+}
+
+.record-panel {
+  display: flex;
+  align-items: center;
+  padding: 4px 2px;
 }
 
 .tab-panel {
