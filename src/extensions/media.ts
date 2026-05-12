@@ -262,11 +262,13 @@ export const JotAudio = Audio.extend({
   },
 
   addNodeView() {
-    return ({ node }) => {
+    return ({ editor, getPos, node }) => {
       const wrapper = document.createElement('div');
       wrapper.className = 'jot-audio-wrapper';
       const uploadState = String(node.attrs.uploadState ?? 'idle');
       const src = String(node.attrs.src ?? '');
+      const fileUploadId = String(node.attrs.notionFileUploadId ?? '');
+      let isRefreshing = false;
 
       if (uploadState === 'error') {
         wrapper.classList.add('is-error');
@@ -284,13 +286,36 @@ export const JotAudio = Audio.extend({
       audio.preload = 'metadata';
 
       audio.addEventListener('error', () => {
-        audio.remove();
-        const link = document.createElement('a');
-        link.href = src;
-        link.textContent = src;
-        link.target = '_blank';
-        link.rel = 'noopener noreferrer';
-        wrapper.appendChild(link);
+        if (fileUploadId && !isRefreshing) {
+          isRefreshing = true;
+          void notionClient.refreshMediaUrl(fileUploadId)
+            .then((freshSrc) => {
+              if (!freshSrc || freshSrc === audio.src) {
+                throw new Error('Media URL did not change.');
+              }
+
+              audio.src = freshSrc;
+              const pos = typeof getPos === 'function' ? getPos() : undefined;
+              if (typeof pos === 'number') {
+                editor.view.dispatch(
+                  editor.view.state.tr.setNodeMarkup(pos, undefined, {
+                    ...node.attrs,
+                    src: freshSrc,
+                    uploadState: 'done',
+                  }),
+                );
+              }
+            })
+            .catch(() => {
+              showAudioFallback(wrapper, audio, src);
+            })
+            .finally(() => {
+              isRefreshing = false;
+            });
+          return;
+        }
+
+        showAudioFallback(wrapper, audio, src);
       });
 
       wrapper.appendChild(audio);
@@ -298,6 +323,24 @@ export const JotAudio = Audio.extend({
     };
   },
 });
+
+function showAudioFallback(wrapper: HTMLElement, audio: HTMLAudioElement, src: string) {
+  if (!audio.isConnected && wrapper.querySelector('a')) {
+    return;
+  }
+
+  audio.remove();
+  if (wrapper.querySelector('a')) {
+    return;
+  }
+
+  const link = document.createElement('a');
+  link.href = src;
+  link.textContent = 'Open audio file';
+  link.target = '_blank';
+  link.rel = 'noopener noreferrer';
+  wrapper.appendChild(link);
+}
 
 async function setYoutubeIframeSource(iframe: HTMLIFrameElement, src: string) {
   const directEmbedUrl = youtubeEmbedUrl(src);

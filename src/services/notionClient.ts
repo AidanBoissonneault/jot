@@ -17,6 +17,7 @@ import type {
   CreateNotionPageResponse,
   ListNotionPagesResponse,
   MediaUploadResponse,
+  MediaRefreshResponse,
   SyncEnqueueResponse,
   SyncEventMessage,
   SyncPageResponse,
@@ -27,7 +28,15 @@ import type {
 } from '@/src/types/sync';
 import { markUnrecoverableTransientMedia } from '@/src/extensions/mediaContent';
 import { normalizeJotBlockIds } from '@/src/extensions/jotBlockIds';
-import { addPendingSync, listPendingSyncs, removePendingSync } from '@/src/services/syncQueue';
+import {
+  addPendingSyncOps,
+  buildPageSyncOps,
+  compactPendingSyncOps,
+  listPendingSyncOps,
+  removePendingSyncOps,
+  replacePendingSyncOps,
+  type BlockSyncOp,
+} from '@/src/services/syncQueue';
 
 type JotStorage = {
   activePageIdsByProject?: Record<string, string>;
@@ -82,6 +91,7 @@ const defaultProjects: Project[] = [
 const waitForStub = () => new Promise((resolve) => setTimeout(resolve, 80));
 const pendingTempPageSaves = new Map<string, ProjectPage>();
 const projectReconciliations = new Map<string, Promise<string>>();
+let queueDeliveryPromise: Promise<void> | undefined;
 
 function emptyDocument(): DocumentContent {
   return normalizeJotBlockIds({
@@ -512,61 +522,38 @@ async function requestServer<T>(
   return payload;
 }
 
-async function syncPushPage(page: ProjectPage, project: Project): Promise<ProjectPage> {
+async function enqueuePageSync(
+  page: ProjectPage,
+  project: Project,
+  previousPage?: ProjectPage,
+): Promise<ProjectPage> {
   const { syncConfig } = await readStorage();
   const normalizedPage = {
     ...page,
     content: normalizeJotBlockIds(page.content),
   };
 
-  if (!syncConfig.connected) {
-    return withSyncStatus(normalizedPage, 'stale', 'Connect Notion to sync this page.');
-  }
+  await addPendingSyncOps(buildPageSyncOps({
+    previousPage,
+    page: normalizedPage,
+    project,
+    selectedParentPageId: syncConfig.selectedParentPageId,
+  }));
+  triggerQueueDelivery();
 
-  try {
-    const response = await requestServer<SyncEnqueueResponse | SyncPageResponse>('/sync/push', {
-      method: 'POST',
-      body: JSON.stringify({
-        page: normalizedPage,
-        project,
-        selectedParentPageId: syncConfig.selectedParentPageId,
-        defaultParentTitle: project.name,
-      }),
-    }, syncConfig);
+  return syncConfig.connected
+    ? withSyncStatus(normalizedPage, 'saving')
+    : withSyncStatus(normalizedPage, 'stale', 'Connect Notion to sync this page.');
 
-    if ('queued' in response && response.queued) {
-      return { ...withSyncStatus(normalizedPage, 'saved', undefined), knownSyncVersion: response.version };
-    }
+}
 
-    // Fallback for non-queued response shape
-    const syncResponse = response as SyncPageResponse;
-    if (syncResponse.parentPage) {
-      await updateStoredSyncConfig({
-        selectedParentPageId: syncResponse.parentPage.id,
-        selectedParentPageTitle: syncResponse.parentPage.title,
-      });
-    }
-
-    return syncResponse.page
-      ? {
-          ...normalizedPage,
-          ...syncResponse.page,
-          syncMessage: syncResponse.message,
-          syncState: syncResponse.status,
-        }
-      : withSyncStatus(normalizedPage, syncResponse.status, syncResponse.message);
-  } catch (error) {
-    // Network failure (TypeError) while connected — queue for replay on reconnect.
-    if (error instanceof TypeError) {
-      await addPendingSync(normalizedPage, project).catch(() => undefined);
-    }
-
-    return withSyncStatus(
-      normalizedPage,
-      'error',
-      error instanceof Error ? error.message : 'Unable to sync this page.',
-    );
-  }
+function triggerQueueDelivery(): void {
+  if (queueDeliveryPromise) return;
+  queueDeliveryPromise = deliverPendingSyncOps()
+    .catch(() => undefined)
+    .finally(() => {
+      queueDeliveryPromise = undefined;
+    });
 }
 
 export function connectSyncEvents(
@@ -588,7 +575,11 @@ export async function applySyncResult(event: SyncEventMessage): Promise<ProjectP
   if (!page) return undefined;
 
   if (event.status === 'stale') {
-    return page;
+    const stalePage = typeof event.version === 'number'
+      ? { ...page, serverSyncVersion: event.version, syncState: 'stale' as const }
+      : { ...page, syncState: 'stale' as const };
+    await persistPage(stalePage);
+    return stalePage;
   }
 
   const updated =
@@ -596,6 +587,9 @@ export async function applySyncResult(event: SyncEventMessage): Promise<ProjectP
       ? {
           ...page,
           ...(event.notionBlockId ? { notionPageId: event.notionBlockId } : {}),
+          ...(typeof event.version === 'number'
+            ? { knownSyncVersion: event.version, serverSyncVersion: event.version }
+            : {}),
           syncState: 'saved' as const,
           syncMessage: undefined,
         }
@@ -615,10 +609,14 @@ export async function clearStalePages(pageIds: string[]): Promise<void> {
   }, syncConfig).catch(() => undefined);
 }
 
-async function syncPullPage(page: ProjectPage): Promise<ProjectPage> {
+async function syncPullPage(page: ProjectPage, options: { force?: boolean } = {}): Promise<ProjectPage> {
   const { syncConfig } = await readStorage();
 
   if (!syncConfig.connected || !page.notionPageId) {
+    return page;
+  }
+
+  if (!options.force && !hasNewerServerVersion(page)) {
     return page;
   }
 
@@ -634,6 +632,7 @@ async function syncPullPage(page: ProjectPage): Promise<ProjectPage> {
       ? {
           ...page,
           ...response.page,
+          knownSyncVersion: page.serverSyncVersion ?? page.knownSyncVersion,
           syncMessage: response.message,
           syncState: response.status,
         }
@@ -645,6 +644,11 @@ async function syncPullPage(page: ProjectPage): Promise<ProjectPage> {
       error instanceof Error ? error.message : 'Unable to pull Notion changes.',
     );
   }
+}
+
+function hasNewerServerVersion(page: ProjectPage): boolean {
+  return typeof page.serverSyncVersion === 'number' &&
+    page.serverSyncVersion > (page.knownSyncVersion ?? 0);
 }
 
 async function persistPage(page: ProjectPage) {
@@ -792,36 +796,54 @@ async function replayTempPageSave(tempPageId: string, realPage: ProjectPage) {
   });
 }
 
-async function replayPendingSyncs(): Promise<void> {
-  const ops = await listPendingSyncs();
-  if (!ops.length) return;
+async function deliverPendingSyncOps(): Promise<void> {
+  const { syncConfig } = await readStorage();
+  if (!syncConfig.connected) return;
 
-  const { pages } = await readStorage();
+  const pending = await listPendingSyncOps();
+  if (!pending.length) return;
+
+  const compacted = compactPendingSyncOps(pending);
+  if (compacted.length !== pending.length) {
+    await replacePendingSyncOps(compacted);
+  }
+
+  const response = await requestServer<SyncEnqueueResponse>('/sync/push', {
+    method: 'POST',
+    body: JSON.stringify({ ops: compacted }),
+  }, syncConfig);
+
+  await removePendingSyncOps(compacted.map((op) => op.opId));
+  await applyQueuedVersions(compacted, response);
+}
+
+async function applyQueuedVersions(ops: BlockSyncOp[], response: SyncEnqueueResponse): Promise<void> {
+  const versions = response.versions ?? {};
+  const opVersions = response.opVersions ?? {};
+  const versionByPage = new Map<string, number>();
 
   for (const op of ops) {
-    const currentPage = pages.find((p) => p.id === op.id);
-
-    if (!currentPage || currentPage.localRevision !== op.page.localRevision) {
-      await removePendingSync(op.id).catch(() => undefined);
-      continue;
-    }
-
-    try {
-      const { projects } = await readStorage();
-      const project = projects.find((p) => p.id === op.project.id);
-      if (!project) {
-        await removePendingSync(op.id).catch(() => undefined);
-        continue;
-      }
-
-      const result = await syncPushPage(op.page, project);
-      if (result.syncState !== 'error') {
-        await persistPage(result);
-      }
-    } finally {
-      await removePendingSync(op.id).catch(() => undefined);
+    const version = versions[op.pageId] ?? opVersions[op.opId] ?? response.version;
+    if (typeof version === 'number') {
+      versionByPage.set(op.pageId, Math.max(versionByPage.get(op.pageId) ?? 0, version));
     }
   }
+
+  if (!versionByPage.size) return;
+
+  const { pages } = await readStorage();
+  await writeStorage({
+    pages: pages.map((page) => {
+      const version = versionByPage.get(page.id);
+      return typeof version === 'number'
+        ? {
+            ...page,
+            knownSyncVersion: Math.max(page.knownSyncVersion ?? 0, version),
+            serverSyncVersion: Math.max(page.serverSyncVersion ?? 0, version),
+          }
+        : page;
+    }),
+  });
 }
 
 async function updateStoredSyncConfig(config: Partial<SyncConfig>): Promise<SyncConfig> {
@@ -1053,7 +1075,7 @@ export const notionClient = {
     });
 
     if (session.connected) {
-      replayPendingSyncs().catch(() => undefined);
+      triggerQueueDelivery();
     }
 
     return nextConfig;
@@ -1107,7 +1129,13 @@ export const notionClient = {
         pages: pages.map((page) => {
           const withVersion =
             typeof serverVersions[page.id] === 'number'
-              ? { ...page, knownSyncVersion: serverVersions[page.id] }
+              ? {
+                  ...page,
+                  serverSyncVersion: serverVersions[page.id],
+                  ...(serverVersions[page.id] <= (page.knownSyncVersion ?? 0)
+                    ? { knownSyncVersion: serverVersions[page.id] }
+                    : {}),
+                }
               : page;
           return uncachedPageIds.has(page.id) ? uncachePageNotionMetadata(withVersion) : withVersion;
         }),
@@ -1126,10 +1154,20 @@ export const notionClient = {
     projects: Project[];
     syncConfig: SyncConfig;
   }> {
-    const { syncConfig } = await readStorage();
+    const { currentProjectId, pages: localPages, projects: localProjects, syncConfig } = await readStorage();
 
     if (!syncConfig.connected) {
       throw new Error('Connect Notion before reloading from Notion.');
+    }
+
+    const validation = await this.validateNotionCache();
+    if (!validation.stalePageIds.length && !validation.aheadPageIds.length) {
+      return {
+        currentProjectId,
+        pages: localPages,
+        projects: localProjects,
+        syncConfig,
+      };
     }
 
     const response = await requestServer<SyncReloadResponse>('/sync/reload', {
@@ -1151,7 +1189,7 @@ export const notionClient = {
       pages,
       response.activePageIdsByProject,
     );
-    const currentProjectId = projects.some((project) => project.id === response.currentProjectId)
+    const nextCurrentProjectId = projects.some((project) => project.id === response.currentProjectId)
       ? response.currentProjectId ?? ''
       : projects[0]?.id ?? '';
     const nextSyncConfig = response.clearSelectedParentPage
@@ -1164,7 +1202,7 @@ export const notionClient = {
 
     await writeStorage({
       activePageIdsByProject,
-      currentProjectId,
+      currentProjectId: nextCurrentProjectId,
       hasMigratedCapturesToPages: true,
       pages,
       projects,
@@ -1172,7 +1210,7 @@ export const notionClient = {
     });
 
     return {
-      currentProjectId,
+      currentProjectId: nextCurrentProjectId,
       pages,
       projects,
       syncConfig: nextSyncConfig,
@@ -1358,11 +1396,7 @@ export const notionClient = {
           projectId: realProject.id,
           syncState: 'saving',
         });
-        const syncedPage = await syncPushPage(realPage, realProject);
-
-        if (syncedPage.syncState === 'error') {
-          throw new Error(syncedPage.syncMessage ?? 'Unable to create this page.');
-        }
+        const syncedPage = await enqueuePageSync(realPage, realProject);
 
         await replaceTempPage(page, syncedPage);
         return replayTempPageSave(page.id, syncedPage);
@@ -1406,7 +1440,7 @@ export const notionClient = {
       return updatedPage;
     }
 
-    const syncedPage = await syncPushPage(updatedPage, project);
+    const syncedPage = await enqueuePageSync(updatedPage, project, page);
 
     await writeStorage({
       pages: pages.map((storedPage) =>
@@ -1458,7 +1492,7 @@ export const notionClient = {
     });
 
     if (!isTempPage(archivedPage) && !isTempProject(project)) {
-      const syncedArchivedPage = await syncPushPage(archivedPage, project);
+      const syncedArchivedPage = await enqueuePageSync(archivedPage, project, page);
 
       if (syncedArchivedPage.syncState === 'error') {
         throw new Error(syncedArchivedPage.syncMessage ?? 'Unable to archive this page in Notion.');
@@ -1492,7 +1526,8 @@ export const notionClient = {
       return updatedPage;
     }
 
-    const syncedPage = await syncPushPage(updatedPage, project);
+    const previousPage = pages.find((storedPage) => storedPage.id === updatedPage.id);
+    const syncedPage = await enqueuePageSync(updatedPage, project, previousPage);
     await persistPage(syncedPage);
     return syncedPage;
   },
@@ -1527,7 +1562,7 @@ export const notionClient = {
       ),
     });
 
-    const syncedPage = await syncPushPage(updatedPage, project);
+    const syncedPage = await enqueuePageSync(updatedPage, project, page);
     await persistPage(syncedPage);
     return syncedPage;
   },
@@ -1558,5 +1593,22 @@ export const notionClient = {
     }
 
     return response.fileUploadId;
+  },
+
+  async refreshMediaUrl(fileUploadId: string): Promise<string> {
+    if (!fileUploadId) {
+      throw new Error('Missing Notion file upload id.');
+    }
+
+    const response = await requestServer<MediaRefreshResponse>('/media/refresh', {
+      method: 'POST',
+      body: JSON.stringify({ fileUploadId }),
+    });
+
+    if (!response.url) {
+      throw new Error('The sync server did not return a media URL.');
+    }
+
+    return response.url;
   },
 };

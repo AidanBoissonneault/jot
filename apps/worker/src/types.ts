@@ -1,15 +1,18 @@
 import type { Queue } from '@cloudflare/workers-types';
 import type { Project, ProjectPage, NotionBlockMapping, NotionParentPage } from '../../../src/types/capture.js';
+import type { SyncBlockOperation } from '../../../src/types/sync.js';
 
 export type SyncJob = {
-  type: 'page' | 'project';
+  type: 'page' | 'project' | 'block_op';
   localId: string;
+  pageId?: string;
   projectId: string;
   installationId: number;
   queuedVersion: number;
   payload: {
     page?: ProjectPage;
     project: Project;
+    op?: SyncBlockOperation;
     selectedParentPageId?: string;
   };
 };

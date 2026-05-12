@@ -22,6 +22,7 @@ import { syncProjectFolder } from './projectSync.js';
 import { createRootPageHelpers } from './rootPages.js';
 import type {
   CreateNotionPageRequest,
+  MediaRefreshRequest,
   MediaUploadRequest,
   SyncPageRequest,
   SyncProjectRequest,
@@ -242,15 +243,46 @@ app.post('/notion/pages', async (c) => {
 app.post('/sync/push', async (c) => {
   const body = await c.req.json<SyncPageRequest>().catch(() => ({}));
   const { page, project, selectedParentPageId } = body ?? {};
+  const ops = Array.isArray(body?.ops) ? body.ops : [];
 
-  if (!page?.id || !project?.id) {
+  if (!ops.length && (!page?.id || !project?.id)) {
     return c.json({ status: 'error', message: 'Missing page or project.' });
   }
 
   const store = await requireConnectedStore(c);
+  const versions = {};
+  const opVersions = {};
+
+  if (ops.length) {
+    for (const op of ops) {
+      if (!op?.opId || !op?.pageId || !op?.payload?.page || !op?.payload?.project) {
+        return c.json({ status: 'error', message: 'Invalid sync operation.' }, 400);
+      }
+
+      const version = await enqueueSync(c.env, {
+        type: 'block_op',
+        localId: op.pageId,
+        pageId: op.pageId,
+        projectId: op.projectId,
+        installationId: store.installationId,
+        payload: {
+          op,
+          page: op.payload.page,
+          project: op.payload.project,
+          selectedParentPageId: op.payload.selectedParentPageId,
+        },
+      });
+      versions[op.pageId] = version;
+      opVersions[op.opId] = version;
+    }
+
+    return c.json({ queued: true, versions, opVersions });
+  }
+
   const version = await enqueueSync(c.env, {
     type: 'page',
     localId: page.id,
+    pageId: page.id,
     projectId: project.id,
     installationId: store.installationId,
     payload: { page, project, selectedParentPageId },
@@ -459,36 +491,49 @@ app.post('/sync/clear-stale', async (c) => {
 
 app.post('/webhooks/notion', async (c) => {
   const rawBody = await c.req.text();
-  console.log('[webhooks/notion] body:', rawBody);
-
-  const signature = c.req.header('notion-signature') ?? '';
-  if (c.env.NOTION_WEBHOOK_SECRET) {
-    const expected = await computeHmacSignature(c.env.NOTION_WEBHOOK_SECRET, rawBody);
-    if (signature !== `v0=${expected}`) {
-      return c.json({ error: 'Invalid signature' }, 401);
-    }
-  }
 
   let payload: Record<string, unknown>;
   try {
     payload = JSON.parse(rawBody);
   } catch {
-    return c.json({ error: 'Invalid JSON' }, 400);
+    console.warn('[webhooks/notion] invalid JSON payload');
+    return c.json({ ok: true, ignored: 'invalid_json' });
   }
 
-  // Notion webhook URL verification challenge
+  // Notion webhook URL verification must be answered synchronously.
   if (payload.type === 'url_verification' && payload.challenge) {
     return c.json({ challenge: payload.challenge });
   }
 
+  const signature = c.req.header('notion-signature') ?? '';
+  if (c.env.NOTION_WEBHOOK_SECRET) {
+    const expected = await computeHmacSignature(c.env.NOTION_WEBHOOK_SECRET, rawBody).catch((error) => {
+      console.error('[webhooks/notion] signature computation failed:', error);
+      return '';
+    });
+    if (signature !== `v0=${expected}`) {
+      console.warn('[webhooks/notion] invalid signature');
+      return c.json({ ok: true, ignored: 'invalid_signature' });
+    }
+  }
+
+  const processing = processNotionWebhook(c.env, payload).catch((error) => {
+    console.error('[webhooks/notion] processing failed:', error);
+  });
+  c.executionCtx?.waitUntil?.(processing);
+
+  return c.json({ ok: true });
+});
+
+async function processNotionWebhook(env, payload) {
   const notionPageId = (payload.entity as Record<string, unknown> | undefined)?.id as string | undefined;
-  if (!notionPageId) return c.json({ ok: true });
+  if (!notionPageId) return;
 
   // Skip changes made by our own bot integration (new format uses authors[], old format uses actor)
   const authors = payload.authors as Array<Record<string, unknown>> | undefined;
   const actor = payload.actor as Record<string, unknown> | undefined;
   if (actor?.type === 'bot' || (authors?.length && authors.every((a) => a.type === 'bot'))) {
-    return c.json({ ok: true });
+    return;
   }
 
   const { data: rows } = await supabase
@@ -498,28 +543,33 @@ app.post('/webhooks/notion', async (c) => {
 
   if (!rows?.length) {
     console.log('[webhooks/notion] no local pages mapped to notion page', notionPageId);
-    return c.json({ ok: true });
+    return;
   }
 
   console.log('[webhooks/notion] notifying', rows.length, 'page(s) stale for notion page', notionPageId);
   for (const row of rows) {
+    const { data: staleVersion } = await supabase.rpc('increment_block_version', {
+      p_installation_id: row.installation_id,
+      p_local_id: row.local_id,
+      p_entity_type: 'page',
+    });
+
     await supabase
       .from('notion_block_sync')
       .update({ is_stale: true, stale_since: new Date().toISOString() })
       .eq('installation_id', row.installation_id)
       .eq('local_id', row.local_id);
 
-    const doStub = c.env.SYNC_EVENTS.get(
-      c.env.SYNC_EVENTS.idFromName(String(row.installation_id)),
+    const doStub = env.SYNC_EVENTS.get(
+      env.SYNC_EVENTS.idFromName(String(row.installation_id)),
     );
     await doStub.fetch(new Request('http://do/notify', {
       method: 'POST',
-      body: JSON.stringify({ status: 'stale', pageId: row.local_id }),
+      body: JSON.stringify({ status: 'stale', pageId: row.local_id, version: staleVersion }),
     })).catch(() => undefined);
   }
 
-  return c.json({ ok: true });
-});
+}
 
 // ─── Media upload ──────────────────────────────────────────────────────────────
 
@@ -545,6 +595,22 @@ app.post('/media/upload', async (c) => {
   );
 
   return c.json({ fileUploadId });
+});
+
+app.post('/media/refresh', async (c) => {
+  const body = await c.req.json<MediaRefreshRequest>().catch(() => ({}));
+  const fileUploadId = String(body?.fileUploadId ?? '').trim();
+  if (!fileUploadId) return c.json({ error: 'Missing fileUploadId.' }, 400);
+
+  const store = await requireConnectedStore(c);
+  const notionBlockId = findNotionBlockIdByFileUploadId(store, fileUploadId);
+  if (!notionBlockId) return c.json({ error: 'Media block is not synced yet.' }, 404);
+
+  const block = await notionRequest(store, `/blocks/${notionBlockId}`);
+  const url = mediaUrlFromNotionBlock(block);
+  if (!url) return c.json({ error: 'Unable to refresh this media URL.' }, 404);
+
+  return c.json({ url });
 });
 
 // ─── Per-request singletons ────────────────────────────────────────────────────
@@ -1355,6 +1421,22 @@ function mediaUrlFromNotionBlock(block) {
   return null;
 }
 
+function findNotionBlockIdByFileUploadId(store, fileUploadId) {
+  for (const mappings of Object.values(store.blockMappings ?? {})) {
+    for (const mapping of mappings ?? []) {
+      const state = mapping?.newState;
+      const type = state?.type;
+      const uploadedId = type ? state?.[type]?.file_upload?.id : undefined;
+
+      if (uploadedId === fileUploadId && mapping?.notionBlockId) {
+        return mapping.notionBlockId;
+      }
+    }
+  }
+
+  return null;
+}
+
 function titleFromPage(page) {
   const titleProperty = Object.values(page.properties ?? {}).find((p) => p.type === 'title');
   return titleProperty?.title?.map((item) => item.plain_text).join('') || 'Untitled';
@@ -1593,7 +1675,7 @@ export default {
 
         let notionBlockId = null;
 
-        if (job.type === 'page') {
+        if (job.type === 'page' || job.type === 'block_op') {
           const result = await pushPageToNotionForInstallation(job.installationId, {
             page: job.payload.page,
             project: job.payload.project,
@@ -1621,7 +1703,7 @@ export default {
         const doStub = env.SYNC_EVENTS.get(env.SYNC_EVENTS.idFromName(job.installationId));
         await doStub.fetch(new Request('http://do/notify', {
           method: 'POST',
-          body: JSON.stringify({ status: 'synced', pageId: job.localId, notionBlockId }),
+          body: JSON.stringify({ status: 'synced', pageId: job.localId, notionBlockId, version: job.queuedVersion }),
         })).catch(() => undefined);
 
         console.log('[queue] done', job.type, job.localId);

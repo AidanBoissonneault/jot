@@ -2,16 +2,16 @@
   "name": "jot",
   "description": "Capture web highlights into structured Notion projects without breaking flow.",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0",
   "type": "module",
   "scripts": {
     "dev": "wxt",
-    "dev:server": "pnpm --filter @jot/sync-server dev",
+    "dev:server": "pnpm --filter @jot/worker dev",
     "test": "vitest run",
     "build": "wxt build",
     "zip": "wxt zip",
     "compile": "vue-tsc --noEmit",
-    "typecheck": "pnpm compile && pnpm --filter @jot/sync-server typecheck && pnpm --filter @jot/worker typecheck",
+    "typecheck": "pnpm compile && pnpm --filter @jot/worker typecheck",
     "postinstall": "wxt prepare"
   },
   "dependencies": {

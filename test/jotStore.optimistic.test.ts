@@ -2,6 +2,7 @@ import { setActivePinia, createPinia } from 'pinia';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 import { nextTick } from 'vue';
 import { notionClient } from '@/src/services/notionClient';
+import { compactPendingSyncOps, listPendingSyncOps } from '@/src/services/syncQueue';
 import { useJotStore } from '@/src/stores/jot';
 import type { DocumentContent, Project, ProjectPage, SyncConfig } from '@/src/types/capture';
 import { readBrowserStorage, resetBrowserStorage } from './setup';
@@ -208,15 +209,19 @@ describe('project metadata', () => {
       selectedParentPageId: 'parent-page',
       selectedParentPageTitle: 'Parent',
     };
-    const fetchMock = vi.fn(async () =>
-      jsonResponse({
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({
+        stalePageIds: [],
+        aheadPageIds: ['page-jot'],
+        serverVersions: { 'page-jot': 2 },
+      }))
+      .mockResolvedValueOnce(jsonResponse({
         activePageIdsByProject: { 'project-remote': 'page-remote' },
         currentProjectId: 'missing-local-project',
         pages: [reloadedPage],
         projects: [reloadedProject],
         status: 'saved',
-      }),
-    );
+      }));
     vi.stubGlobal('fetch', fetchMock);
     resetBrowserStorage({
       activePageIdsByProject: { 'project-jot': 'page-jot' },
@@ -233,7 +238,7 @@ describe('project metadata', () => {
     await store.reloadFromNotion();
     const storage = readBrowserStorage();
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(store.currentProjectId).toBe('project-remote');
     expect(store.currentPage?.id).toBe('page-remote');
     expect(store.pages.map((page) => page.id)).toEqual(['page-remote']);
@@ -243,16 +248,20 @@ describe('project metadata', () => {
   });
 
   test('reloadFromNotion clears selected parent when server reports it invalid', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () =>
-      jsonResponse({
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(jsonResponse({
+        stalePageIds: [],
+        aheadPageIds: ['page-jot'],
+        serverVersions: { 'page-jot': 2 },
+      }))
+      .mockResolvedValueOnce(jsonResponse({
         activePageIdsByProject: {},
         clearSelectedParentPage: true,
         currentProjectId: '',
         pages: [],
         projects: [],
         status: 'saved',
-      }),
-    ));
+      })));
     resetBrowserStorage({
       activePageIdsByProject: { 'project-jot': 'page-jot' },
       currentProjectId: 'project-jot',
@@ -356,13 +365,8 @@ describe('optimistic page creation', () => {
     expect(store.saveStatus).toBe('creating');
   });
 
-  test('replays latest edit after temp page reconciliation', async () => {
-    const pageCreate = deferred<Response>();
-    const pageReplay = deferred<Response>();
-    const fetchMock = vi
-      .fn()
-      .mockImplementationOnce(() => pageCreate.promise)
-      .mockImplementationOnce(() => pageReplay.promise);
+  test('replays latest edit after temp page reconciliation through the local queue', async () => {
+    const fetchMock = vi.fn(async () => jsonResponse({ queued: true, versions: { 'page-jot': 1 } }));
     vi.stubGlobal('fetch', fetchMock);
     const store = useJotStore();
     const editedContent = docWithText('typed while creating');
@@ -372,69 +376,36 @@ describe('optimistic page creation', () => {
     const tempPageId = store.currentPage?.id ?? '';
     await store.saveCurrentPageContent(editedContent, { preserveLocalContent: true });
 
-    const createBody = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
-    const realPageId = createBody.page.id;
-    pageCreate.resolve(jsonResponse({
-      status: 'saved',
-      page: {
-        ...createBody.page,
-        id: realPageId,
-        notionPageId: 'notion-page',
-        remoteRevision: 'rev-1',
-        syncState: 'saved',
-      },
-    }));
-
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
-    const replayBody = JSON.parse(String(fetchMock.mock.calls[1][1]?.body));
-    pageReplay.resolve(jsonResponse({
-      status: 'saved',
-      page: {
-        ...replayBody.page,
-        notionPageId: 'notion-page',
-        remoteRevision: 'rev-2',
-        syncState: 'saved',
-      },
-    }));
-
     await waitFor(() =>
       expect(store.currentPage?.id).not.toBe(tempPageId),
     );
 
     expect(stripJotBlockIds(store.currentPage?.content)).toEqual(editedContent);
-    expect(store.currentPage?.notionPageId).toBe('notion-page');
+    await waitFor(async () => expect(await listPendingSyncOps()).toEqual([]));
+    expect(fetchMock).toHaveBeenCalled();
   });
 
-  test('removes the temp page and surfaces an error when creation fails', async () => {
-    const pageSync = deferred<Response>();
-    vi.stubGlobal('fetch', vi.fn(() => pageSync.promise));
+  test('keeps created page locally when queue delivery fails', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      throw new TypeError('offline');
+    }));
     const store = useJotStore();
 
     await seedStore(store);
     await store.createPage();
     const tempPageId = store.currentPage?.id ?? '';
 
-    pageSync.reject(new Error('Page sync failed'));
-    await waitFor(() => expect(store.currentPage?.id).toBe('page-jot'));
+    await waitFor(() => expect(store.currentPage?.id).not.toBe(tempPageId));
 
-    expect(store.currentPage?.id).toBe('page-jot');
     expect(store.pages.some((page) => page.id === tempPageId)).toBe(false);
-    expect(store.errorMessage).toBe('Page sync failed');
+    expect((await listPendingSyncOps()).length).toBeGreaterThan(0);
   });
 });
 
 describe('page title and content saves', () => {
   test('content saves can carry the latest draft title', async () => {
     const fetchMock = vi.fn(async () =>
-      jsonResponse({
-        status: 'saved',
-        page: {
-          ...basePage,
-          title: 'Old Page',
-          content: docWithText('body edit'),
-          syncState: 'saved',
-        },
-      }),
+      jsonResponse({ queued: true, versions: { 'page-jot': 1 } }),
     );
     vi.stubGlobal('fetch', fetchMock);
     const store = useJotStore();
@@ -445,113 +416,95 @@ describe('page title and content saves', () => {
       title: 'Renamed Page',
     });
 
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     const [, requestInit] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     const requestBody = JSON.parse(String(requestInit.body));
 
-    expect(requestBody.page.title).toBe('Renamed Page');
+    expect(requestBody.ops.at(-1).payload.page.title).toBe('Renamed Page');
     expect(store.currentPage?.title).toBe('Renamed Page');
   });
 
-  test('a slow save cannot overwrite newer optimistic content', async () => {
-    const firstSave = deferred<Response>();
-    const secondSave = deferred<Response>();
-    const fetchMock = vi
-      .fn()
-      .mockImplementationOnce(() => firstSave.promise)
-      .mockImplementationOnce(() => secondSave.promise);
-    vi.stubGlobal('fetch', fetchMock);
-    const store = useJotStore();
-    const firstContent = docWithText('first draft');
-    const secondContent = docWithText('second draft');
-
-    await seedStore(store);
-    const firstPromise = store.saveCurrentPageContent(firstContent, {
-      preserveLocalContent: true,
-    });
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
-    const firstRequest = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
-    const firstRevision = store.currentPage?.localRevision;
-    const secondPromise = store.saveCurrentPageContent(secondContent, {
-      preserveLocalContent: true,
-    });
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
-    const secondRevision = store.currentPage?.localRevision;
-
-    firstSave.resolve(jsonResponse({
-      status: 'saved',
-      page: {
-        ...firstRequest.page,
-        content: firstContent,
-        notionPageId: 'notion-page',
-        remoteRevision: 'remote-1',
-        syncState: 'saved',
-      },
-    }));
-    await firstPromise;
-
-    expect(firstRevision).not.toBe(secondRevision);
-    expect(store.currentPage?.content).toEqual(secondContent);
-    expect(store.currentPage?.notionPageId).toBe('notion-page');
-    expect(store.currentPage?.remoteRevision).toBe('remote-1');
-
-    const secondRequest = JSON.parse(String(fetchMock.mock.calls[1][1]?.body));
-    secondSave.resolve(jsonResponse({
-      status: 'saved',
-      page: {
-        ...secondRequest.page,
-        content: secondContent,
-        notionPageId: 'notion-page',
-        remoteRevision: 'remote-2',
-        syncState: 'saved',
-      },
-    }));
-    await secondPromise;
-
-    expect(store.currentPage?.content).toEqual(secondContent);
-    expect(store.currentPage?.remoteRevision).toBe('remote-2');
-  });
-
-  test('a stale save response updates sync metadata without replacing newer content', async () => {
+  test('local content is persisted before queue delivery resolves', async () => {
     const saveRequest = deferred<Response>();
     const fetchMock = vi.fn(() => saveRequest.promise);
     vi.stubGlobal('fetch', fetchMock);
     const store = useJotStore();
+    const content = docWithText('durable draft');
 
     await seedStore(store);
-    const savePromise = store.saveCurrentPageContent(docWithText('first draft'), {
+    await store.saveCurrentPageContent(content, {
       preserveLocalContent: true,
     });
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
-    const requestBody = JSON.parse(String(
-      (fetchMock.mock.calls as unknown as Array<[string, RequestInit]>)[0][1]?.body,
-    ));
-    store.currentPage = {
-      ...store.currentPage!,
-      content: docWithText('newer unsaved draft'),
-      localRevision: 'newer-local-revision',
-    };
 
-    saveRequest.resolve(jsonResponse({
-      status: 'saved',
-      page: {
-        ...requestBody.page,
-        content: docWithText('first draft'),
-        notionPageId: 'notion-page',
-        remoteRevision: 'remote-1',
-        syncMessage: 'Synced to Notion.',
-        syncState: 'saved',
-      },
+    expect(stripJotBlockIds((readBrowserStorage().pages as ProjectPage[])[0].content)).toEqual(content);
+    expect((await listPendingSyncOps()).length).toBeGreaterThan(0);
+    saveRequest.resolve(jsonResponse({ queued: true, versions: { 'page-jot': 1 } }));
+  });
+
+  test('multiple unsent edits to the same block compact to the final update', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      throw new TypeError('offline');
     }));
-    await savePromise;
+    const store = useJotStore();
 
-    expect(store.currentPage?.content).toEqual(docWithText('newer unsaved draft'));
-    expect(store.currentPage?.notionPageId).toBe('notion-page');
-    expect(store.currentPage?.remoteRevision).toBe('remote-1');
+    await seedStore(store, [{ ...basePage, content: docWithBlock('same-block', 'first') }]);
+    store.currentPage = { ...basePage, content: docWithBlock('same-block', 'first') };
+    await store.saveCurrentPageContent(docWithBlock('same-block', 'second'), {
+      preserveLocalContent: true,
+    });
+    await store.saveCurrentPageContent(docWithBlock('same-block', 'third'), {
+      preserveLocalContent: true,
+    });
+
+    const compacted = compactPendingSyncOps(await listPendingSyncOps());
+    const updates = compacted.filter((op) => op.type === 'block_update');
+    expect(updates).toHaveLength(1);
+    expect(updates[0].payload.block).toEqual(blockWithId('same-block', 'third'));
+  });
+
+  test('a create followed by update keeps the complete latest block snapshot', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      throw new TypeError('offline');
+    }));
+    const store = useJotStore();
+
+    await seedStore(store, [{ ...basePage, content: { type: 'doc', content: [] } }]);
+    store.currentPage = { ...basePage, content: { type: 'doc', content: [] } };
+    await store.saveCurrentPageContent(docWithBlock('new-block', 'created'), {
+      preserveLocalContent: true,
+    });
+    await store.saveCurrentPageContent(docWithBlock('new-block', 'updated'), {
+      preserveLocalContent: true,
+    });
+
+    const compacted = compactPendingSyncOps(await listPendingSyncOps());
+    expect(compacted.some((op) => op.type === 'block_create')).toBe(true);
+    expect(compacted.at(-1)?.payload.page.content).toEqual(docWithBlock('new-block', 'updated'));
+  });
+
+  test('an update followed by delete drops the redundant update', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      throw new TypeError('offline');
+    }));
+    const store = useJotStore();
+
+    await seedStore(store, [{ ...basePage, content: docWithBlock('removed-block', 'before') }]);
+    store.currentPage = { ...basePage, content: docWithBlock('removed-block', 'before') };
+    await store.saveCurrentPageContent(docWithBlock('removed-block', 'after'), {
+      preserveLocalContent: true,
+    });
+    await store.saveCurrentPageContent({ type: 'doc', content: [] }, {
+      preserveLocalContent: true,
+    });
+
+    const compacted = compactPendingSyncOps(await listPendingSyncOps());
+    expect(compacted.some((op) => op.type === 'block_update')).toBe(false);
+    expect(compacted.some((op) => op.type === 'block_delete')).toBe(true);
   });
 });
 
 describe('project page caching', () => {
-  test('selecting a cached page returns immediately and refreshes it in the background', async () => {
+  test('selecting a cached page skips pull when server version is not newer', async () => {
     const pagePull = deferred<Response>();
     const fetchMock = vi.fn(() => pagePull.promise);
     vi.stubGlobal('fetch', fetchMock);
@@ -577,21 +530,50 @@ describe('project page caching', () => {
     await store.selectPage('page-two');
 
     expect(stripJotBlockIds(store.currentPage?.content)).toEqual(docWithText('cached body'));
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 
-    pagePull.resolve(jsonResponse({
+  test('selecting a cached page pulls when server version is newer', async () => {
+    const fetchMock = vi.fn(async () => jsonResponse({
       status: 'saved',
       page: {
-        ...pageTwo,
+        ...basePage,
+        id: 'page-two',
+        title: 'Cached Page',
         content: docWithText('fresh body'),
         remoteRevision: 'rev-2',
         syncState: 'saved',
       },
     }));
+    vi.stubGlobal('fetch', fetchMock);
+    const pageTwo = {
+      ...basePage,
+      id: 'page-two',
+      title: 'Cached Page',
+      content: docWithText('cached body'),
+      notionPageId: 'notion-page-two',
+      remoteRevision: 'rev-1',
+      knownSyncVersion: 1,
+      serverSyncVersion: 2,
+    };
+    const store = useJotStore();
+    resetBrowserStorage({
+      activePageIdsByProject: { 'project-jot': 'page-jot' },
+      currentProjectId: 'project-jot',
+      hasMigratedCapturesToPages: true,
+      pages: [basePage, pageTwo],
+      projects: [baseProject],
+      syncConfig: connectedConfig,
+    });
+    await seedStore(store, [basePage, pageTwo]);
+
+    await store.selectPage('page-two');
 
     await waitFor(() =>
       expect(store.currentPage?.content).toEqual(docWithText('fresh body')),
     );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(store.currentPage?.knownSyncVersion).toBe(2);
   });
 
   test('background snapshot saves do not overwrite a newly selected page', async () => {
@@ -646,6 +628,8 @@ describe('project page caching', () => {
       localRevision: 'local-1',
       notionPageId: 'notion-page',
       remoteRevision: 'remote-1',
+      knownSyncVersion: 1,
+      serverSyncVersion: 2,
     };
     const store = useJotStore();
 
@@ -689,6 +673,8 @@ describe('project page caching', () => {
       localRevision: 'local-1',
       notionPageId: 'notion-page',
       remoteRevision: 'remote-1',
+      knownSyncVersion: 1,
+      serverSyncVersion: 2,
     };
     const store = useJotStore();
 
@@ -800,6 +786,21 @@ function docWithText(text: string): DocumentContent {
         content: [{ type: 'text', text }],
       },
     ],
+  };
+}
+
+function docWithBlock(jotBlockId: string, text: string): DocumentContent {
+  return {
+    type: 'doc',
+    content: [blockWithId(jotBlockId, text)],
+  };
+}
+
+function blockWithId(jotBlockId: string, text: string): DocumentContent {
+  return {
+    type: 'paragraph',
+    attrs: { jotBlockId },
+    content: [{ type: 'text', text }],
   };
 }
 

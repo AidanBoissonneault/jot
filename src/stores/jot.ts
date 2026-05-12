@@ -489,6 +489,14 @@ export const useJotStore = defineStore('jot', () => {
 
   async function handleSyncEvent(event: SyncEventMessage) {
     if (event.status === 'stale') {
+      const stalePage = await applySyncResult(event);
+      if (stalePage) {
+        pages.value = pages.value.map((p) => (p.id === stalePage.id ? stalePage : p));
+        if (currentPage.value?.id === stalePage.id) {
+          currentPage.value = mergePageSyncMetadata(currentPage.value, stalePage);
+        }
+      }
+
       if (event.pageId === currentPage.value?.id) {
         await refreshSelectedPage(event.pageId);
         if (currentPage.value?.syncState === 'saved') {
@@ -717,6 +725,8 @@ export const useJotStore = defineStore('jot', () => {
       notionParentPageId: syncedPage.notionParentPageId ?? localPage.notionParentPageId,
       notionLastEditedTime: syncedPage.notionLastEditedTime ?? localPage.notionLastEditedTime,
       remoteRevision: syncedPage.remoteRevision ?? localPage.remoteRevision,
+      knownSyncVersion: syncedPage.knownSyncVersion ?? localPage.knownSyncVersion,
+      serverSyncVersion: syncedPage.serverSyncVersion ?? localPage.serverSyncVersion,
       syncMessage: syncedPage.syncMessage,
       syncState: syncedPage.syncState ?? localPage.syncState,
       updatedAt: syncedPage.updatedAt ?? localPage.updatedAt,

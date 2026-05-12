@@ -20,37 +20,28 @@ corepack pnpm install
 corepack pnpm dev
 corepack pnpm dev:server
 corepack pnpm compile
+corepack pnpm typecheck
+corepack pnpm test
 corepack pnpm build
+corepack pnpm zip
 ```
 
-## Notion sync server
+## Notion sync worker
 
-Jot syncs through a small single-user sidecar server. Create a public Notion
-integration and set its redirect URI to
-`http://localhost:8787/auth/notion/callback`.
+Jot syncs through a Cloudflare Worker. The production extension build reads
+`VITE_API_URL` from `.env.local`; this repository currently points at
+`https://sync.jot.byaidan.com`.
 
-Start the server:
+For local development, start the worker:
 
 ```sh
 corepack pnpm dev:server
 ```
 
-Put the Jot social OAuth credentials and Notion OAuth credentials in
-`apps/sync-server/.env`, then open the side panel and sign in with Google,
-GitHub, or Apple. After the Jot account is active, connect Notion. Jot then
-syncs into a root Notion page named `Jot`; each Jot project becomes a child page
-under it, and that project's pages are synced inside the project page.
+Create a public Notion integration and set its redirect URI to
+`https://sync.jot.byaidan.com/auth/notion/callback` for production, or
+`http://localhost:8787/auth/notion/callback` for local development.
 
-Create a MySQL database, apply `apps/sync-server/schema.mysql.sql`, then copy
-`apps/sync-server/.env.example` to `apps/sync-server/.env` and fill in the
-Better Auth, social OAuth, Notion OAuth, MySQL, and `JOT_TOKEN_ENCRYPTION_KEY`
-values before starting the server. The encryption key is server-only; use a
-long random value.
-
-The extension defaults to `http://localhost:8787`. Use the side panel to log in
-or log out of Jot; logout also disconnects Notion for that session. The server
-stores Better Auth account records, encrypted Notion OAuth tokens, and sync
-metadata in MySQL. It still writes local diagnostic logs to
-`apps/sync-server/.data` by default; set `JOT_SYNC_DATA_DIR` to move those logs.
-
-claude --resume 1079bbf6-1786-450a-af1a-b7e48515756d
+The worker uses Supabase for session, token, and sync metadata. Apply
+`apps/worker/schema.supabase.sql`, then set the Worker secrets listed in
+`apps/worker/wrangler.toml` with `wrangler secret put <NAME>`.

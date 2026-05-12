@@ -183,10 +183,6 @@ const editor = useEditor({
       return true;
     },
     handleDrop: (view, event) => {
-      const types = [...(event.dataTransfer?.types ?? [])];
-      const plain = event.dataTransfer?.getData('text/plain') ?? '';
-      console.log('[jot] handleDrop', { types, plain: plain.slice(0, 100) });
-
       const jotPayload = readJotDropPayload(event);
 
       if (jotPayload?.highlightMeta.isHeading) {

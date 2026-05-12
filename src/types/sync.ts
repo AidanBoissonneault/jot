@@ -1,4 +1,5 @@
 import type {
+  DocumentContent,
   NotionParentPage,
   Project,
   ProjectPage,
@@ -31,8 +32,36 @@ export type CreateNotionPageResponse = {
 export type SyncPageRequest = {
   page?: ProjectPage;
   project?: Project;
+  ops?: SyncBlockOperation[];
   selectedParentPageId?: string;
   defaultParentTitle?: string;
+};
+
+export type SyncBlockOperationType =
+  | 'page_upsert'
+  | 'page_archive'
+  | 'block_create'
+  | 'block_update'
+  | 'block_delete'
+  | 'block_reorder';
+
+export type SyncBlockOperation = {
+  opId: string;
+  type: SyncBlockOperationType;
+  pageId: string;
+  projectId: string;
+  jotBlockId?: string;
+  sequence: number;
+  createdAt: string;
+  baseKnownSyncVersion?: number;
+  payload: {
+    page: ProjectPage;
+    project: Project;
+    block?: DocumentContent;
+    previousBlock?: DocumentContent;
+    order?: string[];
+    selectedParentPageId?: string;
+  };
 };
 
 export type SyncPageResponse = {
@@ -92,6 +121,14 @@ export type MediaUploadResponse = {
   fileUploadId: string;
 };
 
+export type MediaRefreshRequest = {
+  fileUploadId?: string;
+};
+
+export type MediaRefreshResponse = {
+  url?: string;
+};
+
 export type SyncErrorResponse = {
   error?: string;
   message?: string;
@@ -99,7 +136,9 @@ export type SyncErrorResponse = {
 
 export type SyncEnqueueResponse = {
   queued: true;
-  version: number;
+  version?: number;
+  versions?: Record<string, number>;
+  opVersions?: Record<string, number>;
 };
 
 export type SyncStatusResponse = {
@@ -110,6 +149,6 @@ export type SyncStatusResponse = {
 };
 
 export type SyncEventMessage =
-  | { status: 'synced'; pageId: string; notionBlockId?: string | null }
+  | { status: 'synced'; pageId: string; notionBlockId?: string | null; version?: number }
   | { status: 'failed'; pageId: string }
-  | { status: 'stale'; pageId: string };
+  | { status: 'stale'; pageId: string; version?: number };

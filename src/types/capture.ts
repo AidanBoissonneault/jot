@@ -68,6 +68,7 @@ export type ProjectPage = {
   localRevision?: string;
   remoteRevision?: string;
   knownSyncVersion?: number;
+  serverSyncVersion?: number;
   syncMessage?: string;
   syncState?: SaveStatus;
 };
