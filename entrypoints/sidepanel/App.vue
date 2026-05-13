@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { EditorContent, useEditor } from '@tiptap/vue-3';
 import AudioRecorder from '@/src/components/AudioRecorder.vue';
 import { NodeSelection, TextSelection } from '@tiptap/pm/state';
@@ -110,6 +110,16 @@ const hasAcceptedLegalTerms = ref(false);
 const isLegalAcceptanceLoaded = ref(false);
 const activeTab = ref<'editor' | 'projects' | 'media' | 'sync'>('editor');
 const editorToolbarMode = ref<'style' | 'insert' | 'controls'>('style');
+const editorContextMenuRef = ref<HTMLElement | null>(null);
+const editorContextMenu = ref({
+  visible: false,
+  left: 0,
+  top: 0,
+});
+const editorContextMenuHasSelection = ref(false);
+const editorContextMenuPanel = ref<'main' | 'link' | 'color'>('main');
+const contextMenuLinkDraft = ref('');
+let editorContextSelection: { from: number; to: number } | null = null;
 const activeEditorMenu = ref<
   | 'type'
   | 'marks'
@@ -164,6 +174,16 @@ const editor = useEditor({
   editorProps: {
     attributes: {
       'aria-label': 'Project page editor',
+    },
+    handleDOMEvents: {
+      contextmenu: (view, event) => {
+        if (!(event instanceof MouseEvent)) {
+          return false;
+        }
+
+        showEditorContextMenu(view, event);
+        return true;
+      },
     },
     handleClick: (_view, _pos, event) => {
       const anchor =
@@ -535,7 +555,10 @@ onMounted(() => {
   store.startRuntimeListener();
   store.registerCaptureInsertHandler(insertCaptureAtCursor);
   window.addEventListener('pagehide', handlePanelExit);
+  window.addEventListener('resize', hideEditorContextMenu);
   document.addEventListener('visibilitychange', handleVisibilityChange);
+  document.addEventListener('pointerdown', handleEditorContextMenuPointerDown);
+  document.addEventListener('keydown', handleEditorContextMenuKeydown);
   void loadLegalAcceptance();
   void initializePanel();
 });
@@ -544,7 +567,10 @@ onBeforeUnmount(() => {
   window.clearTimeout(saveTimer.value);
   window.clearInterval(sessionPollTimer);
   window.removeEventListener('pagehide', handlePanelExit);
+  window.removeEventListener('resize', hideEditorContextMenu);
   document.removeEventListener('visibilitychange', handleVisibilityChange);
+  document.removeEventListener('pointerdown', handleEditorContextMenuPointerDown);
+  document.removeEventListener('keydown', handleEditorContextMenuKeydown);
   handlePanelExit();
   stopAudioStream();
   editor.value?.destroy();
@@ -553,6 +579,8 @@ onBeforeUnmount(() => {
 watch(
   () => store.currentPage,
   (page) => {
+    hideEditorContextMenu();
+
     if (!editor.value || !page) {
       return;
     }
@@ -630,6 +658,8 @@ watch(
 watch(
   activeTab,
   (tab) => {
+    hideEditorContextMenu();
+
     if (tab === 'sync' && store.syncConfig.connected) {
       void store.loadNotionParentPages(parentPageSearchDraft.value);
     }
@@ -896,7 +926,15 @@ function blurTitleInput(event: Event) {
 }
 
 function setBlockType(event: Event) {
-  const value = (event.target as HTMLSelectElement).value;
+  applyBlockType((event.target as HTMLSelectElement).value);
+}
+
+function setContextBlockType(event: Event) {
+  restoreEditorContextSelection();
+  applyBlockType((event.target as HTMLSelectElement).value);
+}
+
+function applyBlockType(value: string) {
   const chain = editor.value?.chain().focus();
 
   if (!chain) {
@@ -926,8 +964,15 @@ function setBlockType(event: Event) {
 }
 
 function setFontSize(event: Event) {
-  const value = (event.target as HTMLSelectElement).value;
+  applyFontSize((event.target as HTMLSelectElement).value);
+}
 
+function setContextFontSize(event: Event) {
+  restoreEditorContextSelection();
+  applyFontSize((event.target as HTMLSelectElement).value);
+}
+
+function applyFontSize(value: string) {
   if (value) {
     editor.value?.chain().focus().setFontSize(value).run();
   } else {
@@ -936,8 +981,15 @@ function setFontSize(event: Event) {
 }
 
 function setTextColor(event: Event) {
-  const value = (event.target as HTMLSelectElement).value;
+  applyTextColor((event.target as HTMLSelectElement).value);
+}
 
+function applyContextTextColor(value: string) {
+  restoreEditorContextSelection();
+  applyTextColor(value);
+}
+
+function applyTextColor(value: string) {
   if (value) {
     editor.value?.chain().focus().setTextColor(value).run();
   } else {
@@ -946,8 +998,15 @@ function setTextColor(event: Event) {
 }
 
 function setHighlightColor(event: Event) {
-  const value = (event.target as HTMLSelectElement).value;
+  applyHighlightColor((event.target as HTMLSelectElement).value);
+}
 
+function applyContextHighlightColor(value: string) {
+  restoreEditorContextSelection();
+  applyHighlightColor(value);
+}
+
+function applyHighlightColor(value: string) {
   if (value) {
     editor.value?.chain().focus().setHighlightColor(value).run();
   } else {
@@ -956,15 +1015,33 @@ function setHighlightColor(event: Event) {
 }
 
 function setLink() {
+  applyLink(linkUrlDraft.value);
+  linkUrlDraft.value = '';
+}
+
+function applyContextLink() {
+  restoreEditorContextSelection();
+  applyLink(contextMenuLinkDraft.value);
+  contextMenuLinkDraft.value = '';
+  hideEditorContextMenu();
+}
+
+function removeContextLink() {
+  restoreEditorContextSelection();
+  applyLink('');
+  contextMenuLinkDraft.value = '';
+  hideEditorContextMenu();
+}
+
+function applyLink(href: string) {
   if (!editor.value) {
     return;
   }
 
-  const trimmedHref = linkUrlDraft.value.trim();
+  const trimmedHref = href.trim();
 
   if (!trimmedHref) {
     editor.value.chain().focus().extendMarkRange('link').unsetLink().run();
-    linkUrlDraft.value = '';
     return;
   }
 
@@ -974,7 +1051,196 @@ function setLink() {
     .extendMarkRange('link')
     .setLink({ href: trimmedHref })
     .run();
-  linkUrlDraft.value = '';
+}
+
+function showEditorContextMenu(view: EditorView, event: MouseEvent) {
+  event.preventDefault();
+  event.stopPropagation();
+  closeEditorMenu();
+
+  const pos = view.posAtCoords({
+    left: event.clientX,
+    top: event.clientY,
+  });
+
+  if (pos) {
+    const { selection } = view.state;
+    const shouldPreserveSelection =
+      !selection.empty &&
+      pos.pos >= selection.from &&
+      pos.pos <= selection.to;
+
+    if (!shouldPreserveSelection) {
+      const resolvedPos = view.state.doc.resolve(pos.pos);
+      view.dispatch(view.state.tr.setSelection(TextSelection.near(resolvedPos)));
+    }
+  }
+
+  view.focus();
+  editorContextSelection = {
+    from: view.state.selection.from,
+    to: view.state.selection.to,
+  };
+  editorContextMenuHasSelection.value = !view.state.selection.empty;
+  contextMenuLinkDraft.value = String(editor.value?.getAttributes('link').href ?? '');
+  editorContextMenuPanel.value = 'main';
+  editorContextMenu.value = {
+    visible: true,
+    left: clamp(event.clientX, 8, Math.max(8, window.innerWidth - 320)),
+    top: clamp(event.clientY, 8, Math.max(8, window.innerHeight - 48)),
+  };
+
+  void nextTick(() => {
+    placeEditorContextMenu(event.clientX, event.clientY);
+  });
+}
+
+function placeEditorContextMenu(clientX: number, clientY: number) {
+  const menu = editorContextMenuRef.value;
+
+  if (!menu) {
+    return;
+  }
+
+  const rect = menu.getBoundingClientRect();
+  editorContextMenu.value = {
+    ...editorContextMenu.value,
+    left: clamp(clientX, 8, Math.max(8, window.innerWidth - rect.width - 8)),
+    top: clamp(clientY, 8, Math.max(8, window.innerHeight - rect.height - 8)),
+  };
+}
+
+function restoreEditorContextSelection() {
+  if (!editor.value || !editorContextSelection) {
+    return;
+  }
+
+  const docSize = editor.value.state.doc.content.size;
+  const from = clamp(editorContextSelection.from, 0, docSize);
+  const to = clamp(editorContextSelection.to, from, docSize);
+  editor.value.commands.setTextSelection({ from, to });
+}
+
+function hideEditorContextMenu() {
+  editorContextMenu.value.visible = false;
+  editorContextMenuPanel.value = 'main';
+}
+
+function handleEditorContextMenuPointerDown(event: PointerEvent) {
+  if (!editorContextMenu.value.visible) {
+    return;
+  }
+
+  const target = event.target;
+
+  if (target instanceof Node && editorContextMenuRef.value?.contains(target)) {
+    return;
+  }
+
+  hideEditorContextMenu();
+}
+
+function handleEditorContextMenuKeydown(event: KeyboardEvent) {
+  if (event.key === 'Escape' && editorContextMenu.value.visible) {
+    event.preventDefault();
+    hideEditorContextMenu();
+  }
+}
+
+async function copyEditorSelectionToClipboard(closeAfterCopy = true) {
+  const selectedText = getEditorSelectedText();
+
+  if (!selectedText) {
+    return;
+  }
+
+  await navigator.clipboard.writeText(selectedText);
+
+  if (closeAfterCopy) {
+    hideEditorContextMenu();
+  }
+}
+
+async function copyEditorSelectionFromContextMenu() {
+  await copyEditorSelectionToClipboard();
+}
+
+async function cutEditorSelectionToClipboard() {
+  if (!editor.value) {
+    return;
+  }
+
+  restoreEditorContextSelection();
+
+  if (editor.value.state.selection.empty) {
+    return;
+  }
+
+  await copyEditorSelectionToClipboard(false);
+  editor.value.chain().focus().deleteSelection().run();
+  hideEditorContextMenu();
+}
+
+async function pasteClipboardTextIntoEditor() {
+  if (!editor.value) {
+    return;
+  }
+
+  const text = await navigator.clipboard.readText();
+
+  if (!text) {
+    return;
+  }
+
+  restoreEditorContextSelection();
+  editor.value.chain().focus().insertContent(text).run();
+  hideEditorContextMenu();
+}
+
+function getEditorSelectedText() {
+  if (!editor.value) {
+    return '';
+  }
+
+  restoreEditorContextSelection();
+  const { from, to, empty } = editor.value.state.selection;
+
+  if (empty) {
+    return '';
+  }
+
+  return editor.value.state.doc.textBetween(from, to, '\n').trimEnd();
+}
+
+function runContextMarkCommand(command: 'bold' | 'italic' | 'underline' | 'strike' | 'code') {
+  restoreEditorContextSelection();
+  const chain = editor.value?.chain().focus();
+
+  if (!chain) {
+    return;
+  }
+
+  if (command === 'bold') {
+    chain.toggleBold().run();
+  } else if (command === 'italic') {
+    chain.toggleItalic().run();
+  } else if (command === 'underline') {
+    chain.toggleUnderline().run();
+  } else if (command === 'strike') {
+    chain.toggleStrike().run();
+  } else {
+    chain.toggleCode().run();
+  }
+}
+
+function openContextLinkPanel() {
+  restoreEditorContextSelection();
+  contextMenuLinkDraft.value = String(editor.value?.getAttributes('link').href ?? '');
+  editorContextMenuPanel.value = 'link';
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(Math.max(value, min), max);
 }
 
 function insertImage() {
@@ -2203,7 +2469,251 @@ function textFromNode(node: DocumentContent): string {
         </div>
       </header>
 
-      <editor-content v-if="editor" class="editor" :editor="editor" />
+      <editor-content
+        v-if="editor"
+        class="editor"
+        :editor="editor"
+        @scroll="hideEditorContextMenu"
+      />
+
+      <div
+        v-if="editorContextMenu.visible"
+        ref="editorContextMenuRef"
+        class="editor-context-menu"
+        :style="{
+          left: `${editorContextMenu.left}px`,
+          top: `${editorContextMenu.top}px`,
+        }"
+        role="menu"
+        aria-label="Text editor context menu"
+        @contextmenu.prevent
+        @pointerdown.stop
+      >
+        <div v-if="editorContextMenuPanel === 'main'" class="context-menu-stack">
+          <div class="context-menu-row">
+            <button
+              type="button"
+              class="context-menu-button text-action"
+              :disabled="!editorContextMenuHasSelection"
+              title="Cut"
+              aria-label="Cut"
+              @mousedown.prevent
+              @click="cutEditorSelectionToClipboard"
+            >
+              Cut
+            </button>
+            <button
+              type="button"
+              class="context-menu-button text-action"
+              :disabled="!editorContextMenuHasSelection"
+              title="Copy"
+              aria-label="Copy"
+              @mousedown.prevent
+              @click="copyEditorSelectionFromContextMenu"
+            >
+              Copy
+            </button>
+            <button
+              type="button"
+              class="context-menu-button text-action"
+              title="Paste"
+              aria-label="Paste"
+              @mousedown.prevent
+              @click="pasteClipboardTextIntoEditor"
+            >
+              Paste
+            </button>
+          </div>
+
+          <div class="context-menu-divider" />
+
+          <div class="context-menu-row">
+            <select
+              class="context-menu-select wide"
+              aria-label="Text style"
+              :value="activeBlockType"
+              @change="setContextBlockType"
+            >
+              <option
+                v-for="blockType in blockTypes"
+                :key="blockType.value"
+                :value="blockType.value"
+              >
+                {{ blockType.label }}
+              </option>
+            </select>
+            <select
+              class="context-menu-select"
+              aria-label="Font size"
+              :value="activeFontSize"
+              @change="setContextFontSize"
+            >
+              <option
+                v-for="fontSize in fontSizes"
+                :key="fontSize.value"
+                :value="fontSize.value"
+              >
+                {{ fontSize.label }}
+              </option>
+            </select>
+          </div>
+
+          <div class="context-menu-row">
+            <button
+              type="button"
+              class="context-menu-button"
+              :class="{ active: editor?.isActive('bold') }"
+              title="Bold"
+              aria-label="Bold"
+              @mousedown.prevent
+              @click="runContextMarkCommand('bold')"
+            >
+              <font-awesome-icon :icon="['fas', 'bold']" fixed-width />
+            </button>
+            <button
+              type="button"
+              class="context-menu-button"
+              :class="{ active: editor?.isActive('italic') }"
+              title="Italic"
+              aria-label="Italic"
+              @mousedown.prevent
+              @click="runContextMarkCommand('italic')"
+            >
+              <font-awesome-icon :icon="['fas', 'italic']" fixed-width />
+            </button>
+            <button
+              type="button"
+              class="context-menu-button"
+              :class="{ active: editor?.isActive('underline') }"
+              title="Underline"
+              aria-label="Underline"
+              @mousedown.prevent
+              @click="runContextMarkCommand('underline')"
+            >
+              <font-awesome-icon :icon="['fas', 'underline']" fixed-width />
+            </button>
+            <button
+              type="button"
+              class="context-menu-button"
+              :class="{ active: editor?.isActive('strike') }"
+              title="Strikethrough"
+              aria-label="Strikethrough"
+              @mousedown.prevent
+              @click="runContextMarkCommand('strike')"
+            >
+              <font-awesome-icon :icon="['fas', 'strikethrough']" fixed-width />
+            </button>
+            <button
+              type="button"
+              class="context-menu-button"
+              :class="{ active: editor?.isActive('code') }"
+              title="Inline code"
+              aria-label="Inline code"
+              @mousedown.prevent
+              @click="runContextMarkCommand('code')"
+            >
+              <font-awesome-icon :icon="['fas', 'code']" fixed-width />
+            </button>
+            <button
+              type="button"
+              class="context-menu-button"
+              :class="{ active: editor?.isActive('link') }"
+              title="Link"
+              aria-label="Link"
+              @mousedown.prevent
+              @click="openContextLinkPanel"
+            >
+              <font-awesome-icon :icon="['fas', 'link']" fixed-width />
+            </button>
+            <button
+              type="button"
+              class="context-menu-button"
+              title="Color"
+              aria-label="Color"
+              @mousedown.prevent
+              @click="editorContextMenuPanel = 'color'"
+            >
+              <span aria-hidden="true" class="context-color-icon">A</span>
+            </button>
+          </div>
+        </div>
+
+        <form
+          v-else-if="editorContextMenuPanel === 'link'"
+          class="context-menu-stack"
+          aria-label="Link editor"
+          @submit.prevent="applyContextLink"
+        >
+          <div class="context-menu-row">
+            <input
+              v-model="contextMenuLinkDraft"
+              class="context-menu-input"
+              type="url"
+              aria-label="Link URL"
+              placeholder="Paste link URL"
+            >
+          </div>
+          <div class="context-menu-row">
+            <button type="button" class="context-menu-button text-action" @click="editorContextMenuPanel = 'main'">
+              Back
+            </button>
+            <button type="submit" class="context-menu-button text-action">
+              Apply
+            </button>
+            <button type="button" class="context-menu-button text-action" @click="removeContextLink">
+              Remove
+            </button>
+          </div>
+        </form>
+
+        <div v-else class="context-menu-stack color-panel">
+          <div class="context-menu-section-label">Text</div>
+          <div class="context-color-grid">
+            <button
+              v-for="color in textColors"
+              :key="`text-${color.value}`"
+              type="button"
+              class="context-swatch"
+              :class="{ active: activeTextColor === color.value }"
+              :title="color.label"
+              :aria-label="`Text color ${color.label}`"
+              @mousedown.prevent
+              @click="applyContextTextColor(color.value)"
+            >
+              <span
+                class="context-swatch-chip"
+                :style="{ background: color.value || 'transparent' }"
+              />
+              <span>{{ color.label }}</span>
+            </button>
+          </div>
+          <div class="context-menu-section-label">Highlight</div>
+          <div class="context-color-grid">
+            <button
+              v-for="color in highlightColors"
+              :key="`highlight-${color.value}`"
+              type="button"
+              class="context-swatch"
+              :class="{ active: activeHighlightColor === color.value }"
+              :title="color.label"
+              :aria-label="`Highlight ${color.label}`"
+              @mousedown.prevent
+              @click="applyContextHighlightColor(color.value)"
+            >
+              <span
+                class="context-swatch-chip"
+                :style="{ background: color.value || 'transparent' }"
+              />
+              <span>{{ color.label }}</span>
+            </button>
+          </div>
+          <div class="context-menu-row">
+            <button type="button" class="context-menu-button text-action" @click="editorContextMenuPanel = 'main'">
+              Back
+            </button>
+          </div>
+        </div>
+      </div>
     </section>
 
     <section
@@ -3496,6 +4006,160 @@ function textFromNode(node: DocumentContent): string {
 
 .link-form input {
   min-width: 0;
+}
+
+.editor-context-menu {
+  position: fixed;
+  z-index: 50;
+  width: max-content;
+  max-width: min(352px, calc(100vw - 16px));
+  padding: 6px;
+  border: 1px solid rgb(55 53 47 / 12%);
+  border-radius: 7px;
+  background: var(--inkwell-surface);
+  box-shadow:
+    0 8px 24px rgb(15 23 42 / 12%),
+    0 1px 4px rgb(15 23 42 / 8%);
+  color: var(--inkwell-text);
+}
+
+.context-menu-stack {
+  display: grid;
+  gap: 6px;
+}
+
+.context-menu-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.context-menu-divider {
+  height: 1px;
+  margin: 1px 0;
+  background: var(--inkwell-border);
+}
+
+.context-menu-button {
+  display: inline-grid;
+  place-items: center;
+  min-width: 28px;
+  width: 28px;
+  height: 28px;
+  min-height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--inkwell-text);
+  font-size: 0.82rem;
+  font-weight: 750;
+}
+
+.context-menu-button:hover,
+.context-menu-button:focus-visible,
+.context-menu-button.active {
+  background: var(--inkwell-surface-muted);
+  color: var(--inkwell-text);
+}
+
+.context-menu-button:disabled {
+  background: transparent;
+  color: var(--inkwell-muted);
+  opacity: 0.45;
+}
+
+.context-menu-button.text-action {
+  width: auto;
+  min-width: 48px;
+  padding: 0 8px;
+}
+
+.context-color-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-bottom: 2px solid var(--inkwell-accent);
+  font-weight: 850;
+  line-height: 1;
+}
+
+.context-menu-select,
+.context-menu-input {
+  height: 28px;
+  min-height: 28px;
+  padding: 0 7px;
+  border-color: transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--inkwell-text);
+  font-size: 0.82rem;
+}
+
+.context-menu-select {
+  width: 88px;
+}
+
+.context-menu-select.wide {
+  width: 132px;
+}
+
+.context-menu-input {
+  width: min(290px, calc(100vw - 42px));
+  border-color: var(--inkwell-border);
+  background: var(--inkwell-surface);
+}
+
+.context-menu-select:hover,
+.context-menu-select:focus {
+  background: var(--inkwell-surface-muted);
+  outline: none;
+}
+
+.context-menu-section-label {
+  padding: 2px 4px 0;
+  color: var(--inkwell-muted);
+  font-size: 0.72rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.context-color-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 2px;
+  min-width: 230px;
+}
+
+.context-swatch {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 7px;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--inkwell-text);
+  font-size: 0.82rem;
+  font-weight: 650;
+  text-align: left;
+}
+
+.context-swatch:hover,
+.context-swatch:focus-visible,
+.context-swatch.active {
+  background: var(--inkwell-surface-muted);
+}
+
+.context-swatch-chip {
+  display: block;
+  width: 14px;
+  height: 14px;
+  border: 1px solid var(--inkwell-border-strong);
+  border-radius: 4px;
 }
 
 .editor {
