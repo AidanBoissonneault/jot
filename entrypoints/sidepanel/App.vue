@@ -36,6 +36,12 @@ import {
   createLinkedHeadingContent,
   notionClient,
 } from '@/src/services/notionClient';
+import {
+  hasAcceptedCurrentLegalTerms,
+  LEGAL_PRIVACY_URL,
+  LEGAL_TERMS_URL,
+  storeCurrentLegalAcceptance,
+} from '@/src/services/legal';
 import { useInkwellStore } from '@/src/stores/inkwell';
 import type { DocumentContent } from '@/src/types/capture';
 import type {
@@ -100,6 +106,8 @@ const serverUrlDraft = ref('');
 const parentPageSearchDraft = ref('');
 const parentPageTitleDraft = ref('');
 const uiMessage = ref('');
+const hasAcceptedLegalTerms = ref(false);
+const isLegalAcceptanceLoaded = ref(false);
 const activeTab = ref<'editor' | 'projects' | 'media' | 'sync'>('editor');
 const editorToolbarMode = ref<'style' | 'insert' | 'controls'>('style');
 const activeEditorMenu = ref<
@@ -423,6 +431,9 @@ const syncBadgeClass = computed(() => ({
 }));
 
 const canUseEditor = computed(() => store.syncConfig.connected);
+const canLoginWithNotion = computed(
+  () => isLegalAcceptanceLoaded.value && hasAcceptedLegalTerms.value && !isSigningIn.value,
+);
 
 const tabs = [
   { id: 'editor', label: 'Editor', icon: ['far', 'pen-to-square'] },
@@ -527,6 +538,7 @@ const activeHighlightColor = computed(() => {
 onMounted(() => {
   store.startRuntimeListener();
   store.registerCaptureInsertHandler(insertCaptureAtCursor);
+  void loadLegalAcceptance();
   void initializePanel();
 });
 
@@ -628,6 +640,11 @@ watch(
 
 async function initializePanel() {
   await store.initialize();
+}
+
+async function loadLegalAcceptance() {
+  hasAcceptedLegalTerms.value = await hasAcceptedCurrentLegalTerms();
+  isLegalAcceptanceLoaded.value = true;
 }
 
 async function insertCaptureAtCursor(payload: CaptureSelectionPayload) {
@@ -776,9 +793,19 @@ async function resync() {
 }
 
 async function loginWithNotion() {
+  if (!hasAcceptedLegalTerms.value) {
+    uiMessage.value = 'Review and accept the Terms and Privacy Policy before connecting Notion.';
+    return;
+  }
+
+  await storeCurrentLegalAcceptance();
   isSigningIn.value = true;
   await browser.tabs.create({ active: true, url: store.getSyncLoginUrl() });
   startSessionPolling();
+}
+
+function openLegalUrl(url: string) {
+  void browser.tabs.create({ active: true, url });
 }
 
 async function logout() {
@@ -1708,10 +1735,37 @@ function textFromNode(node: DocumentContent): string {
       aria-label="Notion login"
     >
       <h2>Log in with Notion</h2>
+      <p>
+        Inkwell connects to Notion, syncs selected workspace content, and stores
+        account, session, and sync metadata needed to provide the service.
+      </p>
+      <label class="legal-consent">
+        <input
+          v-model="hasAcceptedLegalTerms"
+          type="checkbox"
+          :disabled="!isLegalAcceptanceLoaded"
+        >
+        <span>
+          I have read and agree to the
+          <a
+            :href="LEGAL_TERMS_URL"
+            target="_blank"
+            rel="noopener noreferrer"
+            @click.prevent="openLegalUrl(LEGAL_TERMS_URL)"
+          >Terms</a>
+          and
+          <a
+            :href="LEGAL_PRIVACY_URL"
+            target="_blank"
+            rel="noopener noreferrer"
+            @click.prevent="openLegalUrl(LEGAL_PRIVACY_URL)"
+          >Privacy Policy</a>.
+        </span>
+      </label>
       <button
         type="button"
         class="icon-label-button"
-        :disabled="isSigningIn"
+        :disabled="!canLoginWithNotion"
         :title="isSigningIn ? 'Connecting' : 'Continue with Notion'"
         :aria-label="isSigningIn ? 'Connecting' : 'Continue with Notion'"
         @click="loginWithNotion"
@@ -2471,11 +2525,44 @@ function textFromNode(node: DocumentContent): string {
           </div>
         </dl>
 
+        <div
+          v-if="!store.syncConfig.connected"
+          class="legal-disclosure"
+        >
+          <p>
+            Inkwell connects to Notion, syncs selected workspace content, and
+            stores account, session, and sync metadata needed to provide the service.
+          </p>
+          <label class="legal-consent">
+            <input
+              v-model="hasAcceptedLegalTerms"
+              type="checkbox"
+              :disabled="!isLegalAcceptanceLoaded"
+            >
+            <span>
+              I have read and agree to the
+              <a
+                :href="LEGAL_TERMS_URL"
+                target="_blank"
+                rel="noopener noreferrer"
+                @click.prevent="openLegalUrl(LEGAL_TERMS_URL)"
+              >Terms</a>
+              and
+              <a
+                :href="LEGAL_PRIVACY_URL"
+                target="_blank"
+                rel="noopener noreferrer"
+                @click.prevent="openLegalUrl(LEGAL_PRIVACY_URL)"
+              >Privacy Policy</a>.
+            </span>
+          </label>
+        </div>
+
         <button
           v-if="!store.syncConfig.connected"
           type="button"
           class="icon-label-button"
-          :disabled="isSigningIn"
+          :disabled="!canLoginWithNotion"
           :title="isSigningIn ? 'Connecting' : 'Continue with Notion'"
           :aria-label="isSigningIn ? 'Connecting' : 'Continue with Notion'"
           @click="loginWithNotion"
@@ -2494,6 +2581,24 @@ function textFromNode(node: DocumentContent): string {
           <font-awesome-icon :icon="['fas', 'right-from-bracket']" fixed-width />
           <span>Logout</span>
         </button>
+      </div>
+
+      <div class="panel-section">
+        <h2>Legal</h2>
+        <p class="legal-links">
+          <a
+            :href="LEGAL_TERMS_URL"
+            target="_blank"
+            rel="noopener noreferrer"
+            @click.prevent="openLegalUrl(LEGAL_TERMS_URL)"
+          >Terms</a>
+          <a
+            :href="LEGAL_PRIVACY_URL"
+            target="_blank"
+            rel="noopener noreferrer"
+            @click.prevent="openLegalUrl(LEGAL_PRIVACY_URL)"
+          >Privacy Policy</a>
+        </p>
       </div>
 
       <div class="panel-section">
@@ -2952,6 +3057,52 @@ function textFromNode(node: DocumentContent): string {
 
 .auth-gate p {
   color: var(--inkwell-muted);
+}
+
+.legal-disclosure {
+  display: grid;
+  gap: 10px;
+}
+
+.legal-disclosure p {
+  margin: 0;
+  color: var(--inkwell-muted);
+}
+
+.legal-consent {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  color: var(--inkwell-muted);
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
+.legal-consent input {
+  width: 16px;
+  height: 16px;
+  margin: 1px 0 0;
+  accent-color: var(--inkwell-accent);
+}
+
+.legal-consent a,
+.legal-links a {
+  color: var(--inkwell-accent);
+  font-weight: 750;
+  text-decoration: none;
+}
+
+.legal-consent a:hover,
+.legal-links a:hover {
+  text-decoration: underline;
+}
+
+.legal-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 0;
 }
 
 .editor-shell {

@@ -40,3 +40,4 @@ web-ext.config.ts
 .env
 tmp/
 .wrangler/
+docs/
