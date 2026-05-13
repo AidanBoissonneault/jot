@@ -382,10 +382,6 @@ const saveLabel = computed(() => {
     return 'Stale';
   }
 
-  if (store.syncConfig.connected && store.currentPage?.notionPageId) {
-    return 'Stored on Notion API';
-  }
-
   return 'Saved locally';
 });
 
@@ -538,6 +534,8 @@ const activeHighlightColor = computed(() => {
 onMounted(() => {
   store.startRuntimeListener();
   store.registerCaptureInsertHandler(insertCaptureAtCursor);
+  window.addEventListener('pagehide', handlePanelExit);
+  document.addEventListener('visibilitychange', handleVisibilityChange);
   void loadLegalAcceptance();
   void initializePanel();
 });
@@ -545,9 +543,9 @@ onMounted(() => {
 onBeforeUnmount(() => {
   window.clearTimeout(saveTimer.value);
   window.clearInterval(sessionPollTimer);
-  if (editor.value && store.currentPage) {
-    void saveEditorContentOptimistically();
-  }
+  window.removeEventListener('pagehide', handlePanelExit);
+  document.removeEventListener('visibilitychange', handleVisibilityChange);
+  handlePanelExit();
   stopAudioStream();
   editor.value?.destroy();
 });
@@ -666,7 +664,8 @@ async function selectPage(pageId: string) {
     return;
   }
 
-  saveEditorContentInBackground();
+  await saveEditorContentInBackground();
+  void notionClient.flushPendingSyncOps({ force: true }).catch(() => undefined);
   await store.selectPage(pageId);
 }
 
@@ -675,7 +674,8 @@ async function selectProject(projectId: string) {
     return;
   }
 
-  saveEditorContentInBackground();
+  await saveEditorContentInBackground();
+  void notionClient.flushPendingSyncOps({ force: true }).catch(() => undefined);
   await store.selectProject(projectId);
 }
 
@@ -1257,7 +1257,7 @@ async function flushEditorContent() {
   await saveEditorContentOptimistically();
 }
 
-function saveEditorContentInBackground() {
+async function saveEditorContentInBackground() {
   window.clearTimeout(saveTimer.value);
 
   if (!editor.value || !store.currentPage) {
@@ -1275,10 +1275,24 @@ function saveEditorContentInBackground() {
   const title = pageTitleDraft.value;
 
   lastAppliedContent = JSON.stringify(content);
-  void store.savePageContentSnapshot(page, content, {
+  await store.savePageContentSnapshot(page, content, {
     preserveLocalContent: true,
     title,
   });
+}
+
+function handleVisibilityChange() {
+  if (document.visibilityState === 'hidden') {
+    handlePanelExit();
+  }
+}
+
+function handlePanelExit() {
+  void saveEditorContentInBackground()
+    .catch(() => undefined)
+    .finally(() => {
+      void notionClient.flushPendingSyncOps({ force: true }).catch(() => undefined);
+    });
 }
 
 async function saveEditorContentOptimistically() {
@@ -1332,18 +1346,7 @@ async function runEditorSaveLoop() {
   }
 }
 
-async function handleUploadableImageDrop(info: { kind: 'file'; file: File }): Promise<void> {
-  const { file } = info;
-
-  if (!isUploadableImageFile(file)) {
-    uiMessage.value = `Images must be ${Math.floor(IMAGE_UPLOAD_MAX_BYTES / 1024 / 1024)} MB or smaller.`;
-    return;
-  }
-
-  const localSrc = URL.createObjectURL(file);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  shouldSkipNextUpdateSave = true;
-  editor.value?.chain().focus().setImage({ src: localSrc, uploadState: 'uploading' } as any).run();
+async function uploadMediaFile(file: File, label: string): Promise<string> {
   queueMicrotask(() => {
     shouldSkipNextUpdateSave = false;
   });
@@ -1354,13 +1357,22 @@ async function handleUploadableImageDrop(info: { kind: 'file'; file: File }): Pr
     fileUploadId = await notionClient.uploadMedia(file, file.type, file.name);
   } catch (error) {
     uiMessage.value =
-      error instanceof Error ? error.message : 'Unable to upload this image to Notion.';
+      error instanceof Error ? error.message : `Unable to upload this ${label} to Notion.`;
   }
 
+  return fileUploadId;
+}
+
+function updateMediaNodeUploadState(
+  editorInstance: typeof editor.value,
+  nodeTypeName: string,
+  localSrc: string,
+  fileUploadId: string,
+) {
   shouldSkipNextUpdateSave = true;
-  editor.value?.state.doc.descendants((node, pos) => {
-    if (node.type.name === 'image' && node.attrs.src === localSrc) {
-      editor.value
+  editorInstance?.state.doc.descendants((node, pos) => {
+    if (node.type.name === nodeTypeName && node.attrs.src === localSrc) {
+      editorInstance
         ?.chain()
         .command(({ tr }) => {
           tr.setNodeMarkup(pos, undefined, {
@@ -1376,6 +1388,22 @@ async function handleUploadableImageDrop(info: { kind: 'file'; file: File }): Pr
   queueMicrotask(() => {
     shouldSkipNextUpdateSave = false;
   });
+}
+
+async function handleUploadableImageDrop(info: { kind: 'file'; file: File }): Promise<void> {
+  const { file } = info;
+
+  if (!isUploadableImageFile(file)) {
+    uiMessage.value = `Images must be ${Math.floor(IMAGE_UPLOAD_MAX_BYTES / 1024 / 1024)} MB or smaller.`;
+    return;
+  }
+
+  const localSrc = URL.createObjectURL(file);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  shouldSkipNextUpdateSave = true;
+  editor.value?.chain().focus().setImage({ src: localSrc, uploadState: 'uploading' } as any).run();
+  const fileUploadId = await uploadMediaFile(file, 'image');
+  updateMediaNodeUploadState(editor.value, 'image', localSrc, fileUploadId);
 
   if (!fileUploadId) {
     return;
@@ -1406,38 +1434,8 @@ async function handleUploadableAudioFile(file: File): Promise<void> {
       mimeType: file.type,
     } as any).run();
   }
-  queueMicrotask(() => {
-    shouldSkipNextUpdateSave = false;
-  });
-
-  let fileUploadId = '';
-
-  try {
-    fileUploadId = await notionClient.uploadMedia(file, file.type, file.name);
-  } catch (error) {
-    uiMessage.value =
-      error instanceof Error ? error.message : 'Unable to upload this audio to Notion.';
-  }
-
-  shouldSkipNextUpdateSave = true;
-  editor.value?.state.doc.descendants((node, pos) => {
-    if (node.type.name === 'audio' && node.attrs.src === localSrc) {
-      editor.value
-        ?.chain()
-        .command(({ tr }) => {
-          tr.setNodeMarkup(pos, undefined, {
-            ...node.attrs,
-            ...(fileUploadId ? { notionFileUploadId: fileUploadId } : {}),
-            uploadState: fileUploadId ? 'done' : 'error',
-          });
-          return true;
-        })
-        .run();
-    }
-  });
-  queueMicrotask(() => {
-    shouldSkipNextUpdateSave = false;
-  });
+  const fileUploadId = await uploadMediaFile(file, 'audio');
+  updateMediaNodeUploadState(editor.value, 'audio', localSrc, fileUploadId);
 
   if (!fileUploadId) {
     return;

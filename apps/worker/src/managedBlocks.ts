@@ -1,5 +1,11 @@
 // @ts-nocheck
 const INKWELL_BLOCK_ID_ATTR = 'inkwellBlockId';
+
+async function appendAndTrackBlock(appendManagedBlocks, store, notionPageId, notionBlock, position, createdByOrder, order) {
+  const [createdBlock] = await appendManagedBlocks(store, notionPageId, [notionBlock], position);
+  createdByOrder[order] = createdBlock;
+  return createdBlock;
+}
 const UPDATEABLE_NOTION_TYPES = new Set([
   'paragraph',
   'quote',
@@ -102,6 +108,91 @@ async function replaceAllManagedBlocks({
   };
 }
 
+export async function applyManagedBlockOps({
+  store,
+  localPageId,
+  notionPageId,
+  ops,
+  content,
+  appendManagedBlocks,
+  deleteManagedBlock,
+  updateManagedBlock,
+  replaceManagedBlocks,
+  tiptapDocumentToNotionBlocks,
+  kindFromNotionBlock,
+  hash,
+}) {
+  if (ops.some((op) => op.type === 'block_reorder')) {
+    return replaceManagedBlocks(store, localPageId, notionPageId, content);
+  }
+
+  const notionBlocks = tiptapDocumentToNotionBlocks(content);
+  const desiredBlocks = desiredManagedBlocks({
+    content,
+    hash,
+    kindFromNotionBlock,
+    localPageId,
+    notionBlocks,
+  });
+  const desiredById = new Map(desiredBlocks.map((entry) => [entry.inkwellBlockId, entry]));
+  const existingMappings = store.blockMappings[localPageId] ?? [];
+  const existingById = mappingsByInkwellId(existingMappings);
+  const nextById = new Map(existingMappings.map((mapping) => [mappingKey(mapping), mapping]));
+  const createdByOrder = [];
+
+  for (const op of ops) {
+    const inkwellBlockId = op.inkwellBlockId;
+    if (!inkwellBlockId) continue;
+
+    if (op.type === 'block_delete') {
+      const existing = nextById.get(inkwellBlockId);
+      if (existing?.notionBlockId) {
+        await deleteManagedBlock(store, existing.notionBlockId);
+      }
+      nextById.delete(inkwellBlockId);
+      continue;
+    }
+
+    if (op.type !== 'block_create' && op.type !== 'block_update') {
+      continue;
+    }
+
+    const desired = desiredById.get(inkwellBlockId);
+    if (!desired) continue;
+
+    const existing = nextById.get(inkwellBlockId) ?? existingById.get(inkwellBlockId);
+    if (!existing?.notionBlockId) {
+      const createdBlock = await appendAndTrackBlock(appendManagedBlocks, store, notionPageId, desired.notionBlock, positionAfter(previousMappedBlockId(desiredBlocks, nextById, desired.order)), createdByOrder, desired.order);
+      nextById.set(inkwellBlockId, mappingFromDesired(desired, createdBlock?.id));
+      continue;
+    }
+
+    if (existing.lastSyncedHash === desired.lastSyncedHash) {
+      nextById.set(inkwellBlockId, mappingFromDesired(desired, existing.notionBlockId, existing));
+      continue;
+    }
+
+    if (isUpdateCompatible(existing, desired)) {
+      await updateManagedBlock(store, existing.notionBlockId, desired.notionBlock);
+      nextById.set(inkwellBlockId, mappingFromDesired(desired, existing.notionBlockId, existing));
+      continue;
+    }
+
+    await deleteManagedBlock(store, existing.notionBlockId);
+    const createdBlock = await appendAndTrackBlock(appendManagedBlocks, store, notionPageId, desired.notionBlock, positionAfter(previousMappedBlockId(desiredBlocks, nextById, desired.order)), createdByOrder, desired.order);
+    nextById.set(inkwellBlockId, mappingFromDesired(desired, createdBlock?.id, existing));
+  }
+
+  store.blockMappings[localPageId] = desiredBlocks
+    .map((entry) => nextById.get(entry.inkwellBlockId))
+    .filter((mapping) => mapping?.notionBlockId);
+
+  return {
+    createdBlocks: createdByOrder,
+    notionBlocks,
+  };
+}
+
 async function reconcileManagedBlocks({
   appendManagedBlocks,
   deleteManagedBlock,
@@ -123,13 +214,7 @@ async function reconcileManagedBlocks({
     const existing = existingByInkwellId.get(entry.inkwellBlockId);
 
     if (!existing?.notionBlockId) {
-      const [createdBlock] = await appendManagedBlocks(
-        store,
-        notionPageId,
-        [entry.notionBlock],
-        positionAfter(previousNotionBlockId),
-      );
-      createdByOrder[entry.order] = createdBlock;
+      const createdBlock = await appendAndTrackBlock(appendManagedBlocks, store, notionPageId, entry.notionBlock, positionAfter(previousNotionBlockId), createdByOrder, entry.order);
       nextMappings.push(mappingFromDesired(entry, createdBlock?.id));
       previousNotionBlockId = createdBlock?.id ?? previousNotionBlockId;
       continue;
@@ -149,13 +234,7 @@ async function reconcileManagedBlocks({
     }
 
     await deleteManagedBlock(store, existing.notionBlockId);
-    const [createdBlock] = await appendManagedBlocks(
-      store,
-      notionPageId,
-      [entry.notionBlock],
-      positionAfter(previousNotionBlockId),
-    );
-    createdByOrder[entry.order] = createdBlock;
+    const createdBlock = await appendAndTrackBlock(appendManagedBlocks, store, notionPageId, entry.notionBlock, positionAfter(previousNotionBlockId), createdByOrder, entry.order);
     nextMappings.push(mappingFromDesired(entry, createdBlock?.id, existing));
     previousNotionBlockId = createdBlock?.id ?? previousNotionBlockId;
   }
@@ -295,28 +374,21 @@ function mappingKey(mapping) {
   return mapping.inkwellBlockId ?? mapping.localNodeId;
 }
 
-function hasReorderedManagedBlocks(existingMappings, desiredBlocks) {
+function commonOrderedIds(existingMappings, desiredBlocks) {
   const desiredIds = new Set(desiredBlocks.map((entry) => entry.inkwellBlockId));
   const existingIds = new Set(existingMappings.map(mappingKey));
-  const oldCommon = existingMappings
-    .map(mappingKey)
-    .filter((id) => desiredIds.has(id));
-  const newCommon = desiredBlocks
-    .map((entry) => entry.inkwellBlockId)
-    .filter((id) => existingIds.has(id));
+  const oldCommon = existingMappings.map(mappingKey).filter((id) => desiredIds.has(id));
+  const newCommon = desiredBlocks.map((entry) => entry.inkwellBlockId).filter((id) => existingIds.has(id));
+  return { oldCommon, newCommon };
+}
 
+function hasReorderedManagedBlocks(existingMappings, desiredBlocks) {
+  const { oldCommon, newCommon } = commonOrderedIds(existingMappings, desiredBlocks);
   return oldCommon.length > 1 && oldCommon.join('\n') !== newCommon.join('\n');
 }
 
 function reorderedRange(existingMappings, desiredBlocks) {
-  const desiredIds = new Set(desiredBlocks.map((entry) => entry.inkwellBlockId));
-  const existingIds = new Set(existingMappings.map(mappingKey));
-  const oldCommon = existingMappings
-    .map(mappingKey)
-    .filter((id) => desiredIds.has(id));
-  const newCommon = desiredBlocks
-    .map((entry) => entry.inkwellBlockId)
-    .filter((id) => existingIds.has(id));
+  const { oldCommon, newCommon } = commonOrderedIds(existingMappings, desiredBlocks);
   let first = 0;
   let last = newCommon.length - 1;
 
@@ -350,4 +422,15 @@ function positionAfter(blockId) {
         after_block: { id: blockId },
       }
     : { type: 'start' };
+}
+
+function previousMappedBlockId(desiredBlocks, mappingsById, order) {
+  for (let index = order - 1; index >= 0; index -= 1) {
+    const mapping = mappingsById.get(desiredBlocks[index]?.inkwellBlockId);
+    if (mapping?.notionBlockId) {
+      return mapping.notionBlockId;
+    }
+  }
+
+  return undefined;
 }

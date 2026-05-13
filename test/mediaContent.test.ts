@@ -5,7 +5,7 @@ import {
   mergeSyncedMediaContent,
   sanitizeMediaForSync,
 } from '@/src/extensions/mediaContent';
-import type { DocumentContent } from '@/src/types/capture';
+import { doc, paragraph, image, audio } from './helpers/docBuilders';
 
 describe('media content helpers', () => {
   it('detects pending blob images and removes them from sync content', () => {
@@ -112,30 +112,3 @@ describe('media content helpers', () => {
   });
 });
 
-function doc(content: DocumentContent[]): DocumentContent {
-  return {
-    type: 'doc',
-    content,
-  };
-}
-
-function paragraph(text: string): DocumentContent {
-  return {
-    type: 'paragraph',
-    content: [{ type: 'text', text }],
-  };
-}
-
-function image(attrs: Record<string, unknown>): DocumentContent {
-  return {
-    type: 'image',
-    attrs,
-  };
-}
-
-function audio(attrs: Record<string, unknown>): DocumentContent {
-  return {
-    type: 'audio',
-    attrs,
-  };
-}

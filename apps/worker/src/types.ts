@@ -13,6 +13,7 @@ export type SyncJob = {
     page?: ProjectPage;
     project: Project;
     op?: SyncBlockOperation;
+    ops?: SyncBlockOperation[];
     selectedParentPageId?: string;
   };
 };

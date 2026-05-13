@@ -37,4 +37,4 @@ WORKER_URL = "https://sync.inkwell.byaidan.com"
 #   INKWELL_EXTENSION_ORIGIN      (chrome-extension://YOUR_EXTENSION_ID)
 #   SUPABASE_URL              (Project Settings → API → Project URL)
 #   SUPABASE_SERVICE_KEY      (Project Settings → API → service_role key)
-#   NOTION_WEBHOOK_SECRET     (from Notion integration dashboard → Webhooks)
+#   NOTION_WEBHOOK_SECRET     (the verification_token from Notion's webhook verification request)

@@ -53,6 +53,7 @@ export type SyncBlockOperation = {
   inkwellBlockId?: string;
   sequence: number;
   createdAt: string;
+  localVersion: number;
   baseKnownSyncVersion?: number;
   payload: {
     page: ProjectPage;

@@ -10,7 +10,10 @@ import {
   tiptapDocumentToNotionBlocks,
 } from './blockConversion.js';
 import { importManagedBlocks as importManagedBlocksWithDependencies } from './importManagedBlocks.js';
-import { replaceManagedBlocks as replaceManagedBlocksWithDependencies } from './managedBlocks.js';
+import {
+  applyManagedBlockOps as applyManagedBlockOpsWithDependencies,
+  replaceManagedBlocks as replaceManagedBlocksWithDependencies,
+} from './managedBlocks.js';
 import { createNotionRequester, uploadFileToNotion } from './notionRequest.js';
 import { pushPageToNotionCore } from './pageSync.js';
 import {
@@ -29,6 +32,8 @@ import type {
   SyncReloadRequest,
   SyncValidationRequest,
 } from '../../../src/types/sync.js';
+import { youtubeEmbedUrl, youtubeVideoInfo, youtubeStartSeconds } from '../../../src/lib/youtubeUtils.js';
+import { compactPendingSyncOps } from '../../../src/services/syncQueue.js';
 
 const INKWELL_SESSION_COOKIE = 'inkwell_session';
 const INKWELL_OAUTH_STATE_COOKIE = 'inkwell_notion_oauth_state';
@@ -257,26 +262,32 @@ app.post('/sync/push', async (c) => {
   const opVersions = {};
 
   if (ops.length) {
-    for (const op of ops) {
-      if (!op?.opId || !op?.pageId || !op?.payload?.page || !op?.payload?.project) {
+    const groups = syncOpGroupsByPage(ops);
+
+    for (const group of groups) {
+      const latestOp = group.ops.at(-1);
+      if (!latestOp?.opId || !latestOp?.pageId || !latestOp?.payload?.page || !latestOp?.payload?.project) {
         return c.json({ status: 'error', message: 'Invalid sync operation.' }, 400);
       }
 
       const version = await enqueueSync(c.env, {
         type: 'block_op',
-        localId: op.pageId,
-        pageId: op.pageId,
-        projectId: op.projectId,
+        localId: latestOp.pageId,
+        pageId: latestOp.pageId,
+        projectId: latestOp.projectId,
         installationId: store.installationId,
         payload: {
-          op,
-          page: op.payload.page,
-          project: op.payload.project,
-          selectedParentPageId: op.payload.selectedParentPageId,
+          op: latestOp,
+          ops: group.ops,
+          page: latestOp.payload.page,
+          project: latestOp.payload.project,
+          selectedParentPageId: latestOp.payload.selectedParentPageId,
         },
-      });
-      versions[op.pageId] = version;
-      opVersions[op.opId] = version;
+      }, group.version);
+      versions[latestOp.pageId] = version;
+      for (const op of group.ops) {
+        opVersions[op.opId] = version;
+      }
     }
 
     return c.json({ queued: true, versions, opVersions });
@@ -289,10 +300,35 @@ app.post('/sync/push', async (c) => {
     projectId: project.id,
     installationId: store.installationId,
     payload: { page, project, selectedParentPageId },
-  });
+  }, page.localSyncVersion ?? page.knownSyncVersion ?? 0);
 
   return c.json({ queued: true, version });
 });
+
+function syncOpGroupsByPage(ops) {
+  const groups = new Map();
+  for (const op of ops) {
+    if (!op?.pageId || !op?.opId) continue;
+    const group = groups.get(op.pageId) ?? [];
+    group.push(op);
+    groups.set(op.pageId, group);
+  }
+
+  return Array.from(groups.entries()).map(([pageId, pageOps]) => {
+    const compacted = compactPendingSyncOps(pageOps);
+    return {
+      pageId,
+      ops: compacted,
+      version: Math.max(...compacted.map(syncOpSortValue)),
+    };
+  }).filter((group) => group.ops.length)
+    .sort((first, second) => first.version - second.version);
+}
+
+
+function syncOpSortValue(op) {
+  return Number(op?.localVersion ?? op?.sequence ?? 0);
+}
 
 app.post('/sync/project', async (c) => {
   const body = await c.req.json<SyncProjectRequest>().catch(() => ({}));
@@ -503,18 +539,25 @@ app.post('/webhooks/notion', async (c) => {
     return c.json({ ok: true, ignored: 'invalid_json' });
   }
 
-  // Notion webhook URL verification must be answered synchronously.
+  // Current Notion webhook setup sends a one-time verification_token that must
+  // be copied from server logs into the Notion integration settings.
+  if (typeof payload.verification_token === 'string') {
+    console.log('[webhooks/notion] verification token received:', payload.verification_token);
+    return c.json({ ok: true });
+  }
+
+  // Older Notion webhook URL verification must be answered synchronously.
   if (payload.type === 'url_verification' && payload.challenge) {
     return c.json({ challenge: payload.challenge });
   }
 
-  const signature = c.req.header('notion-signature') ?? '';
+  const signature = c.req.header('x-notion-signature') ?? c.req.header('notion-signature') ?? '';
   if (c.env.NOTION_WEBHOOK_SECRET) {
     const expected = await computeHmacSignature(c.env.NOTION_WEBHOOK_SECRET, rawBody).catch((error) => {
       console.error('[webhooks/notion] signature computation failed:', error);
       return '';
     });
-    if (signature !== `v0=${expected}`) {
+    if (signature !== `sha256=${expected}` && signature !== `v0=${expected}`) {
       console.warn('[webhooks/notion] invalid signature');
       return c.json({ ok: true, ignored: 'invalid_signature' });
     }
@@ -698,35 +741,50 @@ async function pushPageToNotion({ c, page, project, selectedParentPageId }) {
   );
 }
 
+async function performSyncProjectFolder(freshStore, { project, selectedParentPageId }) {
+  const response = await syncProjectFolder({
+    store: freshStore,
+    project,
+    selectedParentPageId,
+    ensureInkwellRootPage,
+    ensureProjectPage,
+    ensureProjectRootPage,
+    archiveProjectRootPage,
+    pageSummary,
+  });
+  appendLog(freshStore, project.status === 'archived' ? 'project_archived' : 'project_synced', project.name);
+  await writeStore(freshStore);
+  return response;
+}
+
 async function syncProjectToNotion({ c, project, selectedParentPageId }) {
   const store = await requireConnectedStore(c);
-
-  return withFreshInstallationStore(store, async (freshStore) => {
-    const response = await syncProjectFolder({
-      store: freshStore,
-      project,
-      selectedParentPageId,
-      ensureInkwellRootPage,
-      ensureProjectPage,
-      ensureProjectRootPage,
-      archiveProjectRootPage,
-      pageSummary,
-    });
-
-    appendLog(freshStore, project.status === 'archived' ? 'project_archived' : 'project_synced', project.name);
-    await writeStore(freshStore);
-    return response;
-  });
+  return withFreshInstallationStore(store, (freshStore) => performSyncProjectFolder(freshStore, { project, selectedParentPageId }));
 }
 
 // ─── Queue helpers ─────────────────────────────────────────────────────────────
 
-async function enqueueSync(env, job) {
-  const { data: version } = await supabase.rpc('increment_block_version', {
-    p_installation_id: job.installationId,
-    p_local_id: job.localId,
-    p_entity_type: job.type,
-  });
+async function enqueueSync(env, job, clientVersion = 0) {
+  const version = Number.isFinite(Number(clientVersion)) ? Number(clientVersion) : 0;
+  const { data: existing } = await supabase
+    .from('notion_block_sync')
+    .select('local_version')
+    .eq('installation_id', job.installationId)
+    .eq('local_id', job.localId)
+    .maybeSingle();
+
+  await supabase.from('notion_block_sync').upsert(
+    {
+      installation_id: job.installationId,
+      local_id: job.localId,
+      entity_type: job.type,
+      local_version: Math.max(existing?.local_version ?? 0, version),
+      status: 'pending',
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: 'installation_id,local_id' },
+  );
+
   await env.SYNC_QUEUE.send({ ...job, queuedVersion: version });
   return version;
 }
@@ -754,14 +812,14 @@ async function getInstallationById(installationId) {
   return { id: installRow.id, tokens: { access_token: accountRow.accessToken } };
 }
 
-async function pushPageToNotionForInstallation(installationId, { page, project, selectedParentPageId }) {
+async function freshConnectedStoreForInstallation(installationId) {
   const installation = await getInstallationById(installationId);
   if (!installation) throw new Error('Installation not found or revoked.');
+  return freshConnectedStore({ installationId, tokens: installation.tokens });
+}
 
-  const store = await freshConnectedStore({
-    installationId,
-    tokens: installation.tokens,
-  });
+async function pushPageToNotionForInstallation(installationId, { page, project, selectedParentPageId }) {
+  const store = await freshConnectedStoreForInstallation(installationId);
 
   return withFreshInstallationStore(store, (freshStore) =>
     pushPageToNotionCore({
@@ -788,30 +846,79 @@ async function pushPageToNotionForInstallation(installationId, { page, project, 
   );
 }
 
-async function syncProjectToNotionForInstallation(installationId, { project, selectedParentPageId }) {
-  const installation = await getInstallationById(installationId);
-  if (!installation) throw new Error('Installation not found or revoked.');
-
-  const store = await freshConnectedStore({
-    installationId,
-    tokens: installation.tokens,
-  });
+async function applyBlockOpsToNotionForInstallation(installationId, { ops, page, project, selectedParentPageId }) {
+  const store = await freshConnectedStoreForInstallation(installationId);
 
   return withFreshInstallationStore(store, async (freshStore) => {
-    const response = await syncProjectFolder({
-      store: freshStore,
-      project,
-      selectedParentPageId,
-      ensureInkwellRootPage,
-      ensureProjectPage,
-      ensureProjectRootPage,
-      archiveProjectRootPage,
-      pageSummary,
-    });
-    appendLog(freshStore, project.status === 'archived' ? 'project_archived' : 'project_synced', project.name);
+    if (page.status === 'archived' || ops.some((op) => op.type === 'page_archive')) {
+      return pushPageToNotionForInstallation(installationId, { page, project, selectedParentPageId });
+    }
+
+    let notionPageId;
+    let parentPageId;
+    let refreshed;
+
+    if (ensureProjectPage && ensureThreadToggle) {
+      const projectPage = await ensureProjectPage(freshStore, project, { selectedParentPageId });
+      const toggle = await ensureThreadToggle(freshStore, projectPage.id, page);
+      await updateThreadToggleTitle?.(freshStore, page);
+      notionPageId = toggle.id;
+      parentPageId = projectPage.id;
+      await applyManagedBlockOps(freshStore, page.id, notionPageId, ops, page.content);
+      refreshed = await notionRequest(freshStore, `/blocks/${notionPageId}`).catch(() => toggle);
+      freshStore.notePages[page.id] = {
+        notionPageId,
+        parentPageId,
+        title: page.title,
+        lastEditedTime: refreshed.last_edited_time,
+        kind: 'thread',
+      };
+    } else {
+      const inkwellRootPage = await ensureInkwellRootPage(freshStore, { selectedParentPageId });
+      const projectRootPage = await ensureProjectRootPage(freshStore, inkwellRootPage.id, project, {
+        candidateNotionPageId: page.notionParentPageId,
+      });
+      const existingPageId = page.notionPageId ?? freshStore.notePages[page.id]?.notionPageId;
+      const existingPage = existingPageId
+        ? await notionRequest(freshStore, `/pages/${existingPageId}`).catch(() => undefined)
+        : undefined;
+      const notePage = existingPage ?? await createChildPage(freshStore, projectRootPage.id, page.title);
+      await updateChildNotePage(freshStore, notePage.id, page);
+      notionPageId = notePage.id;
+      parentPageId = projectRootPage.id;
+      await applyManagedBlockOps(freshStore, page.id, notionPageId, ops, page.content);
+      refreshed = await notionRequest(freshStore, `/pages/${notionPageId}`).catch(() => notePage);
+      freshStore.notePages[page.id] = {
+        notionPageId,
+        parentPageId,
+        title: page.title,
+        lastEditedTime: refreshed.last_edited_time,
+      };
+    }
+
+    appendLog(freshStore, 'sync_block_push', `${page.title} (${ops.length} ops)`);
     await writeStore(freshStore);
-    return response;
+
+    return {
+      page: {
+        ...page,
+        notionPageId,
+        notionDatabaseId: undefined,
+        notionDataSourceId: undefined,
+        notionParentPageId: parentPageId,
+        notionLastEditedTime: refreshed?.last_edited_time,
+        remoteRevision: refreshed?.last_edited_time,
+        syncState: 'saved',
+      },
+      status: 'saved',
+      message: 'Synced block changes to Notion.',
+    };
   });
+}
+
+async function syncProjectToNotionForInstallation(installationId, { project, selectedParentPageId }) {
+  const store = await freshConnectedStoreForInstallation(installationId);
+  return withFreshInstallationStore(store, (freshStore) => performSyncProjectFolder(freshStore, { project, selectedParentPageId }));
 }
 
 // ─── Store helpers ─────────────────────────────────────────────────────────────
@@ -1231,6 +1338,14 @@ async function replaceManagedBlocks(store, localPageId, notionPageId, content) {
   });
 }
 
+async function applyManagedBlockOps(store, localPageId, notionPageId, ops, content) {
+  return applyManagedBlockOpsWithDependencies({
+    store, localPageId, notionPageId, ops, content,
+    appendManagedBlocks, deleteManagedBlock, updateManagedBlock,
+    replaceManagedBlocks, tiptapDocumentToNotionBlocks, kindFromNotionBlock, hash,
+  });
+}
+
 async function importManagedBlocks(store, page) {
   return importManagedBlocksWithDependencies({ hash, listAllBlockChildren, page, store });
 }
@@ -1481,77 +1596,6 @@ function mediaExtensionFromMimeType(mimeType) {
   }[String(mimeType).toLowerCase()] ?? (String(mimeType).toLowerCase().startsWith('audio/') ? 'mp3' : 'png');
 }
 
-function youtubeEmbedUrl(value) {
-  const info = youtubeVideoInfo(value);
-
-  if (!info) {
-    return '';
-  }
-
-  const url = new URL(`https://www.youtube-nocookie.com/embed/${info.id}`);
-  url.searchParams.set('rel', '1');
-
-  if (info.start > 0) {
-    url.searchParams.set('start', String(info.start));
-  }
-
-  return url.toString();
-}
-
-function youtubeVideoInfo(value) {
-  try {
-    const url = new URL(value);
-    const host = url.hostname.toLowerCase();
-    let id = '';
-
-    if (host.endsWith('youtu.be')) {
-      id = url.pathname.split('/').filter(Boolean)[0] ?? '';
-    } else if (
-      host === 'youtube.com' ||
-      host.endsWith('.youtube.com') ||
-      host === 'youtube-nocookie.com' ||
-      host.endsWith('.youtube-nocookie.com')
-    ) {
-      id =
-        url.searchParams.get('v') ??
-        url.pathname.match(/^\/(?:embed|shorts|v)\/([\w-]+)/i)?.[1] ??
-        '';
-    }
-
-    if (!/^[\w-]+$/.test(id)) {
-      return null;
-    }
-
-    return {
-      id,
-      start: youtubeStartSeconds(url.searchParams.get('start') ?? url.searchParams.get('t') ?? ''),
-    };
-  } catch {
-    return null;
-  }
-}
-
-function youtubeStartSeconds(value) {
-  if (!value) {
-    return 0;
-  }
-
-  if (/^\d+$/.test(value)) {
-    return Number(value);
-  }
-
-  const match = value.match(/^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s?)?$/i);
-
-  if (!match) {
-    return 0;
-  }
-
-  return (
-    Number(match[1] ?? 0) * 3600 +
-    Number(match[2] ?? 0) * 60 +
-    Number(match[3] ?? 0)
-  );
-}
 
 function youtubeEmbedPage(embedUrl) {
   return `<!doctype html>
@@ -1749,6 +1793,7 @@ export default {
 
         // Stale check — a newer edit was enqueued after this one
         if (row && row.local_version > job.queuedVersion) {
+          console.log('[queue] skipped stale', job.type, job.localId, 'v', job.queuedVersion, 'latest', row.local_version);
           msg.ack();
           continue;
         }
@@ -1761,7 +1806,15 @@ export default {
 
         let notionBlockId = null;
 
-        if (job.type === 'page' || job.type === 'block_op') {
+        if (job.type === 'block_op') {
+          const result = await applyBlockOpsToNotionForInstallation(job.installationId, {
+            ops: job.payload.ops?.length ? job.payload.ops : [job.payload.op].filter(Boolean),
+            page: job.payload.page,
+            project: job.payload.project,
+            selectedParentPageId: job.payload.selectedParentPageId,
+          });
+          notionBlockId = result?.page?.notionPageId ?? null;
+        } else if (job.type === 'page') {
           const result = await pushPageToNotionForInstallation(job.installationId, {
             page: job.payload.page,
             project: job.payload.project,

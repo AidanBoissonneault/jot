@@ -89,9 +89,12 @@ const defaultProjects: Project[] = [
 ];
 
 const waitForStub = () => new Promise((resolve) => setTimeout(resolve, 80));
+const LOCAL_QUEUE_DELIVERY_DELAY_MS = 10_000;
 const pendingTempPageSaves = new Map<string, ProjectPage>();
 const projectReconciliations = new Map<string, Promise<string>>();
 let queueDeliveryPromise: Promise<void> | undefined;
+let queueDeliveryTimer: ReturnType<typeof setTimeout> | undefined;
+let forcedQueueDeliveryPromise: Promise<void> | undefined;
 
 function emptyDocument(): DocumentContent {
   return normalizeInkwellBlockIds({
@@ -288,13 +291,7 @@ async function readStorage(): Promise<Required<InkwellStorage>> {
   const pages = (shouldCreatePages
     ? createDefaultPages(projects)
     : stored.pages ?? createDefaultPages(projects)
-  ).map((page) => ({
-    ...page,
-    content: normalizeInkwellBlockIds(markUnrecoverableTransientMedia(page.content)),
-    localRevision: page.localRevision ?? crypto.randomUUID(),
-    status: page.status ?? 'active',
-    syncState: page.syncState ?? 'saved',
-  }));
+  ).map(normalizeStoredPage);
   const activeProjects = projects.filter((project) => project.status !== 'archived');
   const currentProjectId = activeProjects.some((project) => project.id === stored.currentProjectId)
     ? stored.currentProjectId ?? ''
@@ -542,18 +539,41 @@ async function enqueuePageSync(
   triggerQueueDelivery();
 
   return syncConfig.connected
-    ? withSyncStatus(normalizedPage, 'saving')
+    ? withSyncStatus(normalizedPage, 'saved')
     : withSyncStatus(normalizedPage, 'stale', 'Connect Notion to sync this page.');
 
 }
 
 function triggerQueueDelivery(): void {
   if (queueDeliveryPromise) return;
-  queueDeliveryPromise = deliverPendingSyncOps()
-    .catch(() => undefined)
+  if (queueDeliveryTimer) {
+    clearTimeout(queueDeliveryTimer);
+  }
+  queueDeliveryTimer = setTimeout(() => {
+    queueDeliveryTimer = undefined;
+    runQueueDelivery();
+  }, 0);
+}
+
+function runQueueDelivery(): void {
+  if (queueDeliveryPromise || forcedQueueDeliveryPromise) return;
+  queueDeliveryPromise = deliverPendingSyncOps({ force: false })
+    .catch(() => {
+      scheduleNextQueueDelivery(LOCAL_QUEUE_DELIVERY_DELAY_MS);
+    })
     .finally(() => {
       queueDeliveryPromise = undefined;
     });
+}
+
+function scheduleNextQueueDelivery(delayMs: number): void {
+  if (queueDeliveryTimer) {
+    clearTimeout(queueDeliveryTimer);
+  }
+  queueDeliveryTimer = setTimeout(() => {
+    queueDeliveryTimer = undefined;
+    runQueueDelivery();
+  }, Math.max(0, delayMs));
 }
 
 export function connectSyncEvents(
@@ -659,6 +679,60 @@ async function persistPage(page: ProjectPage) {
       storedPage.id === page.id ? page : storedPage,
     ),
   });
+}
+
+async function syncAndPersistPage(page: ProjectPage): Promise<ProjectPage> {
+  const synced = isTempPage(page) ? page : await syncPullPage(page);
+  if (synced !== page) await persistPage(synced);
+  return synced;
+}
+
+function findActiveProjectPages(pages: ProjectPage[], projectId: string, excludePageId?: string): ProjectPage[] {
+  return pages.filter(
+    (page) =>
+      page.projectId === projectId &&
+      page.status !== 'archived' &&
+      page.id !== excludePageId &&
+      !isTempPage(page),
+  );
+}
+
+function normalizeStoredPage<T extends { content?: DocumentContent; localRevision?: string; status?: string; syncState?: string }>(page: T): T {
+  return {
+    ...page,
+    content: normalizeInkwellBlockIds(markUnrecoverableTransientMedia(page.content as DocumentContent)),
+    localRevision: page.localRevision ?? crypto.randomUUID(),
+    status: page.status ?? 'active',
+    syncState: page.syncState ?? 'saved',
+  };
+}
+
+function requireActiveProject(projects: Project[], projectId: string): Project {
+  const project = projects.find((p) => p.id === projectId);
+  if (!project || project.status === 'archived') {
+    throw new Error('This project is no longer available.');
+  }
+  return project;
+}
+
+async function saveProjectUpdate(projects: Project[], projectId: string, updatedProject: Project): Promise<Project> {
+  const syncedProject = await syncProject(updatedProject);
+  const savedProject = syncedProject ?? updatedProject;
+  await writeStorage({
+    projects: projects
+      .map((p) => (p.id === projectId ? savedProject : p))
+      .sort(sortProjectsByUpdatedDesc),
+  });
+  return savedProject;
+}
+
+async function requirePageWithProject(pageId: string) {
+  const storage = await readStorage();
+  const page = storage.pages.find((p) => p.id === pageId);
+  if (!page) throw new Error('This page is no longer available.');
+  const project = storage.projects.find((p) => p.id === page.projectId);
+  if (!project) throw new Error('This project is no longer available.');
+  return { ...storage, page, project };
 }
 
 async function replaceTempProject({
@@ -796,7 +870,33 @@ async function replayTempPageSave(tempPageId: string, realPage: ProjectPage) {
   });
 }
 
-async function deliverPendingSyncOps(): Promise<void> {
+async function flushPendingSyncOps(options: { force?: boolean } = {}): Promise<void> {
+  if (options.force) {
+    if (queueDeliveryTimer) {
+      clearTimeout(queueDeliveryTimer);
+      queueDeliveryTimer = undefined;
+    }
+
+    if (forcedQueueDeliveryPromise) {
+      return forcedQueueDeliveryPromise;
+    }
+
+    forcedQueueDeliveryPromise = deliverPendingSyncOps({ force: true })
+      .catch((error) => {
+        scheduleNextQueueDelivery(LOCAL_QUEUE_DELIVERY_DELAY_MS);
+        throw error;
+      })
+      .finally(() => {
+        forcedQueueDeliveryPromise = undefined;
+      });
+
+    return forcedQueueDeliveryPromise;
+  }
+
+  triggerQueueDelivery();
+}
+
+async function deliverPendingSyncOps({ force }: { force: boolean }): Promise<void> {
   const { syncConfig } = await readStorage();
   if (!syncConfig.connected) return;
 
@@ -808,13 +908,28 @@ async function deliverPendingSyncOps(): Promise<void> {
     await replacePendingSyncOps(compacted);
   }
 
+  const now = Date.now();
+  const eligible = force
+    ? compacted
+    : compacted.filter((op) => now - Date.parse(op.createdAt) >= LOCAL_QUEUE_DELIVERY_DELAY_MS);
+
+  if (!eligible.length) {
+    scheduleNextQueueDelivery(msUntilOldestOpIsEligible(compacted, now));
+    return;
+  }
+
   const response = await requestServer<SyncEnqueueResponse>('/sync/push', {
     method: 'POST',
-    body: JSON.stringify({ ops: compacted }),
+    body: JSON.stringify({ ops: eligible }),
   }, syncConfig);
 
-  await removePendingSyncOps(compacted.map((op) => op.opId));
-  await applyQueuedVersions(compacted, response);
+  await removePendingSyncOps(eligible.map((op) => op.opId));
+  await applyQueuedVersions(eligible, response);
+
+  const remaining = await listPendingSyncOps();
+  if (remaining.length) {
+    scheduleNextQueueDelivery(msUntilOldestOpIsEligible(remaining));
+  }
 }
 
 async function applyQueuedVersions(ops: BlockSyncOp[], response: SyncEnqueueResponse): Promise<void> {
@@ -823,7 +938,7 @@ async function applyQueuedVersions(ops: BlockSyncOp[], response: SyncEnqueueResp
   const versionByPage = new Map<string, number>();
 
   for (const op of ops) {
-    const version = versions[op.pageId] ?? opVersions[op.opId] ?? response.version;
+    const version = versions[op.pageId] ?? opVersions[op.opId] ?? response.version ?? op.localVersion;
     if (typeof version === 'number') {
       versionByPage.set(op.pageId, Math.max(versionByPage.get(op.pageId) ?? 0, version));
     }
@@ -846,6 +961,18 @@ async function applyQueuedVersions(ops: BlockSyncOp[], response: SyncEnqueueResp
   });
 }
 
+function msUntilOldestOpIsEligible(ops: BlockSyncOp[], now = Date.now()): number {
+  const oldestCreatedAt = Math.min(
+    ...ops.map((op) => Date.parse(op.createdAt)).filter((time) => Number.isFinite(time)),
+  );
+
+  if (!Number.isFinite(oldestCreatedAt)) {
+    return LOCAL_QUEUE_DELIVERY_DELAY_MS;
+  }
+
+  return Math.max(0, LOCAL_QUEUE_DELIVERY_DELAY_MS - (now - oldestCreatedAt));
+}
+
 async function updateStoredSyncConfig(config: Partial<SyncConfig>): Promise<SyncConfig> {
   const { syncConfig } = await readStorage();
   const nextConfig = {
@@ -861,6 +988,8 @@ async function updateStoredSyncConfig(config: Partial<SyncConfig>): Promise<Sync
 }
 
 export const notionClient = {
+  flushPendingSyncOps,
+
   async listProjects(): Promise<Project[]> {
     await waitForStub();
     const { projects } = await readStorage();
@@ -938,38 +1067,14 @@ export const notionClient = {
 
   async renameProject(projectId: string, name: string): Promise<Project> {
     const { projects } = await readStorage();
-    const project = projects.find((storedProject) => storedProject.id === projectId);
-
-    if (!project || project.status === 'archived') {
-      throw new Error('This project is no longer available.');
-    }
-
-    const updatedProject = touchProject(project, {
-      name: name.trim() || 'Untitled Project',
-    });
-
-    const syncedProject = await syncProject(updatedProject);
-    const savedProject = syncedProject ?? updatedProject;
-
-    await writeStorage({
-      projects: projects
-        .map((storedProject) =>
-          storedProject.id === projectId ? savedProject : storedProject,
-        )
-        .sort(sortProjectsByUpdatedDesc),
-    });
-
-    return savedProject;
+    const project = requireActiveProject(projects, projectId);
+    const updatedProject = touchProject(project, { name: name.trim() || 'Untitled Project' });
+    return saveProjectUpdate(projects, projectId, updatedProject);
   },
 
   async archiveProject(projectId: string): Promise<{ currentProjectId: string; project: Project }> {
     const { activePageIdsByProject, pages, projects } = await readStorage();
-    const project = projects.find((storedProject) => storedProject.id === projectId);
-
-    if (!project || project.status === 'archived') {
-      throw new Error('This project is no longer available.');
-    }
-
+    const project = requireActiveProject(projects, projectId);
     const activeProjects = projects.filter((storedProject) => storedProject.status !== 'archived');
 
     if (activeProjects.length <= 1) {
@@ -1023,29 +1128,12 @@ export const notionClient = {
     metadata: { category?: string; stateContent?: DocumentContent },
   ): Promise<Project> {
     const { projects } = await readStorage();
-    const project = projects.find((storedProject) => storedProject.id === projectId);
-
-    if (!project || project.status === 'archived') {
-      throw new Error('This project is no longer available.');
-    }
-
+    const project = requireActiveProject(projects, projectId);
     const updatedProject = touchProject(project, {
       category: metadata.category?.trim() ?? project.category,
       stateContent: metadata.stateContent ?? project.stateContent,
     });
-
-    const syncedProject = await syncProject(updatedProject);
-    const savedProject = syncedProject ?? updatedProject;
-
-    await writeStorage({
-      projects: projects
-        .map((storedProject) =>
-          storedProject.id === projectId ? savedProject : storedProject,
-        )
-        .sort(sortProjectsByUpdatedDesc),
-    });
-
-    return savedProject;
+    return saveProjectUpdate(projects, projectId, updatedProject);
   },
 
   async getSyncConfig(): Promise<SyncConfig> {
@@ -1177,13 +1265,7 @@ export const notionClient = {
       }),
     }, syncConfig);
     const projects = response.projects.map(normalizeProject).sort(sortProjectsByUpdatedDesc);
-    const pages = response.pages.map((page) => ({
-      ...page,
-      content: normalizeInkwellBlockIds(markUnrecoverableTransientMedia(page.content)),
-      localRevision: page.localRevision ?? crypto.randomUUID(),
-      status: page.status ?? 'active',
-      syncState: page.syncState ?? 'saved',
-    }));
+    const pages = response.pages.map(normalizeStoredPage);
     const activePageIdsByProject = createCompatibleActivePageIds(
       projects,
       pages,
@@ -1280,13 +1362,7 @@ export const notionClient = {
       return undefined;
     }
 
-    const syncedPage = isTempPage(page) ? page : await syncPullPage(page);
-
-    if (syncedPage !== page) {
-      await persistPage(syncedPage);
-    }
-
-    return syncedPage;
+    return syncAndPersistPage(page);
   },
 
   async syncProjectPage(pageId: string): Promise<ProjectPage | undefined> {
@@ -1297,31 +1373,14 @@ export const notionClient = {
       return undefined;
     }
 
-    const syncedPage = isTempPage(page) ? page : await syncPullPage(page);
-
-    if (syncedPage !== page) {
-      await persistPage(syncedPage);
-    }
-
-    return syncedPage;
+    return syncAndPersistPage(page);
   },
 
   async prefetchProjectPages(projectId: string, excludePageId?: string): Promise<void> {
     const { pages } = await readStorage();
-    const projectPages = pages.filter(
-      (page) =>
-        page.projectId === projectId &&
-        page.status !== 'archived' &&
-        page.id !== excludePageId &&
-        !isTempPage(page),
-    );
 
-    for (const page of projectPages) {
-      const syncedPage = await syncPullPage(page);
-
-      if (syncedPage !== page) {
-        await persistPage(syncedPage);
-      }
+    for (const page of findActiveProjectPages(pages, projectId, excludePageId)) {
+      await syncAndPersistPage(page);
     }
   },
 
@@ -1412,18 +1471,7 @@ export const notionClient = {
   },
 
   async renameProjectPage(pageId: string, title: string) {
-    const { pages, projects } = await readStorage();
-    const page = pages.find((storedPage) => storedPage.id === pageId);
-
-    if (!page) {
-      throw new Error('This page is no longer available.');
-    }
-
-    const project = projects.find((storedProject) => storedProject.id === page.projectId);
-
-    if (!project) {
-      throw new Error('This project is no longer available.');
-    }
+    const { pages, projects, page, project } = await requirePageWithProject(pageId);
 
     const updatedPage = markPageDirty({
       ...page,
@@ -1452,18 +1500,7 @@ export const notionClient = {
   },
 
   async archiveProjectPage(pageId: string): Promise<ProjectPage> {
-    const { activePageIdsByProject, pages, projects } = await readStorage();
-    const page = pages.find((storedPage) => storedPage.id === pageId);
-
-    if (!page) {
-      throw new Error('This page is no longer available.');
-    }
-
-    const project = projects.find((storedProject) => storedProject.id === page.projectId);
-
-    if (!project) {
-      throw new Error('This project is no longer available.');
-    }
+    const { activePageIdsByProject, pages, projects, page, project } = await requirePageWithProject(pageId);
 
     const archivedPage = markPageDirty({
       ...page,

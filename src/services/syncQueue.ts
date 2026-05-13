@@ -1,51 +1,29 @@
 import type { DocumentContent, Project, ProjectPage } from '@/src/types/capture';
 import { idbGet, idbSet } from '@/src/services/idbStore';
+import type { SyncBlockOperation as BlockSyncOp, SyncBlockOperationType as BlockSyncOpType } from '@/src/types/sync';
+export type { BlockSyncOp, BlockSyncOpType };
 
 const PENDING_SYNC_OPS_KEY = 'pending_sync_ops';
 const SYNC_SEQUENCE_KEY = 'pending_sync_sequence';
+const LOCAL_SYNC_VERSIONS_KEY = 'local_sync_versions';
 const INKWELL_BLOCK_ID_ATTR = 'inkwellBlockId';
 
-export type BlockSyncOpType =
-  | 'page_upsert'
-  | 'page_archive'
-  | 'block_create'
-  | 'block_update'
-  | 'block_delete'
-  | 'block_reorder';
-
-export type BlockSyncOp = {
-  opId: string;
-  type: BlockSyncOpType;
-  pageId: string;
-  projectId: string;
-  inkwellBlockId?: string;
-  sequence: number;
-  createdAt: string;
-  baseKnownSyncVersion?: number;
-  payload: {
-    page: ProjectPage;
-    project: Project;
-    block?: DocumentContent;
-    previousBlock?: DocumentContent;
-    order?: string[];
-    selectedParentPageId?: string;
-  };
-};
-
-export async function addPendingSyncOps(ops: Omit<BlockSyncOp, 'opId' | 'sequence' | 'createdAt'>[]): Promise<BlockSyncOp[]> {
+export async function addPendingSyncOps(ops: Omit<BlockSyncOp, 'opId' | 'sequence' | 'createdAt' | 'localVersion'>[]): Promise<BlockSyncOp[]> {
   if (!ops.length) return [];
 
   const pending = await listPendingSyncOps();
+  const localVersions = await nextLocalVersions(ops.map((op) => op.pageId));
   let sequence = await nextSequence(ops.length);
   const now = new Date().toISOString();
-  const created = ops.map((op) => ({
+  const created = ops.map((op, index) => ({
     ...op,
     opId: crypto.randomUUID(),
     sequence: sequence++,
     createdAt: now,
+    localVersion: localVersions[index],
   }));
 
-  await idbSet(PENDING_SYNC_OPS_KEY, [...pending, ...created]);
+  await idbSet(PENDING_SYNC_OPS_KEY, compactPendingSyncOps([...pending, ...created]));
   return created;
 }
 
@@ -76,7 +54,7 @@ export function buildPageSyncOps({
   page: ProjectPage;
   project: Project;
   selectedParentPageId?: string;
-}): Omit<BlockSyncOp, 'opId' | 'sequence' | 'createdAt'>[] {
+}): Omit<BlockSyncOp, 'opId' | 'sequence' | 'createdAt' | 'localVersion'>[] {
   const base = {
     pageId: page.id,
     projectId: project.id,
@@ -88,7 +66,7 @@ export function buildPageSyncOps({
     return [{ ...base, type: 'page_archive' }];
   }
 
-  const ops: Omit<BlockSyncOp, 'opId' | 'sequence' | 'createdAt'>[] = [];
+  const ops: Omit<BlockSyncOp, 'opId' | 'sequence' | 'createdAt' | 'localVersion'>[] = [];
   const previousBlocks = blocksById(previousPage?.content);
   const nextBlocks = blocksById(page.content);
   const previousOrder = Array.from(previousBlocks.keys());
@@ -140,14 +118,34 @@ export function buildPageSyncOps({
 }
 
 export function compactPendingSyncOps(ops: BlockSyncOp[]): BlockSyncOp[] {
-  const sorted = ops.slice().sort((first, second) => first.sequence - second.sequence);
+  const sorted = ops
+    .map((op) => ({ ...op, payload: { ...op.payload } }))
+    .sort((first, second) => first.sequence - second.sequence);
   const keep = new Set(sorted.map((op) => op.opId));
   const latestUpdateByBlock = new Map<string, string>();
+  const createByBlock = new Map<string, BlockSyncOp>();
 
   for (const op of sorted) {
     const key = opBlockKey(op);
 
+    if (op.type === 'block_create' && key) {
+      createByBlock.set(key, op);
+      continue;
+    }
+
     if (op.type === 'block_update' && key) {
+      const createOp = createByBlock.get(key);
+      if (createOp) {
+        createOp.payload = {
+          ...createOp.payload,
+          page: op.payload.page,
+          block: op.payload.block,
+        };
+        createOp.localVersion = Math.max(createOp.localVersion, op.localVersion);
+        keep.delete(op.opId);
+        continue;
+      }
+
       const previous = latestUpdateByBlock.get(key);
       if (previous) keep.delete(previous);
       latestUpdateByBlock.set(key, op.opId);
@@ -155,6 +153,15 @@ export function compactPendingSyncOps(ops: BlockSyncOp[]): BlockSyncOp[] {
     }
 
     if (op.type === 'block_delete' && key) {
+      const createOp = createByBlock.get(key);
+      if (createOp) {
+        keep.delete(createOp.opId);
+        keep.delete(op.opId);
+        createByBlock.delete(key);
+        latestUpdateByBlock.delete(key);
+        continue;
+      }
+
       const previous = latestUpdateByBlock.get(key);
       if (previous) {
         keep.delete(previous);
@@ -201,4 +208,16 @@ async function nextSequence(count: number): Promise<number> {
   const current = (await idbGet<number>(SYNC_SEQUENCE_KEY)) ?? 0;
   await idbSet(SYNC_SEQUENCE_KEY, current + count);
   return current + 1;
+}
+
+async function nextLocalVersions(pageIds: string[]): Promise<number[]> {
+  const counters = { ...((await idbGet<Record<string, number>>(LOCAL_SYNC_VERSIONS_KEY)) ?? {}) };
+  const versions = pageIds.map((pageId) => {
+    const next = (counters[pageId] ?? 0) + 1;
+    counters[pageId] = next;
+    return next;
+  });
+
+  await idbSet(LOCAL_SYNC_VERSIONS_KEY, counters);
+  return versions;
 }
