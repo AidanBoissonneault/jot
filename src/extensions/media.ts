@@ -3,14 +3,14 @@ import { Image } from '@tiptap/extension-image';
 import { Youtube } from '@tiptap/extension-youtube';
 import { Audio } from '@tiptap/extension-audio';
 import { NodeSelection } from '@tiptap/pm/state';
-import { JOT_IMAGE_MOVE_MIME, rememberJotImageMovePayload } from '@/src/extensions/mediaDrop';
+import { INKWELL_IMAGE_MOVE_MIME, rememberInkwellImageMovePayload } from '@/src/extensions/mediaDrop';
 import { notionClient } from '@/src/services/notionClient';
 
 const DEFAULT_SYNC_SERVER_URL = 'http://localhost:8787';
 const YOUTUBE_ALLOW =
   'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share';
 
-export const JotImage = Image.extend({
+export const InkwellImage = Image.extend({
   addAttributes() {
     return {
       ...this.parent?.(),
@@ -32,7 +32,7 @@ export const JotImage = Image.extend({
   addNodeView() {
     return ({ node, editor, getPos }) => {
       const wrapper = document.createElement('div');
-      wrapper.className = 'jot-image-wrapper';
+      wrapper.className = 'inkwell-image-wrapper';
       wrapper.draggable = true;
       wrapper.tabIndex = -1;
       const uploadState = String(node.attrs.uploadState ?? 'idle');
@@ -69,7 +69,7 @@ export const JotImage = Image.extend({
 
       wrapper.appendChild(img);
       const resizeHandle = document.createElement('span');
-      resizeHandle.className = 'jot-image-resize-handle';
+      resizeHandle.className = 'inkwell-image-resize-handle';
       resizeHandle.setAttribute('aria-hidden', 'true');
       wrapper.appendChild(resizeHandle);
 
@@ -104,9 +104,9 @@ export const JotImage = Image.extend({
           pos,
           attrs: currentNode.attrs,
         };
-        rememberJotImageMovePayload(payload);
+        rememberInkwellImageMovePayload(payload);
         event.dataTransfer?.setData(
-          JOT_IMAGE_MOVE_MIME,
+          INKWELL_IMAGE_MOVE_MIME,
           JSON.stringify(payload),
         );
         event.dataTransfer?.setData('text/plain', String(currentNode.attrs.src ?? ''));
@@ -159,7 +159,7 @@ export const JotImage = Image.extend({
       wrapper.addEventListener('dragstart', onDragStart, true);
       img.addEventListener('dragstart', onDragStart, true);
       resizeHandle.addEventListener('pointerdown', onResizePointerDown);
-      applyImageBlockId(wrapper, currentNode.attrs.jotBlockId);
+      applyImageBlockId(wrapper, currentNode.attrs.inkwellBlockId);
 
       return {
         dom: wrapper,
@@ -178,7 +178,7 @@ export const JotImage = Image.extend({
           }
 
           currentNode = nextNode;
-          applyImageBlockId(wrapper, nextNode.attrs.jotBlockId);
+          applyImageBlockId(wrapper, nextNode.attrs.inkwellBlockId);
           applyImageUploadState(wrapper, String(nextNode.attrs.uploadState ?? 'idle'));
           img.src = String(nextNode.attrs.src ?? '');
           img.alt = String(nextNode.attrs.alt ?? '');
@@ -189,7 +189,7 @@ export const JotImage = Image.extend({
         stopEvent(event) {
           return (
             event.target instanceof Element &&
-            event.target.closest('.jot-image-resize-handle') !== null
+            event.target.closest('.inkwell-image-resize-handle') !== null
           );
         },
         destroy() {
@@ -203,7 +203,7 @@ export const JotImage = Image.extend({
   },
 });
 
-export const JotYoutube = Youtube.configure({
+export const InkwellYoutube = Youtube.configure({
   nocookie: true,
   controls: true,
   allowFullscreen: true,
@@ -236,7 +236,7 @@ export const JotYoutube = Youtube.configure({
   },
 });
 
-export const JotAudio = Audio.extend({
+export const InkwellAudio = Audio.extend({
   addCommands() {
     return {
       setAudio:
@@ -264,7 +264,7 @@ export const JotAudio = Audio.extend({
   addNodeView() {
     return ({ editor, getPos, node }) => {
       const wrapper = document.createElement('div');
-      wrapper.className = 'jot-audio-wrapper';
+      wrapper.className = 'inkwell-audio-wrapper';
       const uploadState = String(node.attrs.uploadState ?? 'idle');
       const src = String(node.attrs.src ?? '');
       const fileUploadId = String(node.attrs.notionFileUploadId ?? '');
@@ -466,12 +466,12 @@ function applyImageBlockId(wrapper: HTMLElement, value: unknown) {
   const blockId = typeof value === 'string' ? value : '';
 
   if (blockId) {
-    wrapper.setAttribute('data-jot-block-id', blockId);
-    wrapper.setAttribute('data-jot-image-block-id', blockId);
+    wrapper.setAttribute('data-inkwell-block-id', blockId);
+    wrapper.setAttribute('data-inkwell-image-block-id', blockId);
     wrapper.title = blockId;
   } else {
-    wrapper.removeAttribute('data-jot-block-id');
-    wrapper.removeAttribute('data-jot-image-block-id');
+    wrapper.removeAttribute('data-inkwell-block-id');
+    wrapper.removeAttribute('data-inkwell-image-block-id');
     wrapper.removeAttribute('title');
   }
 }
@@ -484,6 +484,6 @@ export const MediaKit = Extension.create({
   name: 'mediaKit',
 
   addExtensions() {
-    return [JotImage, JotYoutube, JotAudio];
+    return [InkwellImage, InkwellYoutube, InkwellAudio];
   },
 });

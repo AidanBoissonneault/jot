@@ -1,6 +1,6 @@
-# Jot
+# Inkwell
 
-Jot is a Chrome MV3 side panel extension for turning web context into editable
+Inkwell is a Chrome MV3 side panel extension for turning web context into editable
 project pages without breaking flow.
 
 ## Stack
@@ -28,9 +28,9 @@ corepack pnpm zip
 
 ## Notion sync worker
 
-Jot syncs through a Cloudflare Worker. The production extension build reads
+Inkwell syncs through a Cloudflare Worker. The production extension build reads
 `VITE_API_URL` from `.env.local`; this repository currently points at
-`https://sync.jot.byaidan.com`.
+`https://sync.inkwell.byaidan.com`.
 
 For local development, start the worker:
 
@@ -39,7 +39,7 @@ corepack pnpm dev:server
 ```
 
 Create a public Notion integration and set its redirect URI to
-`https://sync.jot.byaidan.com/auth/notion/callback` for production, or
+`https://sync.inkwell.byaidan.com/auth/notion/callback` for production, or
 `http://localhost:8787/auth/notion/callback` for local development.
 
 The worker uses Supabase for session, token, and sync metadata. Apply

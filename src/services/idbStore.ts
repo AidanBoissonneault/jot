@@ -1,4 +1,4 @@
-const DB_NAME = 'jot';
+const DB_NAME = 'inkwell';
 const STORE_NAME = 'kv';
 const DB_VERSION = 1;
 

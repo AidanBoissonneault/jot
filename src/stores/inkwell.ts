@@ -13,7 +13,7 @@ import type {
 } from '@/src/types/capture';
 import type {
   CaptureSelectionPayload,
-  JotRuntimeMessage,
+  InkwellRuntimeMessage,
   ProjectPageUpdatedMessage,
 } from '@/src/types/messages';
 
@@ -23,7 +23,7 @@ type SaveOptions = {
   title?: string;
 };
 
-export const useJotStore = defineStore('jot', () => {
+export const useInkwellStore = defineStore('inkwell', () => {
   const projects = ref<Project[]>([]);
   const pages = ref<ProjectPage[]>([]);
   const currentPage = ref<ProjectPage>();
@@ -74,7 +74,7 @@ export const useJotStore = defineStore('jot', () => {
       openSyncEvents();
     } catch (error) {
       errorMessage.value =
-        error instanceof Error ? error.message : 'Unable to load Jot data.';
+        error instanceof Error ? error.message : 'Unable to load Inkwell data.';
       saveStatus.value = 'error';
     } finally {
       isLoading.value = false;
@@ -436,12 +436,12 @@ export const useJotStore = defineStore('jot', () => {
       return;
     }
 
-    browser.runtime.onMessage.addListener((message: JotRuntimeMessage) => {
-      if (message?.type === 'jot.insertCaptureRequest') {
+    browser.runtime.onMessage.addListener((message: InkwellRuntimeMessage) => {
+      if (message?.type === 'inkwell.insertCaptureRequest') {
         return captureInsertHandler?.(message.payload) ?? false;
       }
 
-      if (message?.type === 'jot.projectPageUpdated') {
+      if (message?.type === 'inkwell.projectPageUpdated') {
         handleProjectPageUpdated(message);
       }
 
@@ -694,7 +694,7 @@ export const useJotStore = defineStore('jot', () => {
       errorMessage.value = '';
     } catch (error) {
       errorMessage.value =
-        error instanceof Error ? error.message : 'Unable to reload Jot from Notion.';
+        error instanceof Error ? error.message : 'Unable to reload Inkwell from Notion.';
       saveStatus.value = 'error';
     } finally {
       isLoading.value = false;

@@ -281,7 +281,7 @@ function richTextToTiptapInline(richText = []) {
   const content = [];
 
   for (const item of richText) {
-    const plainText = String(item.plain_text ?? '').replace(/\s*jot_capture_id:[\w-]+/g, '');
+    const plainText = String(item.plain_text ?? '').replace(/\s*inkwell_capture_id:[\w-]+/g, '');
 
     if (!plainText) {
       continue;

@@ -6,27 +6,27 @@ import { NodeSelection, TextSelection } from '@tiptap/pm/state';
 import type { EditorView } from '@tiptap/pm/view';
 import StarterKit from '@tiptap/starter-kit';
 import {
-  decodeJotSource,
-  JOT_SOURCE_ATTR,
-  JotLink,
-} from '@/src/extensions/jotLink';
+  decodeInkwellSource,
+  INKWELL_SOURCE_ATTR,
+  InkwellLink,
+} from '@/src/extensions/inkwellLink';
 import { PortableTextEditingKit } from '@/src/extensions/textFormatting';
 import { MediaKit } from '@/src/extensions/media';
 import {
   hasPendingTransientMedia,
   sanitizeMediaForSync,
 } from '@/src/extensions/mediaContent';
-import { JotBlockIds, normalizeJotBlockIds } from '@/src/extensions/jotBlockIds';
+import { InkwellBlockIds, normalizeInkwellBlockIds } from '@/src/extensions/inkwellBlockIds';
 import {
   AUDIO_UPLOAD_MAX_BYTES,
   IMAGE_UPLOAD_MAX_BYTES,
-  type JotImageMovePayload,
+  type InkwellImageMovePayload,
   isEditorInternalDrop,
   isUploadableAudioFile,
   isUploadableImageFile,
   peekUploadableAudioDrop,
   peekUploadableImageDrop,
-  readJotImageMovePayload,
+  readInkwellImageMovePayload,
   readAudioDropSrc,
   readImageDropSrc,
   readYoutubeDropSrc,
@@ -36,7 +36,7 @@ import {
   createLinkedHeadingContent,
   notionClient,
 } from '@/src/services/notionClient';
-import { useJotStore } from '@/src/stores/jot';
+import { useInkwellStore } from '@/src/stores/inkwell';
 import type { DocumentContent } from '@/src/types/capture';
 import type {
   CaptureSelectionPayload,
@@ -45,8 +45,8 @@ import type {
   OpenSourceRequestMessage,
 } from '@/src/types/messages';
 
-const JOT_DRAG_MIME = 'application/x-jot-capture';
-const JOT_HEADING_DRAG_MIME = 'application/x-jot-heading-capture';
+const INKWELL_DRAG_MIME = 'application/x-inkwell-capture';
+const INKWELL_HEADING_DRAG_MIME = 'application/x-inkwell-heading-capture';
 const blockTypes = [
   { label: 'Paragraph', value: 'paragraph' },
   { label: 'Heading 1', value: 'heading-1' },
@@ -85,7 +85,7 @@ const highlightColors = [
   { label: 'Gray', value: '#e4e4e7' },
 ] as const;
 
-const store = useJotStore();
+const store = useInkwellStore();
 const saveTimer = ref<number>();
 const pageTitleDraft = ref('');
 const projectNameDraft = ref('');
@@ -144,8 +144,8 @@ const editor = useEditor({
       link: false,
       underline: false,
     }),
-    JotLink,
-    JotBlockIds,
+    InkwellLink,
+    InkwellBlockIds,
     PortableTextEditingKit,
     MediaKit,
   ],
@@ -167,13 +167,13 @@ const editor = useEditor({
 
       event.preventDefault();
 
-      const sourcePayload = decodeJotSource(
-        anchor.getAttribute(`data-${kebabCase(JOT_SOURCE_ATTR)}`),
+      const sourcePayload = decodeInkwellSource(
+        anchor.getAttribute(`data-${kebabCase(INKWELL_SOURCE_ATTR)}`),
       );
 
       if (sourcePayload) {
         void browser.runtime.sendMessage({
-          type: 'jot.openSourceRequest',
+          type: 'inkwell.openSourceRequest',
           payload: sourcePayload,
         } satisfies OpenSourceRequestMessage);
         return true;
@@ -183,21 +183,21 @@ const editor = useEditor({
       return true;
     },
     handleDrop: (view, event) => {
-      const jotPayload = readJotDropPayload(event);
+      const inkwellPayload = readInkwellDropPayload(event);
 
-      if (jotPayload?.highlightMeta.isHeading) {
+      if (inkwellPayload?.highlightMeta.isHeading) {
         event.preventDefault();
-        insertLinkedHeadingAtDrop(view, event, jotPayload);
+        insertLinkedHeadingAtDrop(view, event, inkwellPayload);
         return true;
       }
 
-      if (jotPayload) {
+      if (inkwellPayload) {
         event.preventDefault();
-        insertCapturedTextAtDrop(view, event, jotPayload);
+        insertCapturedTextAtDrop(view, event, inkwellPayload);
         return true;
       }
 
-      const imageMovePayload = readJotImageMovePayload(event.dataTransfer);
+      const imageMovePayload = readInkwellImageMovePayload(event.dataTransfer);
       if (imageMovePayload) {
         event.preventDefault();
         if (moveImageNodeAtDrop(view, event, imageMovePayload)) {
@@ -397,7 +397,7 @@ const syncBadgeTitle = computed(() => {
       : 'Live updates disconnected';
 
   if (!store.syncConfig.selectedParentPageId) {
-    return `Jot will create a root Notion page with project folders on first sync. · ${sseNote}`;
+    return `Inkwell will create a root Notion page with project folders on first sync. · ${sseNote}`;
   }
 
   const base = store.syncConfig.selectedParentPageTitle
@@ -480,7 +480,7 @@ const contextLabel = computed(() => {
 
 const parentPageLabel = computed(() =>
   store.syncConfig.selectedParentPageTitle ||
-  (store.syncConfig.selectedParentPageId ? 'Selected Notion page' : 'Default Jot root page'),
+  (store.syncConfig.selectedParentPageId ? 'Selected Notion page' : 'Default Inkwell root page'),
 );
 
 const hasInlineMessage = computed(() => Boolean(uiMessage.value || store.errorMessage));
@@ -840,7 +840,7 @@ async function searchParentPages() {
 }
 
 async function createParentPage() {
-  const title = parentPageTitleDraft.value.trim() || 'Jot';
+  const title = parentPageTitleDraft.value.trim() || 'Inkwell';
   await store.createNotionParentPage(title);
   parentPageTitleDraft.value = '';
 }
@@ -1097,7 +1097,7 @@ function moveEditorSelectionToDrop(view: EditorView, event: DragEvent) {
 function moveImageNodeAtDrop(
   view: EditorView,
   event: DragEvent,
-  payload: JotImageMovePayload,
+  payload: InkwellImageMovePayload,
 ): boolean {
   const imageType = view.state.schema.nodes.image;
   const source = findImageMoveSource(view, payload);
@@ -1157,7 +1157,7 @@ function clampDocumentPosition(pos: number, max: number) {
 function readSelectedImageMovePayload(
   view: EditorView,
   event: DragEvent,
-): JotImageMovePayload | null {
+): InkwellImageMovePayload | null {
   const { selection } = view.state;
 
   if (
@@ -1187,7 +1187,7 @@ function isChromeExtensionBlobImageDrop(event: DragEvent) {
   );
 }
 
-function findImageMoveSource(view: EditorView, payload: JotImageMovePayload) {
+function findImageMoveSource(view: EditorView, payload: InkwellImageMovePayload) {
   const imageType = view.state.schema.nodes.image;
   const nodeAtPayloadPos = view.state.doc.nodeAt(payload.pos);
 
@@ -1195,7 +1195,7 @@ function findImageMoveSource(view: EditorView, payload: JotImageMovePayload) {
     return { pos: payload.pos, node: nodeAtPayloadPos };
   }
 
-  const payloadBlockId = String(payload.attrs.jotBlockId ?? '');
+  const payloadBlockId = String(payload.attrs.inkwellBlockId ?? '');
   const payloadSrc = String(payload.attrs.src ?? '');
   let fallback: { pos: number; node: NonNullable<typeof nodeAtPayloadPos> } | null = null;
 
@@ -1204,7 +1204,7 @@ function findImageMoveSource(view: EditorView, payload: JotImageMovePayload) {
       return true;
     }
 
-    if (payloadBlockId && node.attrs.jotBlockId === payloadBlockId) {
+    if (payloadBlockId && node.attrs.inkwellBlockId === payloadBlockId) {
       fallback = { pos, node };
       return false;
     }
@@ -1244,7 +1244,7 @@ function saveEditorContentInBackground() {
     return;
   }
 
-  const content = normalizeJotBlockIds(sanitizeMediaForSync(editorContent));
+  const content = normalizeInkwellBlockIds(sanitizeMediaForSync(editorContent));
   const title = pageTitleDraft.value;
 
   lastAppliedContent = JSON.stringify(content);
@@ -1287,7 +1287,7 @@ async function runEditorSaveLoop() {
         return;
       }
 
-      const content = normalizeJotBlockIds(sanitizeMediaForSync(editorContent));
+      const content = normalizeInkwellBlockIds(sanitizeMediaForSync(editorContent));
       lastAppliedContent = JSON.stringify(content);
       await store.saveCurrentPageContent(content, {
         preserveLocalContent: true,
@@ -1451,8 +1451,8 @@ function isHttpAudioUrl(value: string) {
   return /^https?:\/\/.+\.(mp3|mpeg|m4a|aac|wav|ogg|oga|opus|webm)(\?[^#]*)?(#.*)?$/i.test(value);
 }
 
-function readJotDropPayload(event: DragEvent): CaptureSelectionPayload | null {
-  const rawPayload = event.dataTransfer?.getData(JOT_DRAG_MIME);
+function readInkwellDropPayload(event: DragEvent): CaptureSelectionPayload | null {
+  const rawPayload = event.dataTransfer?.getData(INKWELL_DRAG_MIME);
 
   if (!rawPayload) {
     return null;
@@ -1483,19 +1483,19 @@ function insertCapturedTextAtDrop(
 }
 
 function isLikelyHeadingDrop(event: DragEvent) {
-  return event.dataTransfer?.types.includes(JOT_HEADING_DRAG_MIME) ?? false;
+  return event.dataTransfer?.types.includes(INKWELL_HEADING_DRAG_MIME) ?? false;
 }
 
 function isLikelyTextCaptureDrop(event: DragEvent) {
   const types = event.dataTransfer?.types ?? [];
-  return types.includes(JOT_DRAG_MIME) && !types.includes(JOT_HEADING_DRAG_MIME);
+  return types.includes(INKWELL_DRAG_MIME) && !types.includes(INKWELL_HEADING_DRAG_MIME);
 }
 
 async function consumeTextDragPayload(text: string) {
 
   return browser.runtime
     .sendMessage({
-      type: 'jot.consumeTextDrag',
+      type: 'inkwell.consumeTextDrag',
       payload: { text },
     } satisfies ConsumeTextDragMessage)
     .then((payload: unknown) => {
@@ -1511,7 +1511,7 @@ async function consumeHeadingDropPayload(event: DragEvent) {
 
   return browser.runtime
     .sendMessage({
-      type: 'jot.consumeHeadingDrag',
+      type: 'inkwell.consumeHeadingDrag',
       payload: {
         text,
       },
@@ -2625,7 +2625,7 @@ function textFromNode(node: DocumentContent): string {
   gap: 10px;
   align-items: center;
   padding-bottom: 12px;
-  border-bottom: 1px solid var(--jot-border);
+  border-bottom: 1px solid var(--inkwell-border);
 }
 
 .topbar-status {
@@ -2650,7 +2650,7 @@ function textFromNode(node: DocumentContent): string {
 }
 
 .topbar-meta small {
-  color: var(--jot-muted);
+  color: var(--inkwell-muted);
   font-size: 0.78rem;
 }
 
@@ -2664,16 +2664,16 @@ function textFromNode(node: DocumentContent): string {
   min-width: 28px;
   max-width: 100%;
   padding: 0 9px;
-  border: 1px solid var(--jot-border);
+  border: 1px solid var(--inkwell-border);
   border-radius: 999px;
-  background: var(--jot-surface-muted);
-  color: var(--jot-text);
+  background: var(--inkwell-surface-muted);
+  color: var(--inkwell-text);
   font-size: 0.82rem;
   font-weight: 750;
 }
 
 .sync-badge:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--jot-accent) 34%, transparent);
+  outline: 2px solid color-mix(in srgb, var(--inkwell-accent) 34%, transparent);
   outline-offset: 2px;
 }
 
@@ -2682,7 +2682,7 @@ function textFromNode(node: DocumentContent): string {
   width: 8px;
   height: 8px;
   border-radius: 999px;
-  background: var(--jot-muted);
+  background: var(--inkwell-muted);
 }
 
 .sync-label {
@@ -2831,9 +2831,9 @@ function textFromNode(node: DocumentContent): string {
   gap: 4px;
   margin-top: 10px;
   padding: 3px;
-  border: 1px solid var(--jot-border);
-  border-radius: var(--jot-radius);
-  background: var(--jot-surface-muted);
+  border: 1px solid var(--inkwell-border);
+  border-radius: var(--inkwell-radius);
+  background: var(--inkwell-surface-muted);
 }
 
 .tabs button {
@@ -2841,7 +2841,7 @@ function textFromNode(node: DocumentContent): string {
   min-height: 30px;
   border-color: transparent;
   background: transparent;
-  color: var(--jot-muted);
+  color: var(--inkwell-muted);
   font-size: 0.82rem;
   font-weight: 800;
 }
@@ -2851,15 +2851,15 @@ function textFromNode(node: DocumentContent): string {
 }
 
 .tabs button.active {
-  border-color: var(--jot-border);
-  background: var(--jot-surface);
-  color: var(--jot-text);
+  border-color: var(--inkwell-border);
+  background: var(--inkwell-surface);
+  color: var(--inkwell-text);
 }
 
 .secondary-button {
-  border-color: var(--jot-border);
-  background: var(--jot-surface-muted);
-  color: var(--jot-text);
+  border-color: var(--inkwell-border);
+  background: var(--inkwell-surface-muted);
+  color: var(--inkwell-text);
 }
 
 .icon-label-button {
@@ -2921,12 +2921,12 @@ function textFromNode(node: DocumentContent): string {
 }
 
 .editor-header p {
-  color: var(--jot-muted);
+  color: var(--inkwell-muted);
 }
 
 .error {
   margin: 10px 0 0;
-  color: var(--jot-warning);
+  color: var(--inkwell-warning);
 }
 
 .auth-gate {
@@ -2935,10 +2935,10 @@ function textFromNode(node: DocumentContent): string {
   align-content: start;
   margin-top: 12px;
   padding: 14px;
-  border: 1px solid var(--jot-border);
-  border-radius: var(--jot-radius);
-  background: var(--jot-surface);
-  box-shadow: var(--jot-shadow);
+  border: 1px solid var(--inkwell-border);
+  border-radius: var(--inkwell-radius);
+  background: var(--inkwell-surface);
+  box-shadow: var(--inkwell-shadow);
 }
 
 .auth-gate h2,
@@ -2951,7 +2951,7 @@ function textFromNode(node: DocumentContent): string {
 }
 
 .auth-gate p {
-  color: var(--jot-muted);
+  color: var(--inkwell-muted);
 }
 
 .editor-shell {
@@ -2959,10 +2959,10 @@ function textFromNode(node: DocumentContent): string {
   grid-template-rows: auto minmax(0, 1fr);
   min-height: 0;
   margin-top: 12px;
-  border: 1px solid var(--jot-border);
-  border-radius: var(--jot-radius);
-  background: var(--jot-surface);
-  box-shadow: var(--jot-shadow);
+  border: 1px solid var(--inkwell-border);
+  border-radius: var(--inkwell-radius);
+  background: var(--inkwell-surface);
+  box-shadow: var(--inkwell-shadow);
 }
 
 .record-panel {
@@ -2984,7 +2984,7 @@ function textFromNode(node: DocumentContent): string {
   display: grid;
   gap: 10px;
   padding: 10px;
-  border-bottom: 1px solid var(--jot-border);
+  border-bottom: 1px solid var(--inkwell-border);
 }
 
 .editor-title-row,
@@ -3045,7 +3045,7 @@ function textFromNode(node: DocumentContent): string {
   display: grid;
   gap: 10px;
   padding: 12px 0;
-  border-bottom: 1px solid var(--jot-border);
+  border-bottom: 1px solid var(--inkwell-border);
 }
 
 .panel-section:first-child {
@@ -3069,13 +3069,13 @@ function textFromNode(node: DocumentContent): string {
 }
 
 .field-label {
-  color: var(--jot-muted);
+  color: var(--inkwell-muted);
   font-size: 0.78rem;
   font-weight: 750;
 }
 
 .field-label input {
-  color: var(--jot-text);
+  color: var(--inkwell-text);
   font-size: 1rem;
   font-weight: 500;
 }
@@ -3083,13 +3083,13 @@ function textFromNode(node: DocumentContent): string {
 .field-label textarea {
   min-width: 0;
   resize: vertical;
-  color: var(--jot-text);
+  color: var(--inkwell-text);
   font: inherit;
 }
 
 .stack-form {
   padding-bottom: 10px;
-  border-bottom: 1px solid var(--jot-border);
+  border-bottom: 1px solid var(--inkwell-border);
 }
 
 .stack-form:last-of-type {
@@ -3109,9 +3109,9 @@ function textFromNode(node: DocumentContent): string {
   width: 100%;
   min-height: 38px;
   padding: 7px 9px;
-  border-color: var(--jot-border);
-  background: var(--jot-surface);
-  color: var(--jot-text);
+  border-color: var(--inkwell-border);
+  background: var(--inkwell-surface);
+  color: var(--inkwell-text);
   text-align: left;
 }
 
@@ -3123,13 +3123,13 @@ function textFromNode(node: DocumentContent): string {
 }
 
 .item-row small {
-  color: var(--jot-muted);
+  color: var(--inkwell-muted);
   font-size: 0.76rem;
 }
 
 .item-row.active {
-  border-color: var(--jot-accent);
-  background: var(--jot-accent-soft);
+  border-color: var(--inkwell-accent);
+  background: var(--inkwell-accent-soft);
 }
 
 .status-list {
@@ -3145,7 +3145,7 @@ function textFromNode(node: DocumentContent): string {
 }
 
 .status-list dt {
-  color: var(--jot-muted);
+  color: var(--inkwell-muted);
   font-weight: 750;
 }
 
@@ -3160,7 +3160,7 @@ function textFromNode(node: DocumentContent): string {
 }
 
 .recording-row small {
-  color: var(--jot-muted);
+  color: var(--inkwell-muted);
 }
 
 .danger-button {
@@ -3187,10 +3187,10 @@ function textFromNode(node: DocumentContent): string {
   width: min(100%, 320px);
   gap: 10px;
   padding: 14px;
-  border: 1px solid var(--jot-border);
-  border-radius: var(--jot-radius);
-  background: var(--jot-surface);
-  box-shadow: var(--jot-shadow);
+  border: 1px solid var(--inkwell-border);
+  border-radius: var(--inkwell-radius);
+  background: var(--inkwell-surface);
+  box-shadow: var(--inkwell-shadow);
 }
 
 .modal h2,
@@ -3212,7 +3212,7 @@ function textFromNode(node: DocumentContent): string {
   min-width: 0;
   border: 0;
   background: transparent;
-  color: var(--jot-text);
+  color: var(--inkwell-text);
 }
 
 .page-title input {
@@ -3221,7 +3221,7 @@ function textFromNode(node: DocumentContent): string {
 }
 
 .page-title input:focus {
-  outline: 2px solid color-mix(in srgb, var(--jot-accent) 34%, transparent);
+  outline: 2px solid color-mix(in srgb, var(--inkwell-accent) 34%, transparent);
   outline-offset: 2px;
 }
 
@@ -3237,9 +3237,9 @@ function textFromNode(node: DocumentContent): string {
   gap: 3px;
   width: 100%;
   padding: 3px;
-  border: 1px solid var(--jot-border);
-  border-radius: var(--jot-radius);
-  background: var(--jot-surface-muted);
+  border: 1px solid var(--inkwell-border);
+  border-radius: var(--inkwell-radius);
+  background: var(--inkwell-surface-muted);
 }
 
 .editor-tool-tabs button {
@@ -3248,7 +3248,7 @@ function textFromNode(node: DocumentContent): string {
   padding: 0 8px;
   border-color: transparent;
   background: transparent;
-  color: var(--jot-muted);
+  color: var(--inkwell-muted);
   font-size: 0.8rem;
   font-weight: 800;
 }
@@ -3263,9 +3263,9 @@ function textFromNode(node: DocumentContent): string {
 }
 
 .editor-tool-tabs button.active {
-  border-color: var(--jot-border);
-  background: var(--jot-surface);
-  color: var(--jot-text);
+  border-color: var(--inkwell-border);
+  background: var(--inkwell-surface);
+  color: var(--inkwell-text);
 }
 
 .editor-quickbar {
@@ -3284,26 +3284,26 @@ function textFromNode(node: DocumentContent): string {
   max-width: 100%;
   min-height: 32px;
   padding: 0 8px;
-  border-color: var(--jot-border);
-  background: var(--jot-surface-muted);
-  color: var(--jot-text);
+  border-color: var(--inkwell-border);
+  background: var(--inkwell-surface-muted);
+  color: var(--inkwell-text);
   font-weight: 800;
 }
 
 .tool-icon-button.active {
-  border-color: var(--jot-accent);
-  background: var(--jot-accent-soft);
-  color: var(--jot-accent-strong);
+  border-color: var(--inkwell-accent);
+  background: var(--inkwell-accent-soft);
+  color: var(--inkwell-accent-strong);
 }
 
 .tool-popover {
   display: grid;
   max-width: 100%;
   padding: 10px;
-  border: 1px solid var(--jot-border);
-  border-radius: var(--jot-radius);
-  background: var(--jot-surface);
-  box-shadow: var(--jot-shadow);
+  border: 1px solid var(--inkwell-border);
+  border-radius: var(--inkwell-radius);
+  background: var(--inkwell-surface);
+  box-shadow: var(--inkwell-shadow);
 }
 
 .tool-panel {
@@ -3326,9 +3326,9 @@ function textFromNode(node: DocumentContent): string {
 .tool-panel button {
   min-height: 32px;
   padding: 0 10px;
-  border-color: var(--jot-border);
-  background: var(--jot-surface-muted);
-  color: var(--jot-text);
+  border-color: var(--inkwell-border);
+  background: var(--inkwell-surface-muted);
+  color: var(--inkwell-text);
   font-weight: 750;
 }
 
@@ -3340,8 +3340,8 @@ function textFromNode(node: DocumentContent): string {
 
 .button-grid button.active,
 .tool-panel button.active {
-  border-color: var(--jot-accent);
-  background: var(--jot-accent);
+  border-color: var(--inkwell-accent);
+  background: var(--inkwell-accent);
   color: white;
 }
 
@@ -3406,7 +3406,7 @@ function textFromNode(node: DocumentContent): string {
 }
 
 .editor :deep(.tiptap h6) {
-  color: var(--jot-muted);
+  color: var(--inkwell-muted);
   font-size: 0.9rem;
   text-transform: uppercase;
 }
@@ -3440,7 +3440,7 @@ function textFromNode(node: DocumentContent): string {
 
 .editor :deep(.tiptap code) {
   border-radius: 4px;
-  background: var(--jot-surface-muted);
+  background: var(--inkwell-surface-muted);
   padding: 0.1em 0.28em;
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   font-size: 0.9em;
@@ -3463,17 +3463,17 @@ function textFromNode(node: DocumentContent): string {
 .editor :deep(.tiptap hr) {
   margin: 1.1rem 0;
   border: 0;
-  border-top: 1px solid var(--jot-border-strong);
+  border-top: 1px solid var(--inkwell-border-strong);
 }
 
 .editor :deep(.tiptap blockquote) {
   padding-left: 12px;
-  border-left: 3px solid var(--jot-accent);
-  color: var(--jot-text);
+  border-left: 3px solid var(--inkwell-accent);
+  color: var(--inkwell-text);
 }
 
 .editor :deep(.tiptap a) {
-  color: var(--jot-accent-strong);
+  color: var(--inkwell-accent-strong);
   overflow-wrap: anywhere;
 }
 
@@ -3484,23 +3484,23 @@ function textFromNode(node: DocumentContent): string {
   border-radius: 4px;
 }
 
-.editor :deep(.tiptap .jot-image-wrapper) {
+.editor :deep(.tiptap .inkwell-image-wrapper) {
   margin: 0 0 0.85rem;
   max-width: 100%;
   position: relative;
   width: fit-content;
 }
 
-.editor :deep(.tiptap .jot-image-wrapper.is-selected) {
-  outline: 2px solid var(--jot-accent);
+.editor :deep(.tiptap .inkwell-image-wrapper.is-selected) {
+  outline: 2px solid var(--inkwell-accent);
   outline-offset: 3px;
 }
 
-.editor :deep(.tiptap .jot-image-wrapper.is-selected[data-jot-block-id]::before) {
-  background: var(--jot-accent);
+.editor :deep(.tiptap .inkwell-image-wrapper.is-selected[data-inkwell-block-id]::before) {
+  background: var(--inkwell-accent);
   border-radius: 4px;
-  color: var(--jot-surface);
-  content: attr(data-jot-block-id);
+  color: var(--inkwell-surface);
+  content: attr(data-inkwell-block-id);
   font-size: 0.68rem;
   left: 0;
   line-height: 1.25;
@@ -3513,9 +3513,9 @@ function textFromNode(node: DocumentContent): string {
   white-space: nowrap;
 }
 
-.editor :deep(.tiptap .jot-image-wrapper .jot-image-resize-handle) {
-  background: var(--jot-accent);
-  border: 2px solid var(--jot-surface);
+.editor :deep(.tiptap .inkwell-image-wrapper .inkwell-image-resize-handle) {
+  background: var(--inkwell-accent);
+  border: 2px solid var(--inkwell-surface);
   border-radius: 999px;
   bottom: -7px;
   box-shadow: 0 1px 4px rgba(15, 23, 42, 0.22);
@@ -3527,45 +3527,45 @@ function textFromNode(node: DocumentContent): string {
   width: 12px;
 }
 
-.editor :deep(.tiptap .jot-image-wrapper.is-selected .jot-image-resize-handle) {
+.editor :deep(.tiptap .inkwell-image-wrapper.is-selected .inkwell-image-resize-handle) {
   display: block;
 }
 
-.editor :deep(.tiptap .jot-image-wrapper.is-error),
-.editor :deep(.tiptap .jot-image-wrapper.is-uploading) {
-  border: 1px solid var(--jot-border);
+.editor :deep(.tiptap .inkwell-image-wrapper.is-error),
+.editor :deep(.tiptap .inkwell-image-wrapper.is-uploading) {
+  border: 1px solid var(--inkwell-border);
   border-radius: 4px;
-  background: var(--jot-surface-muted);
-  color: var(--jot-muted);
+  background: var(--inkwell-surface-muted);
+  color: var(--inkwell-muted);
   padding: 10px;
   font-size: 0.86rem;
 }
 
-.editor :deep(.tiptap .jot-image-wrapper a) {
+.editor :deep(.tiptap .inkwell-image-wrapper a) {
   word-break: break-all;
 }
 
-.editor :deep(.tiptap .jot-audio-wrapper) {
+.editor :deep(.tiptap .inkwell-audio-wrapper) {
   max-width: 640px;
   margin: 0 0 0.85rem;
 }
 
-.editor :deep(.tiptap .jot-audio-wrapper audio) {
+.editor :deep(.tiptap .inkwell-audio-wrapper audio) {
   display: block;
   width: 100%;
 }
 
-.editor :deep(.tiptap .jot-audio-wrapper.is-error),
-.editor :deep(.tiptap .jot-audio-wrapper.is-uploading) {
-  border: 1px solid var(--jot-border);
+.editor :deep(.tiptap .inkwell-audio-wrapper.is-error),
+.editor :deep(.tiptap .inkwell-audio-wrapper.is-uploading) {
+  border: 1px solid var(--inkwell-border);
   border-radius: 4px;
-  background: var(--jot-surface-muted);
-  color: var(--jot-muted);
+  background: var(--inkwell-surface-muted);
+  color: var(--inkwell-muted);
   padding: 10px;
   font-size: 0.86rem;
 }
 
-.editor :deep(.tiptap .jot-audio-wrapper a) {
+.editor :deep(.tiptap .inkwell-audio-wrapper a) {
   word-break: break-all;
 }
 

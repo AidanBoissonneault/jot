@@ -9,7 +9,7 @@ export default defineConfig({
   modules: ['@wxt-dev/module-vue'],
   manifestVersion: 3,
   manifest: {
-    name: 'Jot',
+    name: 'Inkwell',
     description:
       'Capture web highlights into structured Notion projects without breaking flow.',
     version: '0.1.0',
@@ -20,7 +20,7 @@ export default defineConfig({
         `script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; frame-src ${frameSrc};`,
     },
     action: {
-      default_title: 'Open Jot',
+      default_title: 'Open Inkwell',
     },
   },
 });

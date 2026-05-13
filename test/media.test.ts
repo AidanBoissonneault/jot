@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { JotYoutube, youtubeEmbedUrl } from '@/src/extensions/media';
+import { InkwellYoutube, youtubeEmbedUrl } from '@/src/extensions/media';
 
 describe('media extensions', () => {
   it('normalizes YouTube URLs to privacy-enhanced embed URLs', () => {
@@ -15,16 +15,16 @@ describe('media extensions', () => {
   });
 
   it('renders YouTube nodes as privacy-enhanced embedded iframes', () => {
-    const renderHTML = JotYoutube.config.renderHTML;
+    const renderHTML = InkwellYoutube.config.renderHTML;
 
     if (!renderHTML) {
-      throw new Error('JotYoutube must render HTML');
+      throw new Error('InkwellYoutube must render HTML');
     }
 
     const html = renderHTML.call(
       {
-        name: JotYoutube.name,
-        options: JotYoutube.options,
+        name: InkwellYoutube.name,
+        options: InkwellYoutube.options,
         storage: {},
         parent: null,
       },

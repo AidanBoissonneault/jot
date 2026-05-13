@@ -3,7 +3,7 @@ import { idbGet, idbSet } from '@/src/services/idbStore';
 
 const PENDING_SYNC_OPS_KEY = 'pending_sync_ops';
 const SYNC_SEQUENCE_KEY = 'pending_sync_sequence';
-const JOT_BLOCK_ID_ATTR = 'jotBlockId';
+const INKWELL_BLOCK_ID_ATTR = 'inkwellBlockId';
 
 export type BlockSyncOpType =
   | 'page_upsert'
@@ -18,7 +18,7 @@ export type BlockSyncOp = {
   type: BlockSyncOpType;
   pageId: string;
   projectId: string;
-  jotBlockId?: string;
+  inkwellBlockId?: string;
   sequence: number;
   createdAt: string;
   baseKnownSyncVersion?: number;
@@ -98,31 +98,31 @@ export function buildPageSyncOps({
     ops.push({ ...base, type: 'page_upsert' });
   }
 
-  for (const [jotBlockId, block] of nextBlocks) {
-    const previousBlock = previousBlocks.get(jotBlockId);
+  for (const [inkwellBlockId, block] of nextBlocks) {
+    const previousBlock = previousBlocks.get(inkwellBlockId);
     if (!previousBlock) {
       ops.push({
         ...base,
         type: 'block_create',
-        jotBlockId,
+        inkwellBlockId,
         payload: { ...base.payload, block },
       });
     } else if (stableJson(previousBlock) !== stableJson(block)) {
       ops.push({
         ...base,
         type: 'block_update',
-        jotBlockId,
+        inkwellBlockId,
         payload: { ...base.payload, block, previousBlock },
       });
     }
   }
 
-  for (const [jotBlockId, previousBlock] of previousBlocks) {
-    if (!nextBlocks.has(jotBlockId)) {
+  for (const [inkwellBlockId, previousBlock] of previousBlocks) {
+    if (!nextBlocks.has(inkwellBlockId)) {
       ops.push({
         ...base,
         type: 'block_delete',
-        jotBlockId,
+        inkwellBlockId,
         payload: { ...base.payload, previousBlock },
       });
     }
@@ -178,12 +178,12 @@ function blocksById(content: DocumentContent | undefined): Map<string, DocumentC
 }
 
 function blockId(block: DocumentContent): string {
-  const value = block.attrs?.[JOT_BLOCK_ID_ATTR];
+  const value = block.attrs?.[INKWELL_BLOCK_ID_ATTR];
   return typeof value === 'string' ? value : '';
 }
 
 function opBlockKey(op: BlockSyncOp): string {
-  return op.jotBlockId ? `${op.pageId}:${op.jotBlockId}` : '';
+  return op.inkwellBlockId ? `${op.pageId}:${op.inkwellBlockId}` : '';
 }
 
 function pageMetadataChanged(previousPage: ProjectPage, page: ProjectPage): boolean {

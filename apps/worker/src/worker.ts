@@ -30,8 +30,8 @@ import type {
   SyncValidationRequest,
 } from '../../../src/types/sync.js';
 
-const JOT_SESSION_COOKIE = 'jot_session';
-const JOT_OAUTH_STATE_COOKIE = 'jot_notion_oauth_state';
+const INKWELL_SESSION_COOKIE = 'inkwell_session';
+const INKWELL_OAUTH_STATE_COOKIE = 'inkwell_notion_oauth_state';
 const SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 30;
 const MAX_MEDIA_UPLOAD_BYTES = 20 * 1024 * 1024;
 
@@ -56,12 +56,12 @@ app.use('*', async (c, next) => {
 
 // ─── Auth routes ──────────────────────────────────────────────────────────────
 
-app.get('/auth/jot/complete', (c) =>
-  c.html(closePage('You are logged in to Jot. You can return to the side panel.')),
+app.get('/auth/inkwell/complete', (c) =>
+  c.html(closePage('You are logged in to Inkwell. You can return to the side panel.')),
 );
 
-app.get('/auth/jot/error', (c) =>
-  c.html(closePage('Jot login did not complete. You can close this tab and try again.'), 400),
+app.get('/auth/inkwell/error', (c) =>
+  c.html(closePage('Inkwell login did not complete. You can close this tab and try again.'), 400),
 );
 
 app.get('/auth/notion/start', async (c) => {
@@ -81,7 +81,7 @@ app.get('/auth/notion/start', async (c) => {
   url.searchParams.set('redirect_uri', redirectUri);
   url.searchParams.set('state', state);
 
-  setCookie(c, JOT_OAUTH_STATE_COOKIE, state, {
+  setCookie(c, INKWELL_OAUTH_STATE_COOKIE, state, {
     httpOnly: true,
     maxAge: 600,
     path: '/auth/notion',
@@ -94,12 +94,12 @@ app.get('/auth/notion/start', async (c) => {
 
 app.get('/auth/notion/callback', async (c) => {
   const env = c.env;
-  const expectedState = getCookie(c, JOT_OAUTH_STATE_COOKIE);
+  const expectedState = getCookie(c, INKWELL_OAUTH_STATE_COOKIE);
   const state = c.req.query('state') ?? '';
   const code = c.req.query('code') ?? '';
   const error = c.req.query('error') ?? '';
 
-  deleteCookie(c, JOT_OAUTH_STATE_COOKIE, { path: '/auth/notion' });
+  deleteCookie(c, INKWELL_OAUTH_STATE_COOKIE, { path: '/auth/notion' });
 
   if (error) {
     return c.html(closePage('Notion login did not complete. You can close this tab and try again.'), 400);
@@ -130,11 +130,11 @@ app.get('/auth/notion/callback', async (c) => {
     });
 
     if (installationId) {
-      await ensureJotSyncStateRow(installationId);
+      await ensureInkwellSyncStateRow(installationId);
       await registerNotionWebhook(env, installationId, tokens.access_token).catch(() => undefined);
     }
 
-    setCookie(c, JOT_SESSION_COOKIE, sessionToken, {
+    setCookie(c, INKWELL_SESSION_COOKIE, sessionToken, {
       httpOnly: true,
       maxAge: SESSION_MAX_AGE_SECONDS,
       path: '/',
@@ -142,7 +142,7 @@ app.get('/auth/notion/callback', async (c) => {
       secure: serverBaseUrl(env).startsWith('https://'),
     });
 
-    return c.html(closePage('You are logged in to Jot. You can return to the side panel.'));
+    return c.html(closePage('You are logged in to Inkwell. You can return to the side panel.'));
   } catch (err) {
     console.error('Failed to complete Notion login', err);
     return c.html(closePage('Notion login failed. You can close this tab and try again.'), 500);
@@ -150,7 +150,7 @@ app.get('/auth/notion/callback', async (c) => {
 });
 
 app.get('/session', async (c) => {
-  const session = await getJotSession(c);
+  const session = await getInkwellSession(c);
   const installation = session
     ? await auth.getActiveInstallation(session.user.id).catch(() => undefined)
     : undefined;
@@ -166,17 +166,17 @@ app.get('/session', async (c) => {
 });
 
 app.post('/auth/notion/logout', async (c) => {
-  const session = await requireJotSession(c);
+  const session = await requireInkwellSession(c);
   if (!session) return;
 
-  const token = getCookie(c, JOT_SESSION_COOKIE);
+  const token = getCookie(c, INKWELL_SESSION_COOKIE);
   const installation = await auth.getActiveInstallation(session.user.id).catch(() => undefined);
   if (installation?.id) {
     await deleteNotionWebhook(c.env, installation.id).catch(() => undefined);
   }
   await auth.revokeInstallation(session.user.id);
   await auth.deleteCustomSession(token);
-  deleteCookie(c, JOT_SESSION_COOKIE, { path: '/' });
+  deleteCookie(c, INKWELL_SESSION_COOKIE, { path: '/' });
 
   return c.json({ connected: false });
 });
@@ -228,7 +228,7 @@ app.get('/notion/pages', async (c) => {
 
 app.post('/notion/pages', async (c) => {
   const body = await c.req.json<CreateNotionPageRequest>().catch(() => ({}));
-  const title = String(body?.title ?? '').trim() || 'Jot';
+  const title = String(body?.title ?? '').trim() || 'Inkwell';
   const store = await requireConnectedStore(c);
   const page = await createWorkspacePage(store, title);
 
@@ -454,7 +454,7 @@ app.post('/sync/pull', async (c) => {
         syncState: 'stale',
       },
       status: 'stale',
-      message: 'Notion changed this page in a way Jot cannot safely import automatically.',
+      message: 'Notion changed this page in a way Inkwell cannot safely import automatically.',
     });
   }
 
@@ -618,7 +618,7 @@ app.post('/media/refresh', async (c) => {
 let supabase;
 let auth;
 let notionRequest;
-let ensureJotRootPage, ensureProjectRootPage, pageSummary;
+let ensureInkwellRootPage, ensureProjectRootPage, pageSummary;
 let archiveThreadToggle, ensureProjectDatabase, ensureProjectPage, ensureThreadToggle,
     reloadProjectDatabaseFromNotion, updateThreadToggleTitle;
 
@@ -627,7 +627,7 @@ function initSingletons(env) {
   auth = createAuth(supabase);
 
   const NOTION_VERSION = env.NOTION_VERSION ?? '2026-03-11';
-  const JOT_ROOT_PAGE_TITLE = env.JOT_ROOT_PAGE_TITLE ?? 'Jot';
+  const INKWELL_ROOT_PAGE_TITLE = env.INKWELL_ROOT_PAGE_TITLE ?? 'Inkwell';
 
   notionRequest = createNotionRequester({ notionVersion: NOTION_VERSION });
 
@@ -636,13 +636,13 @@ function initSingletons(env) {
     createChildPage,
     createWorkspacePage,
     isNotionObjectNotFound,
-    jotRootPageTitle: JOT_ROOT_PAGE_TITLE,
+    inkwellRootPageTitle: INKWELL_ROOT_PAGE_TITLE,
     listAllBlockChildren,
     notionRequest,
     titleFromPage,
     updatePageTitle,
   });
-  ensureJotRootPage = rootHelpers.ensureJotRootPage;
+  ensureInkwellRootPage = rootHelpers.ensureInkwellRootPage;
   ensureProjectRootPage = rootHelpers.ensureProjectRootPage;
   pageSummary = rootHelpers.pageSummary;
 
@@ -680,7 +680,7 @@ async function pushPageToNotion({ c, page, project, selectedParentPageId }) {
         appendLog,
         archiveThreadToggle,
         createChildPage,
-        ensureJotRootPage,
+        ensureInkwellRootPage,
         ensureProjectPage,
         ensureProjectRootPage,
         ensureThreadToggle,
@@ -703,7 +703,7 @@ async function syncProjectToNotion({ c, project, selectedParentPageId }) {
       store: freshStore,
       project,
       selectedParentPageId,
-      ensureJotRootPage,
+      ensureInkwellRootPage,
       ensureProjectPage,
       ensureProjectRootPage,
       archiveProjectRootPage,
@@ -770,7 +770,7 @@ async function pushPageToNotionForInstallation(installationId, { page, project, 
         appendLog,
         archiveThreadToggle,
         createChildPage,
-        ensureJotRootPage,
+        ensureInkwellRootPage,
         ensureProjectPage,
         ensureProjectRootPage,
         ensureThreadToggle,
@@ -799,7 +799,7 @@ async function syncProjectToNotionForInstallation(installationId, { project, sel
       store: freshStore,
       project,
       selectedParentPageId,
-      ensureJotRootPage,
+      ensureInkwellRootPage,
       ensureProjectPage,
       ensureProjectRootPage,
       archiveProjectRootPage,
@@ -819,7 +819,7 @@ function readStore() {
 
 async function writeStore(store) {
   if (store.installationId) {
-    await writeJotSyncState(store.installationId, store);
+    await writeInkwellSyncState(store.installationId, store);
   }
 }
 
@@ -829,8 +829,8 @@ function normalizeStore(store) {
     projectPages: store.projectPages ?? {},
     projectBlocks: store.projectBlocks ?? {},
     threadBlocks: store.threadBlocks ?? {},
-    jotRootPage: store.jotRootPage,
-    jotDatabase: store.jotDatabase,
+    inkwellRootPage: store.inkwellRootPage,
+    inkwellDatabase: store.inkwellDatabase,
     notePages: store.notePages ?? {},
     blockMappings: store.blockMappings ?? {},
     logs: store.logs ?? [],
@@ -843,9 +843,9 @@ function appendLog(store, event, message) {
 }
 
 async function requireConnectedStore(c) {
-  const session = await getJotSession(c);
+  const session = await getInkwellSession(c);
 
-  if (!session) throw new Error('Log in to Jot before syncing Notion.');
+  if (!session) throw new Error('Log in to Inkwell before syncing Notion.');
 
   const [store, installation] = await Promise.all([
     readStore(),
@@ -856,7 +856,7 @@ async function requireConnectedStore(c) {
     throw new Error('Notion is not connected.');
   }
 
-  const syncState = await readJotSyncState(installation.id);
+  const syncState = await readInkwellSyncState(installation.id);
 
   return {
     ...store,
@@ -892,7 +892,7 @@ async function freshConnectedStore(store) {
 
   const [localStore, syncState] = await Promise.all([
     readStore(),
-    readJotSyncState(store.installationId),
+    readInkwellSyncState(store.installationId),
   ]);
 
   return {
@@ -905,15 +905,15 @@ async function freshConnectedStore(store) {
 
 // ─── Session helpers ───────────────────────────────────────────────────────────
 
-async function getJotSession(c) {
-  return auth.getCustomSession(getCookie(c, JOT_SESSION_COOKIE));
+async function getInkwellSession(c) {
+  return auth.getCustomSession(getCookie(c, INKWELL_SESSION_COOKIE));
 }
 
-async function requireJotSession(c) {
-  const session = await getJotSession(c);
+async function requireInkwellSession(c) {
+  const session = await getInkwellSession(c);
 
   if (!session) {
-    c.res = c.json({ error: 'Unauthorized', message: 'Log in to Jot first.' }, 401);
+    c.res = c.json({ error: 'Unauthorized', message: 'Log in to Inkwell first.' }, 401);
     return null;
   }
 
@@ -922,18 +922,18 @@ async function requireJotSession(c) {
 
 // ─── Sync state (Supabase) ─────────────────────────────────────────────────────
 
-async function ensureJotSyncStateRow(installationId) {
-  await supabase.from('jot_sync_state').upsert(
+async function ensureInkwellSyncStateRow(installationId) {
+  await supabase.from('inkwell_sync_state').upsert(
     { installation_id: installationId },
     { onConflict: 'installation_id', ignoreDuplicates: true },
   );
 }
 
-async function readJotSyncState(installationId) {
-  await ensureJotSyncStateRow(installationId);
+async function readInkwellSyncState(installationId) {
+  await ensureInkwellSyncStateRow(installationId);
 
   const { data: row } = await supabase
-    .from('jot_sync_state')
+    .from('inkwell_sync_state')
     .select('*')
     .eq('installation_id', installationId)
     .single();
@@ -941,15 +941,15 @@ async function readJotSyncState(installationId) {
   if (!row) return normalizeStore({});
 
   return {
-    jotRootPage: row.jot_database_id && !row.jot_data_source_id
-      ? { id: row.jot_database_id, parentPageId: row.jot_parent_page_id, title: row.jot_database_title }
+    inkwellRootPage: row.inkwell_database_id && !row.inkwell_data_source_id
+      ? { id: row.inkwell_database_id, parentPageId: row.inkwell_parent_page_id, title: row.inkwell_database_title }
       : undefined,
-    jotDatabase: row.jot_database_id
+    inkwellDatabase: row.inkwell_database_id
       ? {
-          databaseId: row.jot_database_id,
-          dataSourceId: row.jot_data_source_id,
-          parentPageId: row.jot_parent_page_id,
-          title: row.jot_database_title,
+          databaseId: row.inkwell_database_id,
+          dataSourceId: row.inkwell_data_source_id,
+          parentPageId: row.inkwell_parent_page_id,
+          title: row.inkwell_database_title,
         }
       : undefined,
     // Supabase returns JSONB columns as parsed objects already
@@ -962,13 +962,13 @@ async function readJotSyncState(installationId) {
   };
 }
 
-async function writeJotSyncState(installationId, store) {
-  await ensureJotSyncStateRow(installationId);
-  await supabase.from('jot_sync_state').update({
-    jot_database_id: store.jotDatabase?.databaseId ?? store.jotRootPage?.id ?? null,
-    jot_data_source_id: store.jotDatabase?.dataSourceId ?? null,
-    jot_parent_page_id: store.jotDatabase?.parentPageId ?? store.jotRootPage?.id ?? store.jotRootPage?.parentPageId ?? null,
-    jot_database_title: store.jotDatabase?.title ?? store.jotRootPage?.title ?? null,
+async function writeInkwellSyncState(installationId, store) {
+  await ensureInkwellSyncStateRow(installationId);
+  await supabase.from('inkwell_sync_state').update({
+    inkwell_database_id: store.inkwellDatabase?.databaseId ?? store.inkwellRootPage?.id ?? null,
+    inkwell_data_source_id: store.inkwellDatabase?.dataSourceId ?? null,
+    inkwell_parent_page_id: store.inkwellDatabase?.parentPageId ?? store.inkwellRootPage?.id ?? store.inkwellRootPage?.parentPageId ?? null,
+    inkwell_database_title: store.inkwellDatabase?.title ?? store.inkwellRootPage?.title ?? null,
     note_pages_json: store.notePages ?? {},
     block_mappings_json: store.blockMappings ?? {},
     parent_pages_json: store.parentPages ?? {},
@@ -1103,9 +1103,9 @@ async function validateNotionCache(store, { pages, projects }) {
   let clearSelectedParentPage = false;
   let changed = false;
 
-  if (store.jotRootPage?.id && !(await notionObjectExists(store, 'page', store.jotRootPage.id))) {
-    store.jotRootPage = undefined;
-    store.jotDatabase = undefined;
+  if (store.inkwellRootPage?.id && !(await notionObjectExists(store, 'page', store.inkwellRootPage.id))) {
+    store.inkwellRootPage = undefined;
+    store.inkwellDatabase = undefined;
     store.projectPages = {};
     store.projectBlocks = {};
     store.threadBlocks = {};
@@ -1123,10 +1123,10 @@ async function validateNotionCache(store, { pages, projects }) {
   }
 
   if (
-    store.jotDatabase?.databaseId &&
-    !(await notionObjectExists(store, 'database', store.jotDatabase.databaseId))
+    store.inkwellDatabase?.databaseId &&
+    !(await notionObjectExists(store, 'database', store.inkwellDatabase.databaseId))
   ) {
-    store.jotDatabase = undefined;
+    store.inkwellDatabase = undefined;
     store.projectPages = {};
     store.projectBlocks = {};
     store.threadBlocks = {};
@@ -1264,7 +1264,7 @@ async function createWorkspacePage(store, title) {
     method: 'POST',
     body: {
       parent: { type: 'workspace', workspace: true },
-      properties: { title: [{ text: { content: title || 'Jot' } }] },
+      properties: { title: [{ text: { content: title || 'Inkwell' } }] },
     },
   });
 }
@@ -1356,7 +1356,7 @@ function isTrustedOrigin(env, origin) {
 
   const trusted = [
     env.WORKER_URL,
-    env.JOT_EXTENSION_ORIGIN,
+    env.INKWELL_EXTENSION_ORIGIN,
     ...(env.TRUSTED_ORIGINS?.split(',') ?? []),
   ].map((o) => o?.trim()).filter(Boolean);
 

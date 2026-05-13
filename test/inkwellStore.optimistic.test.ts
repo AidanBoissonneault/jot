@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, test, vi } from 'vitest';
 import { nextTick } from 'vue';
 import { notionClient } from '@/src/services/notionClient';
 import { compactPendingSyncOps, listPendingSyncOps } from '@/src/services/syncQueue';
-import { useJotStore } from '@/src/stores/jot';
+import { useInkwellStore } from '@/src/stores/inkwell';
 import type { DocumentContent, Project, ProjectPage, SyncConfig } from '@/src/types/capture';
 import { readBrowserStorage, resetBrowserStorage } from './setup';
 
@@ -14,19 +14,19 @@ type Deferred<T> = {
 };
 
 const baseProject: Project = {
-  id: 'project-jot',
-  name: 'Jot',
+  id: 'project-inkwell',
+  name: 'Inkwell',
   status: 'active',
   category: 'General',
   createdAt: '2026-01-01T00:00:00.000Z',
   updatedAt: '2026-01-01T00:00:00.000Z',
   stateContent: emptyDocument(),
-  tags: ['jot'],
+  tags: ['inkwell'],
   syncState: 'saved',
 };
 const basePage: ProjectPage = {
-  id: 'page-jot',
-  projectId: 'project-jot',
+  id: 'page-inkwell',
+  projectId: 'project-inkwell',
   kind: 'page',
   title: 'Untitled Page',
   status: 'active',
@@ -44,8 +44,8 @@ const connectedConfig: SyncConfig = {
 beforeEach(() => {
   setActivePinia(createPinia());
   resetBrowserStorage({
-    activePageIdsByProject: { 'project-jot': 'page-jot' },
-    currentProjectId: 'project-jot',
+    activePageIdsByProject: { 'project-inkwell': 'page-inkwell' },
+    currentProjectId: 'project-inkwell',
     hasMigratedCapturesToPages: true,
     pages: [basePage],
     projects: [baseProject],
@@ -59,7 +59,7 @@ describe('optimistic project creation', () => {
     const projectSync = deferred<Response>();
     const fetchMock = vi.fn(() => projectSync.promise);
     vi.stubGlobal('fetch', fetchMock);
-    const store = useJotStore();
+    const store = useInkwellStore();
 
     await seedStore(store);
     await store.createProject('Roadmap');
@@ -71,13 +71,13 @@ describe('optimistic project creation', () => {
     expect(requestBody.project.category).toBe('');
     expect(requestBody.project.createdAt).toEqual(expect.any(String));
     expect(requestBody.project.updatedAt).toEqual(expect.any(String));
-    expect(stripJotBlockIds(requestBody.project.stateContent)).toEqual(emptyDocument());
+    expect(stripInkwellBlockIds(requestBody.project.stateContent)).toEqual(emptyDocument());
   });
 
   test('appears and is selected before project sync settles', async () => {
     const projectSync = deferred<Response>();
     vi.stubGlobal('fetch', vi.fn(() => projectSync.promise));
-    const store = useJotStore();
+    const store = useInkwellStore();
 
     await seedStore(store);
     await store.createProject('Roadmap');
@@ -91,20 +91,20 @@ describe('optimistic project creation', () => {
   test('reconciles temp ids and preserves a project switch during sync', async () => {
     const projectSync = deferred<Response>();
     vi.stubGlobal('fetch', vi.fn(() => projectSync.promise));
-    const store = useJotStore();
+    const store = useInkwellStore();
 
     await seedStore(store);
     await store.createProject('Roadmap');
     const tempProjectId = store.currentProjectId;
-    await store.selectProject('project-jot');
+    await store.selectProject('project-inkwell');
 
     projectSync.resolve(jsonResponse({ status: 'saved' }));
     await waitFor(() =>
       expect(store.projects.some((project) => project.id === tempProjectId)).toBe(false),
     );
 
-    expect(store.currentProjectId).toBe('project-jot');
-    expect(readBrowserStorage().currentProjectId).toBe('project-jot');
+    expect(store.currentProjectId).toBe('project-inkwell');
+    expect(readBrowserStorage().currentProjectId).toBe('project-inkwell');
     expect((readBrowserStorage().projects as Project[]).some((project) =>
       project.id.startsWith('temp-project-'),
     )).toBe(false);
@@ -113,7 +113,7 @@ describe('optimistic project creation', () => {
   test('rolls back temp records and restores selection when sync fails', async () => {
     const projectSync = deferred<Response>();
     vi.stubGlobal('fetch', vi.fn(() => projectSync.promise));
-    const store = useJotStore();
+    const store = useInkwellStore();
 
     await seedStore(store);
     await store.createProject('Broken');
@@ -121,11 +121,11 @@ describe('optimistic project creation', () => {
 
     projectSync.reject(new Error('Notion unavailable'));
     await waitFor(() => {
-      expect(store.currentProjectId).toBe('project-jot');
+      expect(store.currentProjectId).toBe('project-inkwell');
       expect(store.errorMessage).toBe('Notion unavailable');
     });
 
-    expect(store.currentProjectId).toBe('project-jot');
+    expect(store.currentProjectId).toBe('project-inkwell');
     expect(store.projects.some((project) => project.id === tempProjectId)).toBe(false);
     expect(store.errorMessage).toBe('Notion unavailable');
   });
@@ -136,14 +136,14 @@ describe('project metadata', () => {
     const fetchMock = vi.fn(async () =>
       jsonResponse({
         clearSelectedParentPage: true,
-        uncachedProjectIds: ['project-jot'],
-        uncachedPageIds: ['page-jot'],
+        uncachedProjectIds: ['project-inkwell'],
+        uncachedPageIds: ['page-inkwell'],
       }),
     );
     vi.stubGlobal('fetch', fetchMock);
     resetBrowserStorage({
-      activePageIdsByProject: { 'project-jot': 'page-jot' },
-      currentProjectId: 'project-jot',
+      activePageIdsByProject: { 'project-inkwell': 'page-inkwell' },
+      currentProjectId: 'project-inkwell',
       hasMigratedCapturesToPages: true,
       pages: [
         {
@@ -212,8 +212,8 @@ describe('project metadata', () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(jsonResponse({
         stalePageIds: [],
-        aheadPageIds: ['page-jot'],
-        serverVersions: { 'page-jot': 2 },
+        aheadPageIds: ['page-inkwell'],
+        serverVersions: { 'page-inkwell': 2 },
       }))
       .mockResolvedValueOnce(jsonResponse({
         activePageIdsByProject: { 'project-remote': 'page-remote' },
@@ -224,14 +224,14 @@ describe('project metadata', () => {
       }));
     vi.stubGlobal('fetch', fetchMock);
     resetBrowserStorage({
-      activePageIdsByProject: { 'project-jot': 'page-jot' },
-      currentProjectId: 'project-jot',
+      activePageIdsByProject: { 'project-inkwell': 'page-inkwell' },
+      currentProjectId: 'project-inkwell',
       hasMigratedCapturesToPages: true,
       pages: [basePage, { ...basePage, id: 'page-deleted' }],
       projects: [baseProject],
       syncConfig,
     });
-    const store = useJotStore();
+    const store = useInkwellStore();
 
     await seedStore(store);
     store.syncConfig = syncConfig;
@@ -251,8 +251,8 @@ describe('project metadata', () => {
     vi.stubGlobal('fetch', vi.fn()
       .mockResolvedValueOnce(jsonResponse({
         stalePageIds: [],
-        aheadPageIds: ['page-jot'],
-        serverVersions: { 'page-jot': 2 },
+        aheadPageIds: ['page-inkwell'],
+        serverVersions: { 'page-inkwell': 2 },
       }))
       .mockResolvedValueOnce(jsonResponse({
         activePageIdsByProject: {},
@@ -263,8 +263,8 @@ describe('project metadata', () => {
         status: 'saved',
       })));
     resetBrowserStorage({
-      activePageIdsByProject: { 'project-jot': 'page-jot' },
-      currentProjectId: 'project-jot',
+      activePageIdsByProject: { 'project-inkwell': 'page-inkwell' },
+      currentProjectId: 'project-inkwell',
       hasMigratedCapturesToPages: true,
       pages: [basePage],
       projects: [baseProject],
@@ -299,8 +299,8 @@ describe('project metadata', () => {
 
     resetBrowserStorage({
       activePageIdsByProject: {
-        'project-older': 'page-jot',
-        'project-newer': 'page-jot',
+        'project-older': 'page-inkwell',
+        'project-newer': 'page-inkwell',
       },
       currentProjectId: 'project-older',
       hasMigratedCapturesToPages: true,
@@ -321,7 +321,7 @@ describe('project metadata', () => {
     const metadataSync = deferred<Response>();
     const fetchMock = vi.fn(() => metadataSync.promise);
     vi.stubGlobal('fetch', fetchMock);
-    const store = useJotStore();
+    const store = useInkwellStore();
 
     await seedStore(store);
     const updatePromise = store.updateCurrentProjectMetadata({
@@ -354,21 +354,21 @@ describe('optimistic page creation', () => {
   test('appears and is selected immediately with an empty document', async () => {
     const pageSync = deferred<Response>();
     vi.stubGlobal('fetch', vi.fn(() => pageSync.promise));
-    const store = useJotStore();
+    const store = useInkwellStore();
 
     await seedStore(store);
     await store.createPage();
 
     expect(store.currentPage?.id).toMatch(/^temp-page-/);
-    expect(stripJotBlockIds(store.currentPage?.content)).toEqual(emptyDocument());
+    expect(stripInkwellBlockIds(store.currentPage?.content)).toEqual(emptyDocument());
     expect(store.pages.some((page) => page.id === store.currentPage?.id)).toBe(true);
     expect(store.saveStatus).toBe('creating');
   });
 
   test('replays latest edit after temp page reconciliation through the local queue', async () => {
-    const fetchMock = vi.fn(async () => jsonResponse({ queued: true, versions: { 'page-jot': 1 } }));
+    const fetchMock = vi.fn(async () => jsonResponse({ queued: true, versions: { 'page-inkwell': 1 } }));
     vi.stubGlobal('fetch', fetchMock);
-    const store = useJotStore();
+    const store = useInkwellStore();
     const editedContent = docWithText('typed while creating');
 
     await seedStore(store);
@@ -380,7 +380,7 @@ describe('optimistic page creation', () => {
       expect(store.currentPage?.id).not.toBe(tempPageId),
     );
 
-    expect(stripJotBlockIds(store.currentPage?.content)).toEqual(editedContent);
+    expect(stripInkwellBlockIds(store.currentPage?.content)).toEqual(editedContent);
     await waitFor(async () => expect(await listPendingSyncOps()).toEqual([]));
     expect(fetchMock).toHaveBeenCalled();
   });
@@ -389,7 +389,7 @@ describe('optimistic page creation', () => {
     vi.stubGlobal('fetch', vi.fn(async () => {
       throw new TypeError('offline');
     }));
-    const store = useJotStore();
+    const store = useInkwellStore();
 
     await seedStore(store);
     await store.createPage();
@@ -405,10 +405,10 @@ describe('optimistic page creation', () => {
 describe('page title and content saves', () => {
   test('content saves can carry the latest draft title', async () => {
     const fetchMock = vi.fn(async () =>
-      jsonResponse({ queued: true, versions: { 'page-jot': 1 } }),
+      jsonResponse({ queued: true, versions: { 'page-inkwell': 1 } }),
     );
     vi.stubGlobal('fetch', fetchMock);
-    const store = useJotStore();
+    const store = useInkwellStore();
 
     await seedStore(store);
     await store.saveCurrentPageContent(docWithText('body edit'), {
@@ -428,7 +428,7 @@ describe('page title and content saves', () => {
     const saveRequest = deferred<Response>();
     const fetchMock = vi.fn(() => saveRequest.promise);
     vi.stubGlobal('fetch', fetchMock);
-    const store = useJotStore();
+    const store = useInkwellStore();
     const content = docWithText('durable draft');
 
     await seedStore(store);
@@ -436,16 +436,16 @@ describe('page title and content saves', () => {
       preserveLocalContent: true,
     });
 
-    expect(stripJotBlockIds((readBrowserStorage().pages as ProjectPage[])[0].content)).toEqual(content);
+    expect(stripInkwellBlockIds((readBrowserStorage().pages as ProjectPage[])[0].content)).toEqual(content);
     expect((await listPendingSyncOps()).length).toBeGreaterThan(0);
-    saveRequest.resolve(jsonResponse({ queued: true, versions: { 'page-jot': 1 } }));
+    saveRequest.resolve(jsonResponse({ queued: true, versions: { 'page-inkwell': 1 } }));
   });
 
   test('multiple unsent edits to the same block compact to the final update', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => {
       throw new TypeError('offline');
     }));
-    const store = useJotStore();
+    const store = useInkwellStore();
 
     await seedStore(store, [{ ...basePage, content: docWithBlock('same-block', 'first') }]);
     store.currentPage = { ...basePage, content: docWithBlock('same-block', 'first') };
@@ -466,7 +466,7 @@ describe('page title and content saves', () => {
     vi.stubGlobal('fetch', vi.fn(async () => {
       throw new TypeError('offline');
     }));
-    const store = useJotStore();
+    const store = useInkwellStore();
 
     await seedStore(store, [{ ...basePage, content: { type: 'doc', content: [] } }]);
     store.currentPage = { ...basePage, content: { type: 'doc', content: [] } };
@@ -486,7 +486,7 @@ describe('page title and content saves', () => {
     vi.stubGlobal('fetch', vi.fn(async () => {
       throw new TypeError('offline');
     }));
-    const store = useJotStore();
+    const store = useInkwellStore();
 
     await seedStore(store, [{ ...basePage, content: docWithBlock('removed-block', 'before') }]);
     store.currentPage = { ...basePage, content: docWithBlock('removed-block', 'before') };
@@ -516,10 +516,10 @@ describe('project page caching', () => {
       notionPageId: 'notion-page-two',
       remoteRevision: 'rev-1',
     };
-    const store = useJotStore();
+    const store = useInkwellStore();
     resetBrowserStorage({
-      activePageIdsByProject: { 'project-jot': 'page-jot' },
-      currentProjectId: 'project-jot',
+      activePageIdsByProject: { 'project-inkwell': 'page-inkwell' },
+      currentProjectId: 'project-inkwell',
       hasMigratedCapturesToPages: true,
       pages: [basePage, pageTwo],
       projects: [baseProject],
@@ -529,7 +529,7 @@ describe('project page caching', () => {
 
     await store.selectPage('page-two');
 
-    expect(stripJotBlockIds(store.currentPage?.content)).toEqual(docWithText('cached body'));
+    expect(stripInkwellBlockIds(store.currentPage?.content)).toEqual(docWithText('cached body'));
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -556,10 +556,10 @@ describe('project page caching', () => {
       knownSyncVersion: 1,
       serverSyncVersion: 2,
     };
-    const store = useJotStore();
+    const store = useInkwellStore();
     resetBrowserStorage({
-      activePageIdsByProject: { 'project-jot': 'page-jot' },
-      currentProjectId: 'project-jot',
+      activePageIdsByProject: { 'project-inkwell': 'page-inkwell' },
+      currentProjectId: 'project-inkwell',
       hasMigratedCapturesToPages: true,
       pages: [basePage, pageTwo],
       projects: [baseProject],
@@ -585,11 +585,11 @@ describe('project page caching', () => {
       title: 'Second Page',
       content: docWithText('second body'),
     };
-    const store = useJotStore();
+    const store = useInkwellStore();
 
     resetBrowserStorage({
-      activePageIdsByProject: { 'project-jot': 'page-jot' },
-      currentProjectId: 'project-jot',
+      activePageIdsByProject: { 'project-inkwell': 'page-inkwell' },
+      currentProjectId: 'project-inkwell',
       hasMigratedCapturesToPages: true,
       pages: [basePage, pageTwo],
       projects: [baseProject],
@@ -616,7 +616,7 @@ describe('project page caching', () => {
 
     expect(store.currentPage?.id).toBe('page-two');
     expect(store.currentPage?.content).toEqual(docWithText('second body'));
-    expect(store.pages.find((page) => page.id === 'page-jot')?.content)
+    expect(store.pages.find((page) => page.id === 'page-inkwell')?.content)
       .toEqual(docWithText('old page edit'));
   });
 
@@ -631,11 +631,11 @@ describe('project page caching', () => {
       knownSyncVersion: 1,
       serverSyncVersion: 2,
     };
-    const store = useJotStore();
+    const store = useInkwellStore();
 
     resetBrowserStorage({
-      activePageIdsByProject: { 'project-jot': 'page-jot' },
-      currentProjectId: 'project-jot',
+      activePageIdsByProject: { 'project-inkwell': 'page-inkwell' },
+      currentProjectId: 'project-inkwell',
       hasMigratedCapturesToPages: true,
       pages: [syncedBasePage],
       projects: [baseProject],
@@ -643,7 +643,7 @@ describe('project page caching', () => {
     });
     await seedStore(store, [syncedBasePage]);
 
-    const refreshPromise = store.refreshSelectedPage('page-jot');
+    const refreshPromise = store.refreshSelectedPage('page-inkwell');
     store.currentPage = {
       ...store.currentPage!,
       content: docWithText('newer local draft'),
@@ -676,11 +676,11 @@ describe('project page caching', () => {
       knownSyncVersion: 1,
       serverSyncVersion: 2,
     };
-    const store = useJotStore();
+    const store = useInkwellStore();
 
     resetBrowserStorage({
-      activePageIdsByProject: { 'project-jot': 'page-jot' },
-      currentProjectId: 'project-jot',
+      activePageIdsByProject: { 'project-inkwell': 'page-inkwell' },
+      currentProjectId: 'project-inkwell',
       hasMigratedCapturesToPages: true,
       pages: [syncedBasePage],
       projects: [baseProject],
@@ -688,7 +688,7 @@ describe('project page caching', () => {
     });
     await seedStore(store, [syncedBasePage]);
 
-    const refreshPromise = store.refreshSelectedPage('page-jot');
+    const refreshPromise = store.refreshSelectedPage('page-inkwell');
     store.currentPage = {
       ...store.currentPage!,
       content: docWithText('newer local draft'),
@@ -703,7 +703,7 @@ describe('project page caching', () => {
           paragraph('remote content'),
           image({
             src: 'https://secure.notion-static.com/image.png',
-            jotBlockId: 'remote-image',
+            inkwellBlockId: 'remote-image',
           }),
         ]),
         remoteRevision: 'remote-2',
@@ -716,14 +716,14 @@ describe('project page caching', () => {
       paragraph('newer local draft'),
       image({
         src: 'https://secure.notion-static.com/image.png',
-        jotBlockId: 'remote-image',
+        inkwellBlockId: 'remote-image',
       }),
     ]);
     expect(store.currentPage?.remoteRevision).toBe('remote-2');
   });
 
   test('runtime page updates do not overwrite newer active page content', async () => {
-    const store = useJotStore();
+    const store = useInkwellStore();
     const localPage = {
       ...basePage,
       content: docWithText('newer local draft'),
@@ -746,7 +746,7 @@ describe('project page caching', () => {
     const listener = vi.mocked(browser.runtime.onMessage.addListener)
       .mock.calls.at(-1)?.[0] as ((message: unknown) => unknown) | undefined;
     listener?.({
-      type: 'jot.projectPageUpdated',
+      type: 'inkwell.projectPageUpdated',
       payload: {
         page: incomingPage,
       },
@@ -759,13 +759,13 @@ describe('project page caching', () => {
 });
 
 async function seedStore(
-  store: ReturnType<typeof useJotStore>,
+  store: ReturnType<typeof useInkwellStore>,
   pages = [basePage],
 ) {
   store.syncConfig = connectedConfig;
   store.projects = [baseProject];
   store.pages = pages;
-  store.currentProjectId = 'project-jot';
+  store.currentProjectId = 'project-inkwell';
   store.currentPage = basePage;
   await nextTick();
 }
@@ -789,17 +789,17 @@ function docWithText(text: string): DocumentContent {
   };
 }
 
-function docWithBlock(jotBlockId: string, text: string): DocumentContent {
+function docWithBlock(inkwellBlockId: string, text: string): DocumentContent {
   return {
     type: 'doc',
-    content: [blockWithId(jotBlockId, text)],
+    content: [blockWithId(inkwellBlockId, text)],
   };
 }
 
-function blockWithId(jotBlockId: string, text: string): DocumentContent {
+function blockWithId(inkwellBlockId: string, text: string): DocumentContent {
   return {
     type: 'paragraph',
-    attrs: { jotBlockId },
+    attrs: { inkwellBlockId },
     content: [{ type: 'text', text }],
   };
 }
@@ -835,7 +835,7 @@ function image(attrs: Record<string, unknown>): DocumentContent {
   };
 }
 
-function stripJotBlockIds(content: DocumentContent | undefined): DocumentContent | undefined {
+function stripInkwellBlockIds(content: DocumentContent | undefined): DocumentContent | undefined {
   if (!content) {
     return content;
   }
@@ -846,11 +846,11 @@ function stripJotBlockIds(content: DocumentContent | undefined): DocumentContent
   delete rest.content;
   const attrs = content.attrs
     ? Object.fromEntries(
-        Object.entries(content.attrs).filter(([key]) => key !== 'jotBlockId'),
+        Object.entries(content.attrs).filter(([key]) => key !== 'inkwellBlockId'),
       )
     : undefined;
   const children = originalContent
-    ?.map(stripJotBlockIds)
+    ?.map(stripInkwellBlockIds)
     .filter((child): child is DocumentContent => Boolean(child));
 
   return {

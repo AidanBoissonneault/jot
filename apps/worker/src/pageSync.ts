@@ -10,7 +10,7 @@ export async function pushPageToNotionCore({
     archiveThreadToggle,
     appendLog,
     createChildPage,
-    ensureJotRootPage,
+    ensureInkwellRootPage,
     ensureProjectPage,
     ensureProjectRootPage,
     ensureThreadToggle,
@@ -40,8 +40,8 @@ export async function pushPageToNotionCore({
     });
   }
 
-  const jotRootPage = await ensureJotRootPage(store, { selectedParentPageId });
-  const projectRootPage = await ensureProjectRootPage(store, jotRootPage.id, project, {
+  const inkwellRootPage = await ensureInkwellRootPage(store, { selectedParentPageId });
+  const projectRootPage = await ensureProjectRootPage(store, inkwellRootPage.id, project, {
     candidateNotionPageId: page.notionParentPageId,
   });
   const notionPageId = page.notionPageId ?? store.notePages[page.id]?.notionPageId;
@@ -106,7 +106,7 @@ export async function pushPageToNotionCore({
   await writeStore(store);
 
   return {
-    parentPage: jotRootPage,
+    parentPage: inkwellRootPage,
     page: syncedPage,
     status: 'saved',
     message: 'Synced to Notion.',

@@ -205,7 +205,7 @@ function hasMatchingMediaNode(
 }
 
 function nodeId(node: DocumentContent) {
-  const value = node.attrs?.jotBlockId;
+  const value = node.attrs?.inkwellBlockId;
   return typeof value === 'string' && value ? value : undefined;
 }
 

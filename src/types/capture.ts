@@ -79,7 +79,7 @@ export type CreateCaptureInput = Omit<Capture, 'id' | 'createdAt'> & {
 
 export type NotionBlockMapping = {
   localPageId: string;
-  jotBlockId?: string;
+  inkwellBlockId?: string;
   localNodeId?: string;
   captureId?: string;
   notionBlockId: string;

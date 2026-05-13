@@ -8,7 +8,7 @@ import type {
   SyncConfig,
 } from '@/src/types/capture';
 import { idbGet, idbGetMany, idbSet, idbSetMany } from '@/src/services/idbStore';
-import { encodeJotSource, JOT_SOURCE_ATTR } from '@/src/extensions/jotLink';
+import { encodeInkwellSource, INKWELL_SOURCE_ATTR } from '@/src/extensions/inkwellLink';
 import type {
   CaptureSelectionPayload,
   SourceOpenPayload,
@@ -27,7 +27,7 @@ import type {
   SyncValidationResponse,
 } from '@/src/types/sync';
 import { markUnrecoverableTransientMedia } from '@/src/extensions/mediaContent';
-import { normalizeJotBlockIds } from '@/src/extensions/jotBlockIds';
+import { normalizeInkwellBlockIds } from '@/src/extensions/inkwellBlockIds';
 import {
   addPendingSyncOps,
   buildPageSyncOps,
@@ -38,7 +38,7 @@ import {
   type BlockSyncOp,
 } from '@/src/services/syncQueue';
 
-type JotStorage = {
+type InkwellStorage = {
   activePageIdsByProject?: Record<string, string>;
   captures?: Capture[];
   currentProjectId?: string;
@@ -59,7 +59,7 @@ export type OptimisticPageCreation = {
   settled: Promise<ProjectPage>;
 };
 
-const STORAGE_KEYS: Array<keyof JotStorage> = [
+const STORAGE_KEYS: Array<keyof InkwellStorage> = [
   'activePageIdsByProject',
   'captures',
   'currentProjectId',
@@ -77,14 +77,14 @@ const DEFAULT_SYNC_CONFIG: SyncConfig = {
 
 const defaultProjects: Project[] = [
   {
-    id: 'project-jot',
-    name: 'Jot',
+    id: 'project-inkwell',
+    name: 'Inkwell',
     status: 'active',
     category: 'General',
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     stateContent: emptyDocument(),
-    tags: ['jot'],
+    tags: ['inkwell'],
   },
 ];
 
@@ -94,7 +94,7 @@ const projectReconciliations = new Map<string, Promise<string>>();
 let queueDeliveryPromise: Promise<void> | undefined;
 
 function emptyDocument(): DocumentContent {
-  return normalizeJotBlockIds({
+  return normalizeInkwellBlockIds({
     type: 'doc',
     content: [
       {
@@ -138,7 +138,7 @@ function sourceLinkAttrs(payload: CaptureSelectionPayload) {
     target: '_blank',
     rel: 'noopener noreferrer nofollow',
     class: null,
-    [JOT_SOURCE_ATTR]: encodeJotSource(sourcePayloadFromCapture(payload)),
+    [INKWELL_SOURCE_ATTR]: encodeInkwellSource(sourcePayloadFromCapture(payload)),
   };
 }
 
@@ -151,7 +151,7 @@ export function createCapturedContent(payload: CaptureSelectionPayload): Documen
     {
       type: 'blockquote',
       attrs: {
-        jotCaptureId: crypto.randomUUID(),
+        inkwellCaptureId: crypto.randomUUID(),
       },
       content: [textParagraph(payload.text)],
     },
@@ -176,7 +176,7 @@ export function createLinkedHeadingContent(
     {
       type: 'heading',
       attrs: {
-        jotCaptureId: crypto.randomUUID(),
+        inkwellCaptureId: crypto.randomUUID(),
         level,
       },
       content: [
@@ -263,16 +263,16 @@ function sortProjectsByUpdatedDesc(first: Project, second: Project) {
 async function migrateStorageToIdb(): Promise<void> {
   const done = await idbGet<boolean>('__idb_migrated__');
   if (done) return;
-  const existing = (await browser.storage.local.get(STORAGE_KEYS)) as JotStorage;
+  const existing = (await browser.storage.local.get(STORAGE_KEYS)) as InkwellStorage;
   if (Object.keys(existing).length > 0) {
     await idbSetMany(existing as Record<string, unknown>);
   }
   await idbSet('__idb_migrated__', true);
 }
 
-async function readStorage(): Promise<Required<JotStorage>> {
+async function readStorage(): Promise<Required<InkwellStorage>> {
   await migrateStorageToIdb();
-  const stored = (await idbGetMany(STORAGE_KEYS)) as JotStorage;
+  const stored = (await idbGetMany(STORAGE_KEYS)) as InkwellStorage;
 
   const storedProjects = stored.projects !== undefined ? stored.projects : defaultProjects;
   const projects = (isLegacyStubProjectSet(storedProjects)
@@ -290,7 +290,7 @@ async function readStorage(): Promise<Required<JotStorage>> {
     : stored.pages ?? createDefaultPages(projects)
   ).map((page) => ({
     ...page,
-    content: normalizeJotBlockIds(markUnrecoverableTransientMedia(page.content)),
+    content: normalizeInkwellBlockIds(markUnrecoverableTransientMedia(page.content)),
     localRevision: page.localRevision ?? crypto.randomUUID(),
     status: page.status ?? 'active',
     syncState: page.syncState ?? 'saved',
@@ -351,7 +351,7 @@ function isLegacyStubProjectSet(projects: Project[]) {
   );
 }
 
-async function writeStorage(storage: Partial<JotStorage>) {
+async function writeStorage(storage: Partial<InkwellStorage>) {
   await idbSetMany(storage as Record<string, unknown>);
 }
 
@@ -360,7 +360,7 @@ function appendContent(page: ProjectPage, content: DocumentContent[]): ProjectPa
 
   return markPageDirty({
     ...page,
-    content: normalizeJotBlockIds({
+    content: normalizeInkwellBlockIds({
       ...page.content,
       type: 'doc',
       content: [...existingContent, ...content],
@@ -530,7 +530,7 @@ async function enqueuePageSync(
   const { syncConfig } = await readStorage();
   const normalizedPage = {
     ...page,
-    content: normalizeJotBlockIds(page.content),
+    content: normalizeInkwellBlockIds(page.content),
   };
 
   await addPendingSyncOps(buildPageSyncOps({
@@ -1179,7 +1179,7 @@ export const notionClient = {
     const projects = response.projects.map(normalizeProject).sort(sortProjectsByUpdatedDesc);
     const pages = response.pages.map((page) => ({
       ...page,
-      content: normalizeJotBlockIds(markUnrecoverableTransientMedia(page.content)),
+      content: normalizeInkwellBlockIds(markUnrecoverableTransientMedia(page.content)),
       localRevision: page.localRevision ?? crypto.randomUUID(),
       status: page.status ?? 'active',
       syncState: page.syncState ?? 'saved',
@@ -1512,7 +1512,7 @@ export const notionClient = {
 
     const updatedPage = markPageDirty({
       ...page,
-      content: normalizeJotBlockIds(page.content),
+      content: normalizeInkwellBlockIds(page.content),
     });
 
     await writeStorage({
@@ -1551,7 +1551,7 @@ export const notionClient = {
       );
 
     if (!page || !project) {
-      throw new Error('No Jot page is available for this capture.');
+      throw new Error('No Inkwell page is available for this capture.');
     }
 
     const updatedPage = appendContent(page, createCapturedContent(payload));

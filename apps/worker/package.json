@@ -1,5 +1,5 @@
 {
-  "name": "@jot/worker",
+  "name": "@inkwell/worker",
   "private": true,
   "version": "0.1.0",
   "type": "module",

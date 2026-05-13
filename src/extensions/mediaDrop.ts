@@ -3,13 +3,13 @@ export const AUDIO_UPLOAD_MAX_BYTES = 20 * 1024 * 1024;
 
 export type UploadableImageDrop = { kind: 'file'; file: File };
 export type UploadableAudioDrop = { kind: 'file'; file: File };
-export type JotImageMovePayload = {
+export type InkwellImageMovePayload = {
   kind: 'image';
   pos: number;
   attrs: Record<string, unknown>;
 };
 
-type RememberedImageMovePayload = JotImageMovePayload & {
+type RememberedImageMovePayload = InkwellImageMovePayload & {
   createdAt: number;
 };
 
@@ -22,7 +22,7 @@ type DropData = {
 const IMAGE_URL_PATTERN = /\.(png|jpe?g|gif|webp|svg|avif)(\?[^#]*)?(#.*)?$/i;
 const AUDIO_URL_PATTERN = /\.(mp3|mpeg|m4a|aac|wav|ogg|oga|opus|webm)(\?[^#]*)?(#.*)?$/i;
 const YOUTUBE_HOST_PATTERN = /(^|\.)youtube(?:-nocookie)?\.com$|(^|\.)youtu\.be$/i;
-export const JOT_IMAGE_MOVE_MIME = 'application/x-jot-image-move';
+export const INKWELL_IMAGE_MOVE_MIME = 'application/x-inkwell-image-move';
 const PROSEMIRROR_SLICE_MIME = 'application/x-prosemirror-slice';
 const IMAGE_MOVE_MEMORY_TTL_MS = 30_000;
 
@@ -32,18 +32,18 @@ export function isEditorInternalDrop(dataTransfer: DropData | null | undefined):
   return Array.from(dataTransfer?.types ?? []).includes(PROSEMIRROR_SLICE_MIME);
 }
 
-export function rememberJotImageMovePayload(payload: JotImageMovePayload) {
+export function rememberInkwellImageMovePayload(payload: InkwellImageMovePayload) {
   rememberedImageMovePayload = {
     ...payload,
     createdAt: Date.now(),
   };
 }
 
-export function readJotImageMovePayload(
+export function readInkwellImageMovePayload(
   dataTransfer: DropData | null | undefined,
-): JotImageMovePayload | null {
-  const raw = dataTransfer?.getData(JOT_IMAGE_MOVE_MIME) ?? '';
-  const parsedPayload = parseJotImageMovePayload(raw);
+): InkwellImageMovePayload | null {
+  const raw = dataTransfer?.getData(INKWELL_IMAGE_MOVE_MIME) ?? '';
+  const parsedPayload = parseInkwellImageMovePayload(raw);
 
   if (parsedPayload) {
     rememberedImageMovePayload = null;
@@ -60,13 +60,13 @@ export function readJotImageMovePayload(
   return null;
 }
 
-function parseJotImageMovePayload(raw: string): JotImageMovePayload | null {
+function parseInkwellImageMovePayload(raw: string): InkwellImageMovePayload | null {
   if (!raw) {
     return null;
   }
 
   try {
-    const payload = JSON.parse(raw) as Partial<JotImageMovePayload>;
+    const payload = JSON.parse(raw) as Partial<InkwellImageMovePayload>;
 
     if (
       payload.kind === 'image' &&
@@ -92,7 +92,7 @@ function parseJotImageMovePayload(raw: string): JotImageMovePayload | null {
 
 function readRememberedImageMovePayload(
   dataTransfer: DropData | null | undefined,
-): JotImageMovePayload | null {
+): InkwellImageMovePayload | null {
   if (
     !rememberedImageMovePayload ||
     Date.now() - rememberedImageMovePayload.createdAt > IMAGE_MOVE_MEMORY_TTL_MS
@@ -124,7 +124,7 @@ function hasImageLikeDropData(dataTransfer: DropData | null | undefined): boolea
   );
 }
 
-function rememberedImageMovePayloadWithoutTimestamp(): JotImageMovePayload {
+function rememberedImageMovePayloadWithoutTimestamp(): InkwellImageMovePayload {
   return {
     kind: rememberedImageMovePayload?.kind ?? 'image',
     pos: rememberedImageMovePayload?.pos ?? 0,

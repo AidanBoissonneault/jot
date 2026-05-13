@@ -1,6 +1,6 @@
 // @ts-nocheck
 // Supabase auth backend — handles user, session, account, notion_installations.
-// jot_sync_state is managed in worker.js (sync concern, not auth).
+// inkwell_sync_state is managed in worker.js (sync concern, not auth).
 
 export function createAuth(supabase) {
   return {
@@ -57,7 +57,7 @@ async function createNotionSession(supabase, {
   sessionId,
   SESSION_MAX_AGE_SECONDS,
 }) {
-  userId = await upsertJotUser(supabase, userId, user);
+  userId = await upsertInkwellUser(supabase, userId, user);
 
   const accountId = `notion:${notionAccountId}`;
   const expiresAt = new Date(Date.now() + SESSION_MAX_AGE_SECONDS * 1000).toISOString();
@@ -106,7 +106,7 @@ async function revokeInstallation(supabase, userId) {
     .eq('user_id', userId);
 }
 
-async function upsertJotUser(supabase, preferredUserId, user) {
+async function upsertInkwellUser(supabase, preferredUserId, user) {
   const { data: existing } = await supabase
     .from('user')
     .select('id')

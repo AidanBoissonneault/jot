@@ -2,17 +2,17 @@ import { describe, expect, it } from 'vitest';
 import {
   AUDIO_UPLOAD_MAX_BYTES,
   IMAGE_UPLOAD_MAX_BYTES,
-  JOT_IMAGE_MOVE_MIME,
+  INKWELL_IMAGE_MOVE_MIME,
   isUploadableAudioFile,
   isUploadableImageFile,
   isEditorInternalDrop,
   peekUploadableAudioDrop,
   peekUploadableImageDrop,
-  readJotImageMovePayload,
+  readInkwellImageMovePayload,
   readAudioDropSrc,
   readImageDropSrc,
   readYoutubeDropSrc,
-  rememberJotImageMovePayload,
+  rememberInkwellImageMovePayload,
 } from '@/src/extensions/mediaDrop';
 
 describe('media drop helpers', () => {
@@ -137,9 +137,9 @@ describe('media drop helpers', () => {
 
   it('reads explicit image move drag payloads', () => {
     expect(
-      readJotImageMovePayload(
+      readInkwellImageMovePayload(
         dropData({
-          [JOT_IMAGE_MOVE_MIME]: JSON.stringify({
+          [INKWELL_IMAGE_MOVE_MIME]: JSON.stringify({
             kind: 'image',
             pos: 3,
             attrs: { src: 'https://example.com/capture.png', width: '42%' },
@@ -153,23 +153,23 @@ describe('media drop helpers', () => {
     });
 
     expect(
-      readJotImageMovePayload(
+      readInkwellImageMovePayload(
         dropData({
-          [JOT_IMAGE_MOVE_MIME]: JSON.stringify({ kind: 'image', pos: -1, attrs: {} }),
+          [INKWELL_IMAGE_MOVE_MIME]: JSON.stringify({ kind: 'image', pos: -1, attrs: {} }),
         }),
       ),
     ).toBeNull();
   });
 
   it('falls back to remembered same-session image move payloads', () => {
-    rememberJotImageMovePayload({
+    rememberInkwellImageMovePayload({
       kind: 'image',
       pos: 7,
       attrs: { src: 'https://example.com/remembered.png', width: '55%' },
     });
 
     expect(
-      readJotImageMovePayload(
+      readInkwellImageMovePayload(
         dropData({
           'application/x-prosemirror-slice': '0 0 []',
           'text/html': '<img src="https://example.com/remembered.png">',
@@ -183,7 +183,7 @@ describe('media drop helpers', () => {
   });
 
   it('treats remembered chrome-extension blob image drops as image moves', () => {
-    rememberJotImageMovePayload({
+    rememberInkwellImageMovePayload({
       kind: 'image',
       pos: 11,
       attrs: {
@@ -192,7 +192,7 @@ describe('media drop helpers', () => {
     });
 
     expect(
-      readJotImageMovePayload(
+      readInkwellImageMovePayload(
         dropData({
           'text/plain':
             'blob:chrome-extension://aenmkafokhhihmlkeoijbbnbfneohnkj/f534f216-f53e-4ec7-b0e8-baf322412d8b',

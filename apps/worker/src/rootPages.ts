@@ -4,14 +4,14 @@ export function createRootPageHelpers({
   createChildPage,
   createWorkspacePage,
   isNotionObjectNotFound,
-  jotRootPageTitle = 'Jot',
+  inkwellRootPageTitle = 'Inkwell',
   listAllBlockChildren,
   notionRequest,
   titleFromPage,
   updatePageTitle,
 }) {
-  async function ensureJotRootPage(store, { selectedParentPageId } = {}) {
-    const stored = store.jotRootPage;
+  async function ensureInkwellRootPage(store, { selectedParentPageId } = {}) {
+    const stored = store.inkwellRootPage;
 
     if (selectedParentPageId) {
       if (stored?.id === selectedParentPageId) {
@@ -24,15 +24,15 @@ export function createRootPageHelpers({
 
       try {
         const page = await notionRequest(store, `/pages/${selectedParentPageId}`);
-        store.jotRootPage = {
+        store.inkwellRootPage = {
           id: page.id,
           parentPageId: undefined,
-          title: titleFromPage(page) || jotRootPageTitle,
+          title: titleFromPage(page) || inkwellRootPageTitle,
           url: page.url,
         };
-        store.jotDatabase = undefined;
-        appendLog(store, 'root_page_adopted', store.jotRootPage.title);
-        return pageSummary(store.jotRootPage);
+        store.inkwellDatabase = undefined;
+        appendLog(store, 'root_page_adopted', store.inkwellRootPage.title);
+        return pageSummary(store.inkwellRootPage);
       } catch (error) {
         if (!isNotionObjectNotFound(error) && !isBlockNotPageError(error)) {
           throw error;
@@ -54,29 +54,29 @@ export function createRootPageHelpers({
       }
     }
 
-    const page = await createWorkspacePage(store, jotRootPageTitle);
-    store.jotRootPage = {
+    const page = await createWorkspacePage(store, inkwellRootPageTitle);
+    store.inkwellRootPage = {
       id: page.id,
       parentPageId: undefined,
-      title: titleFromPage(page) || jotRootPageTitle,
+      title: titleFromPage(page) || inkwellRootPageTitle,
       url: page.url,
     };
-    store.jotDatabase = undefined;
-    appendLog(store, 'root_page_created', store.jotRootPage.title);
+    store.inkwellDatabase = undefined;
+    appendLog(store, 'root_page_created', store.inkwellRootPage.title);
 
-    return pageSummary(store.jotRootPage);
+    return pageSummary(store.inkwellRootPage);
   }
 
   async function refreshStoredRootPage(store, stored, parentPageId) {
     try {
       const page = await notionRequest(store, `/pages/${stored.id}`);
-      store.jotRootPage = {
+      store.inkwellRootPage = {
         id: page.id,
         parentPageId,
-        title: titleFromPage(page) || stored.title || jotRootPageTitle,
+        title: titleFromPage(page) || stored.title || inkwellRootPageTitle,
         url: page.url,
       };
-      return pageSummary(store.jotRootPage);
+      return pageSummary(store.inkwellRootPage);
     } catch (error) {
       appendLog(store, 'root_page_lookup_error', error.message);
       return undefined;
@@ -85,14 +85,14 @@ export function createRootPageHelpers({
 
   async function ensureProjectRootPage(
     store,
-    jotRootPageId,
+    inkwellRootPageId,
     project,
     { candidateNotionPageId } = {},
   ) {
     const stored = store.projectPages[project.id];
 
-    if (stored?.notionPageId && stored.parentPageId === jotRootPageId) {
-      const existing = await refreshProjectRootPage(store, jotRootPageId, project, stored);
+    if (stored?.notionPageId && stored.parentPageId === inkwellRootPageId) {
+      const existing = await refreshProjectRootPage(store, inkwellRootPageId, project, stored);
 
       if (existing) {
         return existing;
@@ -101,7 +101,7 @@ export function createRootPageHelpers({
 
     const candidate = await adoptCandidateProjectPage(
       store,
-      jotRootPageId,
+      inkwellRootPageId,
       project,
       candidateNotionPageId,
     );
@@ -112,19 +112,19 @@ export function createRootPageHelpers({
 
     const matchingChild = await findChildPageByTitle(
       store,
-      jotRootPageId,
+      inkwellRootPageId,
       project.name || 'Untitled Project',
     );
 
     if (matchingChild) {
-      return storeProjectRootPage(store, jotRootPageId, project, matchingChild, 'project_page_adopted');
+      return storeProjectRootPage(store, inkwellRootPageId, project, matchingChild, 'project_page_adopted');
     }
 
-    const page = await createChildPage(store, jotRootPageId, project.name || 'Untitled Project');
-    return storeProjectRootPage(store, jotRootPageId, project, page, 'project_page_created');
+    const page = await createChildPage(store, inkwellRootPageId, project.name || 'Untitled Project');
+    return storeProjectRootPage(store, inkwellRootPageId, project, page, 'project_page_created');
   }
 
-  async function refreshProjectRootPage(store, jotRootPageId, project, stored) {
+  async function refreshProjectRootPage(store, inkwellRootPageId, project, stored) {
     try {
       const page = await notionRequest(store, `/pages/${stored.notionPageId}`);
       const title = project.name || stored.title || 'Untitled Project';
@@ -133,7 +133,7 @@ export function createRootPageHelpers({
         await updatePageTitle(store, page.id, title);
       }
 
-      return storeProjectRootPage(store, jotRootPageId, project, {
+      return storeProjectRootPage(store, inkwellRootPageId, project, {
         ...page,
         title,
       });
@@ -143,7 +143,7 @@ export function createRootPageHelpers({
     }
   }
 
-  async function adoptCandidateProjectPage(store, jotRootPageId, project, candidateNotionPageId) {
+  async function adoptCandidateProjectPage(store, inkwellRootPageId, project, candidateNotionPageId) {
     if (!candidateNotionPageId) {
       return undefined;
     }
@@ -151,7 +151,7 @@ export function createRootPageHelpers({
     try {
       const page = await notionRequest(store, `/pages/${candidateNotionPageId}`);
 
-      if (parentPageIdFromNotionPage(page) !== jotRootPageId) {
+      if (parentPageIdFromNotionPage(page) !== inkwellRootPageId) {
         return undefined;
       }
 
@@ -161,7 +161,7 @@ export function createRootPageHelpers({
         await updatePageTitle(store, page.id, title);
       }
 
-      return storeProjectRootPage(store, jotRootPageId, project, {
+      return storeProjectRootPage(store, inkwellRootPageId, project, {
         ...page,
         title,
       }, 'project_page_adopted');
@@ -171,8 +171,8 @@ export function createRootPageHelpers({
     }
   }
 
-  async function findChildPageByTitle(store, jotRootPageId, title) {
-    const children = await listAllBlockChildren(store, jotRootPageId).catch((error) => {
+  async function findChildPageByTitle(store, inkwellRootPageId, title) {
+    const children = await listAllBlockChildren(store, inkwellRootPageId).catch((error) => {
       appendLog(store, 'project_page_lookup_error', error.message);
       return [];
     });
@@ -186,18 +186,18 @@ export function createRootPageHelpers({
     return child
       ? {
           id: child.id,
-          parent: { type: 'page_id', page_id: jotRootPageId },
+          parent: { type: 'page_id', page_id: inkwellRootPageId },
           title,
         }
       : undefined;
   }
 
-  function storeProjectRootPage(store, jotRootPageId, project, page, logEvent) {
+  function storeProjectRootPage(store, inkwellRootPageId, project, page, logEvent) {
     const title = page.title || titleFromPage(page) || project.name || 'Untitled Project';
 
     store.projectPages[project.id] = {
       notionPageId: page.id,
-      parentPageId: jotRootPageId,
+      parentPageId: inkwellRootPageId,
       title,
       lastEditedTime: page.last_edited_time,
     };
@@ -208,14 +208,14 @@ export function createRootPageHelpers({
 
     return pageSummary({
       id: page.id,
-      parentPageId: jotRootPageId,
+      parentPageId: inkwellRootPageId,
       title,
       url: page.url,
     });
   }
 
   return {
-    ensureJotRootPage,
+    ensureInkwellRootPage,
     ensureProjectRootPage,
     pageSummary,
   };
@@ -225,7 +225,7 @@ export function pageSummary(page) {
   return {
     id: page.id,
     parentPageId: page.parentPageId,
-    title: page.title || 'Jot',
+    title: page.title || 'Inkwell',
     url: page.url,
   };
 }

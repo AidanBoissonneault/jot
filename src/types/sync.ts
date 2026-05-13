@@ -50,7 +50,7 @@ export type SyncBlockOperation = {
   type: SyncBlockOperationType;
   pageId: string;
   projectId: string;
-  jotBlockId?: string;
+  inkwellBlockId?: string;
   sequence: number;
   createdAt: string;
   baseKnownSyncVersion?: number;

@@ -6,7 +6,7 @@ import {
   tiptapDocumentToNotionBlocks,
 } from './blockConversion.js';
 
-const JOT_BLOCK_ID_ATTR = 'jotBlockId';
+const INKWELL_BLOCK_ID_ATTR = 'inkwellBlockId';
 
 export async function importManagedBlocks({
   store,
@@ -46,14 +46,14 @@ export function rebuildImportedBlockMappings({
   );
   const content = imported.content.map((node, index) => {
     const existing = existingByNotionId.get(notionBlocks[index]?.id);
-    const jotBlockId =
-      existing?.jotBlockId ?? existing?.localNodeId ?? `jot-block-${randomUUID()}`;
+    const inkwellBlockId =
+      existing?.inkwellBlockId ?? existing?.localNodeId ?? `inkwell-block-${randomUUID()}`;
 
     return {
       ...node,
       attrs: {
         ...(node.attrs ?? {}),
-        [JOT_BLOCK_ID_ATTR]: jotBlockId,
+        [INKWELL_BLOCK_ID_ATTR]: inkwellBlockId,
       },
     };
   });
@@ -70,8 +70,8 @@ export function rebuildImportedBlockMappings({
 
     return {
       localPageId,
-      jotBlockId: node.attrs[JOT_BLOCK_ID_ATTR],
-      localNodeId: node.attrs[JOT_BLOCK_ID_ATTR],
+      inkwellBlockId: node.attrs[INKWELL_BLOCK_ID_ATTR],
+      localNodeId: node.attrs[INKWELL_BLOCK_ID_ATTR],
       notionBlockId: importedBlock.id,
       kind: kindFromNotionBlock(notionBlock),
       order: index,

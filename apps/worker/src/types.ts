@@ -19,12 +19,12 @@ export type SyncJob = {
 
 export type WorkerEnv = {
   NOTION_VERSION?: string;
-  JOT_ROOT_PAGE_TITLE?: string;
+  INKWELL_ROOT_PAGE_TITLE?: string;
   WORKER_URL?: string;
   NOTION_OAUTH_CLIENT_ID?: string;
   NOTION_OAUTH_CLIENT_SECRET?: string;
   SESSION_SECRET?: string;
-  JOT_EXTENSION_ORIGIN?: string;
+  INKWELL_EXTENSION_ORIGIN?: string;
   TRUSTED_ORIGINS?: string;
   SUPABASE_URL: string;
   SUPABASE_SERVICE_KEY: string;
@@ -36,12 +36,12 @@ export type JsonRecord = Record<string, unknown>;
 export type SyncStore = {
   installationId?: number | string;
   tokens?: { access_token: string };
-  jotRootPage?: {
+  inkwellRootPage?: {
     id: string;
     parentPageId?: string;
     title?: string;
   };
-  jotDatabase?: {
+  inkwellDatabase?: {
     databaseId: string;
     dataSourceId?: string;
     parentPageId?: string;

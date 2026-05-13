@@ -1,13 +1,13 @@
 import Link from '@tiptap/extension-link';
 import type { SourceOpenPayload } from '@/src/types/messages';
 
-export const JOT_SOURCE_ATTR = 'jotSource';
+export const INKWELL_SOURCE_ATTR = 'inkwellSource';
 
-export function encodeJotSource(payload: SourceOpenPayload) {
+export function encodeInkwellSource(payload: SourceOpenPayload) {
   return JSON.stringify(payload);
 }
 
-export function decodeJotSource(value: unknown): SourceOpenPayload | null {
+export function decodeInkwellSource(value: unknown): SourceOpenPayload | null {
   if (typeof value !== 'string' || !value) {
     return null;
   }
@@ -25,18 +25,18 @@ export function decodeJotSource(value: unknown): SourceOpenPayload | null {
   }
 }
 
-export const JotLink = Link.extend({
+export const InkwellLink = Link.extend({
   addAttributes() {
     return {
       ...this.parent?.(),
-      [JOT_SOURCE_ATTR]: {
+      [INKWELL_SOURCE_ATTR]: {
         default: null,
-        parseHTML: (element) => element.getAttribute('data-jot-source'),
+        parseHTML: (element) => element.getAttribute('data-inkwell-source'),
         renderHTML: (attributes) => {
-          const value = attributes[JOT_SOURCE_ATTR];
+          const value = attributes[INKWELL_SOURCE_ATTR];
 
           return typeof value === 'string' && value
-            ? { 'data-jot-source': value }
+            ? { 'data-inkwell-source': value }
             : {};
         },
       },

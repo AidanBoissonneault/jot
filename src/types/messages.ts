@@ -26,57 +26,57 @@ export type CaptureSelectionPayload = {
 };
 
 export type CaptureSelectionMessage = {
-  type: 'jot.captureSelection';
+  type: 'inkwell.captureSelection';
   payload: CaptureSelectionPayload;
 };
 
 export type InsertCaptureRequestMessage = {
-  type: 'jot.insertCaptureRequest';
+  type: 'inkwell.insertCaptureRequest';
   payload: CaptureSelectionPayload;
 };
 
 export type HeadingDragStartedMessage = {
-  type: 'jot.headingDragStarted';
+  type: 'inkwell.headingDragStarted';
   payload: CaptureSelectionPayload;
 };
 
 export type ConsumeHeadingDragMessage = {
-  type: 'jot.consumeHeadingDrag';
+  type: 'inkwell.consumeHeadingDrag';
   payload?: {
     text?: string;
   };
 };
 
 export type TextDragStartedMessage = {
-  type: 'jot.textDragStarted';
+  type: 'inkwell.textDragStarted';
   payload: CaptureSelectionPayload;
 };
 
 export type ConsumeTextDragMessage = {
-  type: 'jot.consumeTextDrag';
+  type: 'inkwell.consumeTextDrag';
   payload?: {
     text?: string;
   };
 };
 
 export type ProjectPageUpdatedMessage = {
-  type: 'jot.projectPageUpdated';
+  type: 'inkwell.projectPageUpdated';
   payload: {
     page: ProjectPage;
   };
 };
 
 export type OpenSourceRequestMessage = {
-  type: 'jot.openSourceRequest';
+  type: 'inkwell.openSourceRequest';
   payload: SourceOpenPayload;
 };
 
 export type RestoreHighlightMessage = {
-  type: 'jot.restoreHighlight';
+  type: 'inkwell.restoreHighlight';
   payload: SourceOpenPayload;
 };
 
-export type JotRuntimeMessage =
+export type InkwellRuntimeMessage =
   | CaptureSelectionMessage
   | ConsumeHeadingDragMessage
   | ConsumeTextDragMessage

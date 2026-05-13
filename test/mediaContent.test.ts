@@ -89,7 +89,7 @@ describe('media content helpers', () => {
       paragraph('Local draft'),
       image({
         src: 'https://secure.notion-static.com/image.png',
-        jotBlockId: 'remote-image',
+        inkwellBlockId: 'remote-image',
       }),
     ]);
 
@@ -97,7 +97,7 @@ describe('media content helpers', () => {
       paragraph('Local draft'),
       image({
         src: 'https://secure.notion-static.com/image.png',
-        jotBlockId: 'remote-image',
+        inkwellBlockId: 'remote-image',
       }),
     ]);
   });

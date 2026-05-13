@@ -193,13 +193,13 @@ onUnmounted(() => {
   align-items: center;
   gap: 6px;
   padding: 5px 10px;
-  background: var(--jot-surface);
-  border: 1px solid var(--jot-border);
+  background: var(--inkwell-surface);
+  border: 1px solid var(--inkwell-border);
   border-radius: 20px;
-  box-shadow: var(--jot-shadow);
+  box-shadow: var(--inkwell-shadow);
   font-size: 12px;
   font-variant-numeric: tabular-nums;
-  color: var(--jot-text);
+  color: var(--inkwell-text);
 }
 
 .rec-dot {
@@ -227,7 +227,7 @@ onUnmounted(() => {
 .waveform-bar {
   display: block;
   width: 2px;
-  background: var(--jot-accent);
+  background: var(--inkwell-accent);
   border-radius: 1px;
   transition: height 80ms ease;
   min-height: 3px;
@@ -235,20 +235,20 @@ onUnmounted(() => {
 
 .elapsed {
   font-size: 12px;
-  color: var(--jot-muted);
+  color: var(--inkwell-muted);
   min-width: 3ch;
 }
 
 /* Hint text */
 .recorder-hint {
   font-size: 11px;
-  color: var(--jot-muted);
+  color: var(--inkwell-muted);
   white-space: nowrap;
-  background: var(--jot-surface);
-  border: 1px solid var(--jot-border);
+  background: var(--inkwell-surface);
+  border: 1px solid var(--inkwell-border);
   border-radius: 20px;
   padding: 4px 10px;
-  box-shadow: var(--jot-shadow);
+  box-shadow: var(--inkwell-shadow);
 }
 
 /* Mic button */
@@ -256,9 +256,9 @@ onUnmounted(() => {
   width: 36px;
   height: 36px;
   border-radius: 50%;
-  border: 1px solid var(--jot-border);
-  background: var(--jot-surface);
-  color: var(--jot-muted);
+  border: 1px solid var(--inkwell-border);
+  background: var(--inkwell-surface);
+  color: var(--inkwell-muted);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -272,8 +272,8 @@ onUnmounted(() => {
 .mic-button:hover:not(:disabled) {
   box-shadow: 0 4px 14px rgb(17 17 19 / 14%);
   transform: translateY(-1px);
-  color: var(--jot-accent);
-  border-color: var(--jot-accent);
+  color: var(--inkwell-accent);
+  border-color: var(--inkwell-accent);
 }
 
 .mic-button.recording {

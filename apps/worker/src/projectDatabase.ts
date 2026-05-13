@@ -1,5 +1,5 @@
 // @ts-nocheck
-const JOT_DATABASE_TITLE = 'Jot';
+const INKWELL_DATABASE_TITLE = 'Inkwell';
 const PROJECT_STATE_BLOCK_KEY = 'project-state';
 
 const PROJECT_PROPERTIES = {
@@ -10,8 +10,8 @@ const PROJECT_PROPERTIES = {
   updated: 'Updated',
   createdBy: 'Created by',
   lastEditedBy: 'Last edited by',
-  jotId: 'Jot ID',
-  managed: 'Managed by Jot',
+  inkwellId: 'Inkwell ID',
+  managed: 'Managed by Inkwell',
 };
 
 export function createProjectDatabaseHelpers({
@@ -30,8 +30,8 @@ export function createProjectDatabaseHelpers({
     store.projectBlocks ??= {};
     store.threadBlocks ??= {};
     store.blockMappings ??= {};
-    const ignoredDatabaseIds = store.ignoredJotDatabaseIds ?? new Set();
-    const stored = store.jotDatabase;
+    const ignoredDatabaseIds = store.ignoredInkwellDatabaseIds ?? new Set();
+    const stored = store.inkwellDatabase;
 
     if (stored?.databaseId && stored?.dataSourceId && !ignoredDatabaseIds.has(stored.databaseId)) {
       const existing = await refreshDatabase(store, stored);
@@ -45,7 +45,7 @@ export function createProjectDatabaseHelpers({
       const foundAccessible = await findExistingDatabase(store, { ignoredDatabaseIds });
 
       if (foundAccessible) {
-        store.jotDatabase = foundAccessible;
+        store.inkwellDatabase = foundAccessible;
         await ensureProjectSchema(store, foundAccessible.dataSourceId);
         await ensureProjectViews(store, foundAccessible);
         appendLog(store, 'project_database_adopted', foundAccessible.title);
@@ -61,7 +61,7 @@ export function createProjectDatabaseHelpers({
       : undefined;
 
     if (found) {
-      store.jotDatabase = found;
+      store.inkwellDatabase = found;
       await ensureProjectSchema(store, found.dataSourceId);
       await ensureProjectViews(store, found);
       appendLog(store, 'project_database_adopted', found.title);
@@ -71,7 +71,7 @@ export function createProjectDatabaseHelpers({
     const created = await createProjectDatabaseWithFallback(store, parentPage?.id, {
       ignoredDatabaseIds,
     });
-    store.jotDatabase = created;
+    store.inkwellDatabase = created;
     await ensureProjectViews(store, created);
     appendLog(store, 'project_database_created', created.title);
     return created;
@@ -81,13 +81,13 @@ export function createProjectDatabaseHelpers({
     if (selectedParentPageId) {
       try {
         const page = await notionRequest(store, `/pages/${selectedParentPageId}`);
-        store.jotRootPage = {
+        store.inkwellRootPage = {
           id: page.id,
           parentPageId: undefined,
-          title: titleFromPage(page) || JOT_DATABASE_TITLE,
+          title: titleFromPage(page) || INKWELL_DATABASE_TITLE,
           url: page.url,
         };
-        return store.jotRootPage;
+        return store.inkwellRootPage;
       } catch (error) {
         if (!isNotionObjectNotFound(error) && !isBlockNotPageError(error)) {
           throw error;
@@ -98,30 +98,30 @@ export function createProjectDatabaseHelpers({
       return undefined;
     }
 
-    if (store.jotRootPage?.id) {
+    if (store.inkwellRootPage?.id) {
       try {
-        const page = await notionRequest(store, `/pages/${store.jotRootPage.id}`);
-        store.jotRootPage = {
+        const page = await notionRequest(store, `/pages/${store.inkwellRootPage.id}`);
+        store.inkwellRootPage = {
           id: page.id,
           parentPageId: undefined,
-          title: titleFromPage(page) || store.jotRootPage.title || JOT_DATABASE_TITLE,
+          title: titleFromPage(page) || store.inkwellRootPage.title || INKWELL_DATABASE_TITLE,
           url: page.url,
         };
-        return store.jotRootPage;
+        return store.inkwellRootPage;
       } catch {
         // Recreate below.
       }
     }
 
-    const page = await createWorkspacePage(store, JOT_DATABASE_TITLE);
-    store.jotRootPage = {
+    const page = await createWorkspacePage(store, INKWELL_DATABASE_TITLE);
+    store.inkwellRootPage = {
       id: page.id,
       parentPageId: undefined,
-      title: titleFromPage(page) || JOT_DATABASE_TITLE,
+      title: titleFromPage(page) || INKWELL_DATABASE_TITLE,
       url: page.url,
     };
-    appendLog(store, 'database_parent_created', store.jotRootPage.title);
-    return store.jotRootPage;
+    appendLog(store, 'database_parent_created', store.inkwellRootPage.title);
+    return store.inkwellRootPage;
   }
 
   async function refreshDatabase(store, stored) {
@@ -134,7 +134,7 @@ export function createProjectDatabaseHelpers({
       }
 
       const refreshed = databaseSummary(database, dataSourceId, stored.parentPageId);
-      store.jotDatabase = refreshed;
+      store.inkwellDatabase = refreshed;
       await ensureProjectSchema(store, dataSourceId);
       await ensureProjectViews(store, refreshed);
       return refreshed;
@@ -148,7 +148,7 @@ export function createProjectDatabaseHelpers({
     const response = await notionRequest(store, '/search', {
       method: 'POST',
       body: {
-        query: JOT_DATABASE_TITLE,
+        query: INKWELL_DATABASE_TITLE,
         page_size: 20,
         filter: {
           property: 'object',
@@ -163,7 +163,7 @@ export function createProjectDatabaseHelpers({
       if (
         !ignoredDatabaseIds.has(database.id) &&
         !isArchivedObject(database) &&
-        titleFromDatabase(database) === JOT_DATABASE_TITLE &&
+        titleFromDatabase(database) === INKWELL_DATABASE_TITLE &&
         (parentPageId === undefined || parentPageIdFromObject(database) === parentPageId) &&
         dataSourceId
       ) {
@@ -201,7 +201,7 @@ export function createProjectDatabaseHelpers({
       method: 'POST',
       body: {
         parent: databaseParent(parentPageId),
-        title: richText(JOT_DATABASE_TITLE),
+        title: richText(INKWELL_DATABASE_TITLE),
         is_inline: false,
         initial_data_source: {
           title: richText('Projects'),
@@ -213,7 +213,7 @@ export function createProjectDatabaseHelpers({
     const dataSourceId = firstDataSourceId(fullDatabase) ?? firstDataSourceId(database);
 
     if (!dataSourceId) {
-      throw new Error('Notion did not return a data source for the Jot database.');
+      throw new Error('Notion did not return a data source for the Inkwell database.');
     }
 
     return databaseSummary(fullDatabase, dataSourceId, parentPageId);
@@ -267,8 +267,8 @@ export function createProjectDatabaseHelpers({
       });
 
       if (created?.id) {
-        store.jotDatabase.views = {
-          ...(store.jotDatabase.views ?? {}),
+        store.inkwellDatabase.views = {
+          ...(store.inkwellDatabase.views ?? {}),
           [view.name]: created.id,
         };
       }
@@ -316,7 +316,7 @@ export function createProjectDatabaseHelpers({
       : undefined;
 
     if (!page) {
-      page = await findProjectPageByJotId(store, database.dataSourceId, project.id);
+      page = await findProjectPageByInkwellId(store, database.dataSourceId, project.id);
     }
 
     try {
@@ -362,8 +362,8 @@ export function createProjectDatabaseHelpers({
     const database = await ensureProjectDatabase(store, { selectedParentPageId });
     const clearSelectedParentPage = Boolean(
       requestedParentPageId &&
-      store.jotRootPage?.id &&
-      store.jotRootPage.id !== requestedParentPageId,
+      store.inkwellRootPage?.id &&
+      store.inkwellRootPage.id !== requestedParentPageId,
     );
     const rows = await queryManagedProjectRows(store, database.dataSourceId);
     const projects = [];
@@ -428,11 +428,11 @@ export function createProjectDatabaseHelpers({
   }
 
   function invalidateProjectDatabase(store, databaseId) {
-    store.ignoredJotDatabaseIds ??= new Set();
+    store.ignoredInkwellDatabaseIds ??= new Set();
     if (databaseId) {
-      store.ignoredJotDatabaseIds.add(databaseId);
+      store.ignoredInkwellDatabaseIds.add(databaseId);
     }
-    store.jotDatabase = undefined;
+    store.inkwellDatabase = undefined;
     clearSyncMappings(store);
   }
 
@@ -480,7 +480,7 @@ export function createProjectDatabaseHelpers({
 
   function projectFromNotionPage(page) {
     const properties = page.properties ?? {};
-    const id = richTextProperty(properties[PROJECT_PROPERTIES.jotId]).trim();
+    const id = richTextProperty(properties[PROJECT_PROPERTIES.inkwellId]).trim();
 
     if (!id) {
       return undefined;
@@ -571,13 +571,13 @@ export function createProjectDatabaseHelpers({
     };
   }
 
-  async function findProjectPageByJotId(store, dataSourceId, projectId) {
+  async function findProjectPageByInkwellId(store, dataSourceId, projectId) {
     const response = await notionRequest(store, `/data_sources/${dataSourceId}/query`, {
       method: 'POST',
       body: {
         page_size: 1,
         filter: {
-          property: PROJECT_PROPERTIES.jotId,
+          property: PROJECT_PROPERTIES.inkwellId,
           rich_text: { equals: projectId },
         },
       },
@@ -799,7 +799,7 @@ export function projectProperties(project) {
     [PROJECT_PROPERTIES.updated]: {
       date: { start: updatedAt },
     },
-    [PROJECT_PROPERTIES.jotId]: {
+    [PROJECT_PROPERTIES.inkwellId]: {
       rich_text: [{ text: { content: project.id } }],
     },
     [PROJECT_PROPERTIES.managed]: {
@@ -824,7 +824,7 @@ function projectSchema() {
     [PROJECT_PROPERTIES.updated]: { date: {} },
     [PROJECT_PROPERTIES.createdBy]: { created_by: {} },
     [PROJECT_PROPERTIES.lastEditedBy]: { last_edited_by: {} },
-    [PROJECT_PROPERTIES.jotId]: { rich_text: {} },
+    [PROJECT_PROPERTIES.inkwellId]: { rich_text: {} },
     [PROJECT_PROPERTIES.managed]: { checkbox: {} },
   };
 }
@@ -917,7 +917,7 @@ function databaseSummary(database, dataSourceId, parentPageId) {
     databaseId: database.id,
     dataSourceId,
     parentPageId: parentPageId ?? parentPageIdFromObject(database),
-    title: titleFromDatabase(database) || JOT_DATABASE_TITLE,
+    title: titleFromDatabase(database) || INKWELL_DATABASE_TITLE,
     url: database.url,
   };
 }

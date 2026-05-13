@@ -6,7 +6,7 @@ import type {
   ConsumeTextDragMessage,
   HeadingDragStartedMessage,
   InsertCaptureRequestMessage,
-  JotRuntimeMessage,
+  InkwellRuntimeMessage,
   OpenSourceRequestMessage,
   ProjectPageUpdatedMessage,
   RestoreHighlightMessage,
@@ -33,28 +33,28 @@ export default defineBackground(() => {
     void browser.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
   }
 
-  browser.runtime.onMessage.addListener((message: JotRuntimeMessage) => {
-    if (message?.type === 'jot.captureSelection') {
+  browser.runtime.onMessage.addListener((message: InkwellRuntimeMessage) => {
+    if (message?.type === 'inkwell.captureSelection') {
       return handleCaptureSelection(message);
     }
 
-    if (message?.type === 'jot.headingDragStarted') {
+    if (message?.type === 'inkwell.headingDragStarted') {
       return handleHeadingDragStarted(message);
     }
 
-    if (message?.type === 'jot.consumeHeadingDrag') {
+    if (message?.type === 'inkwell.consumeHeadingDrag') {
       return handleConsumeHeadingDrag(message);
     }
 
-    if (message?.type === 'jot.textDragStarted') {
+    if (message?.type === 'inkwell.textDragStarted') {
       return handleTextDragStarted(message);
     }
 
-    if (message?.type === 'jot.consumeTextDrag') {
+    if (message?.type === 'inkwell.consumeTextDrag') {
       return handleConsumeTextDrag(message);
     }
 
-    if (message?.type === 'jot.openSourceRequest') {
+    if (message?.type === 'inkwell.openSourceRequest') {
       return handleOpenSourceRequest(message);
     }
 
@@ -133,7 +133,7 @@ function handleConsumeTextDrag(message: ConsumeTextDragMessage) {
 async function handleCaptureSelection(message: CaptureSelectionMessage) {
   const wasInsertedBySidePanel = await browser.runtime
     .sendMessage({
-      type: 'jot.insertCaptureRequest',
+      type: 'inkwell.insertCaptureRequest',
       payload: message.payload,
     } satisfies InsertCaptureRequestMessage)
     .then((response: unknown) => response === true)
@@ -147,7 +147,7 @@ async function handleCaptureSelection(message: CaptureSelectionMessage) {
 
   void browser.runtime
     .sendMessage({
-      type: 'jot.projectPageUpdated',
+      type: 'inkwell.projectPageUpdated',
       payload: {
         page,
       },
@@ -169,7 +169,7 @@ async function handleOpenSourceRequest(message: OpenSourceRequestMessage) {
 
   await browser.tabs
     .sendMessage(tab.id, {
-      type: 'jot.restoreHighlight',
+      type: 'inkwell.restoreHighlight',
       payload: message.payload,
     } satisfies RestoreHighlightMessage)
     .catch(() => undefined);

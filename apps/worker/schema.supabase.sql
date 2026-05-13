@@ -1,4 +1,4 @@
--- Jot sync server — Supabase schema
+-- Inkwell sync server — Supabase schema
 -- Run in Supabase SQL editor: project → SQL Editor → New query
 
 CREATE TABLE IF NOT EXISTS "user" (
@@ -52,12 +52,12 @@ CREATE TABLE IF NOT EXISTS notion_installations (
 CREATE INDEX IF NOT EXISTS idx_notion_installations_user_id ON notion_installations(user_id);
 CREATE INDEX IF NOT EXISTS idx_notion_installations_active ON notion_installations(active);
 
-CREATE TABLE IF NOT EXISTS jot_sync_state (
+CREATE TABLE IF NOT EXISTS inkwell_sync_state (
   installation_id BIGINT PRIMARY KEY REFERENCES notion_installations(id) ON DELETE CASCADE,
-  jot_database_id TEXT,
-  jot_data_source_id TEXT,
-  jot_parent_page_id TEXT,
-  jot_database_title TEXT,
+  inkwell_database_id TEXT,
+  inkwell_data_source_id TEXT,
+  inkwell_parent_page_id TEXT,
+  inkwell_database_title TEXT,
   note_pages_json JSONB NOT NULL DEFAULT '{}',
   block_mappings_json JSONB NOT NULL DEFAULT '{}',
   parent_pages_json JSONB NOT NULL DEFAULT '{}',
@@ -105,14 +105,14 @@ ALTER TABLE "user" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE session ENABLE ROW LEVEL SECURITY;
 ALTER TABLE account ENABLE ROW LEVEL SECURITY;
 ALTER TABLE notion_installations ENABLE ROW LEVEL SECURITY;
-ALTER TABLE jot_sync_state ENABLE ROW LEVEL SECURITY;
+ALTER TABLE inkwell_sync_state ENABLE ROW LEVEL SECURITY;
 
 -- Service role gets full access (worker uses service_role key)
 CREATE POLICY "service_role_user"               ON "user"               FOR ALL TO service_role USING (true) WITH CHECK (true);
 CREATE POLICY "service_role_session"            ON session              FOR ALL TO service_role USING (true) WITH CHECK (true);
 CREATE POLICY "service_role_account"            ON account              FOR ALL TO service_role USING (true) WITH CHECK (true);
 CREATE POLICY "service_role_notion_installs"    ON notion_installations FOR ALL TO service_role USING (true) WITH CHECK (true);
-CREATE POLICY "service_role_jot_sync_state"     ON jot_sync_state      FOR ALL TO service_role USING (true) WITH CHECK (true);
+CREATE POLICY "service_role_inkwell_sync_state"     ON inkwell_sync_state      FOR ALL TO service_role USING (true) WITH CHECK (true);
 
 ALTER TABLE notion_block_sync ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "service_role_notion_block_sync" ON notion_block_sync FOR ALL TO service_role USING (true) WITH CHECK (true);

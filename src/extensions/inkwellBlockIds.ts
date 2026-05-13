@@ -2,7 +2,7 @@ import { Extension } from '@tiptap/core';
 import { Plugin } from '@tiptap/pm/state';
 import type { DocumentContent } from '@/src/types/capture';
 
-export const JOT_BLOCK_ID_ATTR = 'jotBlockId';
+export const INKWELL_BLOCK_ID_ATTR = 'inkwellBlockId';
 
 const TOP_LEVEL_BLOCK_TYPES = [
   'paragraph',
@@ -18,22 +18,22 @@ const TOP_LEVEL_BLOCK_TYPES = [
   'taskList',
 ];
 
-export const JotBlockIds = Extension.create({
-  name: 'jotBlockIds',
+export const InkwellBlockIds = Extension.create({
+  name: 'inkwellBlockIds',
 
   addGlobalAttributes() {
     return [
       {
         types: TOP_LEVEL_BLOCK_TYPES,
         attributes: {
-          [JOT_BLOCK_ID_ATTR]: {
+          [INKWELL_BLOCK_ID_ATTR]: {
             default: null,
-            parseHTML: (element) => element.getAttribute('data-jot-block-id'),
+            parseHTML: (element) => element.getAttribute('data-inkwell-block-id'),
             renderHTML: (attributes) => {
-              const value = attributes[JOT_BLOCK_ID_ATTR];
+              const value = attributes[INKWELL_BLOCK_ID_ATTR];
 
               return typeof value === 'string' && value
-                ? { 'data-jot-block-id': value }
+                ? { 'data-inkwell-block-id': value }
                 : {};
             },
           },
@@ -55,7 +55,7 @@ export const JotBlockIds = Extension.create({
               return;
             }
 
-            const value = node.attrs[JOT_BLOCK_ID_ATTR];
+            const value = node.attrs[INKWELL_BLOCK_ID_ATTR];
             const id = typeof value === 'string' && value ? value : '';
 
             if (id && !seen.has(id)) {
@@ -63,11 +63,11 @@ export const JotBlockIds = Extension.create({
               return;
             }
 
-            const nextId = createJotBlockId();
+            const nextId = createInkwellBlockId();
             seen.add(nextId);
             transaction = transaction.setNodeMarkup(offset, undefined, {
               ...node.attrs,
-              [JOT_BLOCK_ID_ATTR]: nextId,
+              [INKWELL_BLOCK_ID_ATTR]: nextId,
             });
             changed = true;
           });
@@ -79,12 +79,12 @@ export const JotBlockIds = Extension.create({
   },
 });
 
-export function normalizeJotBlockIds(content: DocumentContent): DocumentContent {
+export function normalizeInkwellBlockIds(content: DocumentContent): DocumentContent {
   const seen = new Set<string>();
   let changed = false;
   const normalizedChildren = (content.content ?? []).map((node) => {
     const attrs = node.attrs ?? {};
-    const value = attrs[JOT_BLOCK_ID_ATTR];
+    const value = attrs[INKWELL_BLOCK_ID_ATTR];
     const id = typeof value === 'string' && value ? value : '';
 
     if (id && !seen.has(id)) {
@@ -93,13 +93,13 @@ export function normalizeJotBlockIds(content: DocumentContent): DocumentContent 
     }
 
     changed = true;
-    const nextId = createJotBlockId();
+    const nextId = createInkwellBlockId();
     seen.add(nextId);
     return {
       ...node,
       attrs: {
         ...attrs,
-        [JOT_BLOCK_ID_ATTR]: nextId,
+        [INKWELL_BLOCK_ID_ATTR]: nextId,
       },
     };
   });
@@ -113,8 +113,8 @@ export function normalizeJotBlockIds(content: DocumentContent): DocumentContent 
     : content;
 }
 
-function createJotBlockId() {
-  return `jot-block-${globalThis.crypto?.randomUUID?.() ?? fallbackId()}`;
+function createInkwellBlockId() {
+  return `inkwell-block-${globalThis.crypto?.randomUUID?.() ?? fallbackId()}`;
 }
 
 function fallbackId() {

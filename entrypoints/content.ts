@@ -1,15 +1,15 @@
 import type {
   CaptureSelectionMessage,
   HeadingDragStartedMessage,
-  JotRuntimeMessage,
+  InkwellRuntimeMessage,
   RestoreHighlightMessage,
   TextDragStartedMessage,
 } from '@/src/types/messages';
 
-const BUTTON_ID = 'jot-inline-save';
-const JOT_DRAG_MIME = 'application/x-jot-capture';
-const JOT_HEADING_DRAG_MIME = 'application/x-jot-heading-capture';
-const JOT_SOURCE_DATA_ATTR = 'data-jot-source';
+const BUTTON_ID = 'inkwell-inline-save';
+const INKWELL_DRAG_MIME = 'application/x-inkwell-capture';
+const INKWELL_HEADING_DRAG_MIME = 'application/x-inkwell-heading-capture';
+const INKWELL_SOURCE_DATA_ATTR = 'data-inkwell-source';
 const LARGE_TEXT_PX = 22;
 type HeadingLevel = 1 | 2 | 3 | 4 | 5 | 6;
 
@@ -23,7 +23,7 @@ export default defineContentScript({
     button.id = BUTTON_ID;
     button.type = 'button';
     button.textContent = 'Save';
-    button.setAttribute('aria-label', 'Save selection to Jot');
+    button.setAttribute('aria-label', 'Save selection to Inkwell');
     Object.assign(button.style, {
       position: 'absolute',
       zIndex: '2147483647',
@@ -41,8 +41,8 @@ export default defineContentScript({
 
     document.documentElement.append(button);
 
-    browser.runtime.onMessage.addListener((message: JotRuntimeMessage) => {
-      if (message?.type !== 'jot.restoreHighlight') {
+    browser.runtime.onMessage.addListener((message: InkwellRuntimeMessage) => {
+      if (message?.type !== 'inkwell.restoreHighlight') {
         return false;
       }
 
@@ -384,7 +384,7 @@ export default defineContentScript({
       const href = payload.highlightMeta.sourceLink || payload.sourceUrl;
       const sourcePayload = JSON.stringify(sourceOpenPayloadFromCapture(payload));
 
-      return `<h${level}><a href="${htmlEscape(href)}" ${JOT_SOURCE_DATA_ATTR}="${htmlEscape(sourcePayload)}">${htmlEscape(payload.text)}</a></h${level}>`;
+      return `<h${level}><a href="${htmlEscape(href)}" ${INKWELL_SOURCE_DATA_ATTR}="${htmlEscape(sourcePayload)}">${htmlEscape(payload.text)}</a></h${level}>`;
     }
 
     function showButton(selection: Selection, text: string) {
@@ -438,7 +438,7 @@ export default defineContentScript({
       button.textContent = 'Saved';
 
       await browser.runtime.sendMessage({
-        type: 'jot.captureSelection',
+        type: 'inkwell.captureSelection',
         payload: selectedPayload,
       } satisfies CaptureSelectionMessage);
 
@@ -459,12 +459,12 @@ export default defineContentScript({
         const headingPayload = buildHeadingDragPayload(event);
 
         if (headingPayload) {
-          event.dataTransfer.setData(JOT_DRAG_MIME, JSON.stringify(headingPayload));
-          event.dataTransfer.setData(JOT_HEADING_DRAG_MIME, '1');
+          event.dataTransfer.setData(INKWELL_DRAG_MIME, JSON.stringify(headingPayload));
+          event.dataTransfer.setData(INKWELL_HEADING_DRAG_MIME, '1');
           event.dataTransfer.setData('text/html', linkedHeadingHtml(headingPayload));
           void browser.runtime
             .sendMessage({
-              type: 'jot.headingDragStarted',
+              type: 'inkwell.headingDragStarted',
               payload: headingPayload,
             } satisfies HeadingDragStartedMessage)
             .catch(() => undefined);
@@ -479,10 +479,10 @@ export default defineContentScript({
         }
 
         const textPayload = buildCapturePayload(selection, selectedText);
-        event.dataTransfer.setData(JOT_DRAG_MIME, JSON.stringify(textPayload));
+        event.dataTransfer.setData(INKWELL_DRAG_MIME, JSON.stringify(textPayload));
         void browser.runtime
           .sendMessage({
-            type: 'jot.textDragStarted',
+            type: 'inkwell.textDragStarted',
             payload: textPayload,
           } satisfies TextDragStartedMessage)
           .catch(() => undefined);
@@ -592,7 +592,7 @@ export default defineContentScript({
       try {
         const highlightRange = range.cloneRange();
         const highlight = document.createElement('mark');
-        highlight.setAttribute('data-jot-restored-highlight', 'true');
+        highlight.setAttribute('data-inkwell-restored-highlight', 'true');
         Object.assign(highlight.style, {
           background: '#fff2a8',
           color: 'inherit',

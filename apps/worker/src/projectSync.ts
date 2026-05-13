@@ -3,7 +3,7 @@ export async function syncProjectFolder({
   store,
   project,
   selectedParentPageId,
-  ensureJotRootPage,
+  ensureInkwellRootPage,
   ensureProjectPage,
   ensureProjectRootPage,
   archiveProjectRootPage,
@@ -55,11 +55,11 @@ export async function syncProjectFolder({
     };
   }
 
-  const jotRootPage = await ensureJotRootPage(store, { selectedParentPageId });
-  const projectPage = await ensureProjectRootPage(store, jotRootPage.id, project);
+  const inkwellRootPage = await ensureInkwellRootPage(store, { selectedParentPageId });
+  const projectPage = await ensureProjectRootPage(store, inkwellRootPage.id, project);
 
   return {
-    parentPage: jotRootPage,
+    parentPage: inkwellRootPage,
     projectPage,
     status: 'saved',
     message: 'Synced project to Notion.',

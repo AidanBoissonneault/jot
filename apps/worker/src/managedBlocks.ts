@@ -1,5 +1,5 @@
 // @ts-nocheck
-const JOT_BLOCK_ID_ATTR = 'jotBlockId';
+const INKWELL_BLOCK_ID_ATTR = 'inkwellBlockId';
 const UPDATEABLE_NOTION_TYPES = new Set([
   'paragraph',
   'quote',
@@ -113,14 +113,14 @@ async function reconcileManagedBlocks({
   store,
   updateManagedBlock,
 }) {
-  const existingByJotId = mappingsByJotId(existingMappings);
-  const desiredIds = new Set(desiredBlocks.map((entry) => entry.jotBlockId));
+  const existingByInkwellId = mappingsByInkwellId(existingMappings);
+  const desiredIds = new Set(desiredBlocks.map((entry) => entry.inkwellBlockId));
   const nextMappings = [];
   const createdByOrder = [];
   let previousNotionBlockId;
 
   for (const entry of desiredBlocks) {
-    const existing = existingByJotId.get(entry.jotBlockId);
+    const existing = existingByInkwellId.get(entry.inkwellBlockId);
 
     if (!existing?.notionBlockId) {
       const [createdBlock] = await appendManagedBlocks(
@@ -185,9 +185,9 @@ async function rebuildReorderedRange({
   store,
 }) {
   const range = reorderedRange(existingMappings, desiredBlocks);
-  const existingByJotId = mappingsByJotId(existingMappings);
+  const existingByInkwellId = mappingsByInkwellId(existingMappings);
   const affectedDesired = desiredBlocks.slice(range.start, range.end + 1);
-  const affectedIds = new Set(affectedDesired.map((entry) => entry.jotBlockId));
+  const affectedIds = new Set(affectedDesired.map((entry) => entry.inkwellBlockId));
   const oldAffectedOrders = existingMappings
     .filter((mapping) => affectedIds.has(mappingKey(mapping)))
     .map((mapping) => mapping.order ?? Number.MAX_SAFE_INTEGER);
@@ -201,7 +201,7 @@ async function rebuildReorderedRange({
   const previousMapping = desiredBlocks
     .slice(0, range.start)
     .reverse()
-    .map((entry) => existingByJotId.get(entry.jotBlockId))
+    .map((entry) => existingByInkwellId.get(entry.inkwellBlockId))
     .find((mapping) => mapping?.notionBlockId);
   const createdByOrder = [];
 
@@ -222,14 +222,14 @@ async function rebuildReorderedRange({
   affectedDesired.forEach((entry, index) => {
     const createdBlock = createdBlocks[index];
     createdByOrder[entry.order] = createdBlock;
-    rebuiltMappings.set(entry.jotBlockId, mappingFromDesired(entry, createdBlock?.id));
+    rebuiltMappings.set(entry.inkwellBlockId, mappingFromDesired(entry, createdBlock?.id));
   });
 
   store.blockMappings[localPageId] = desiredBlocks
     .map((entry) => {
-      const rebuilt = rebuiltMappings.get(entry.jotBlockId);
+      const rebuilt = rebuiltMappings.get(entry.inkwellBlockId);
       if (rebuilt) return rebuilt;
-      return mappingFromDesired(entry, existingByJotId.get(entry.jotBlockId)?.notionBlockId, existingByJotId.get(entry.jotBlockId));
+      return mappingFromDesired(entry, existingByInkwellId.get(entry.inkwellBlockId)?.notionBlockId, existingByInkwellId.get(entry.inkwellBlockId));
     })
     .filter((mapping) => mapping.notionBlockId);
 
@@ -249,10 +249,10 @@ function desiredManagedBlocks({
   const nodes = content?.content ?? [];
 
   return notionBlocks.map((notionBlock, index) => {
-    const jotBlockId = jotBlockIdFromNode(nodes[index], index);
+    const inkwellBlockId = inkwellBlockIdFromNode(nodes[index], index);
     return {
-      jotBlockId,
-      localNodeId: jotBlockId,
+      inkwellBlockId,
+      localNodeId: inkwellBlockId,
       localPageId,
       notionBlock,
       kind: kindFromNotionBlock(notionBlock),
@@ -262,15 +262,15 @@ function desiredManagedBlocks({
   });
 }
 
-function jotBlockIdFromNode(node, index) {
-  const value = node?.attrs?.[JOT_BLOCK_ID_ATTR];
+function inkwellBlockIdFromNode(node, index) {
+  const value = node?.attrs?.[INKWELL_BLOCK_ID_ATTR];
   return typeof value === 'string' && value ? value : `block-${index}`;
 }
 
 function mappingFromDesired(entry, notionBlockId, previous = {}) {
   return {
     localPageId: entry.localPageId,
-    jotBlockId: entry.jotBlockId,
+    inkwellBlockId: entry.inkwellBlockId,
     localNodeId: entry.localNodeId,
     notionBlockId,
     kind: entry.kind,
@@ -281,7 +281,7 @@ function mappingFromDesired(entry, notionBlockId, previous = {}) {
   };
 }
 
-function mappingsByJotId(mappings) {
+function mappingsByInkwellId(mappings) {
   const result = new Map();
 
   for (const mapping of mappings) {
@@ -292,30 +292,30 @@ function mappingsByJotId(mappings) {
 }
 
 function mappingKey(mapping) {
-  return mapping.jotBlockId ?? mapping.localNodeId;
+  return mapping.inkwellBlockId ?? mapping.localNodeId;
 }
 
 function hasReorderedManagedBlocks(existingMappings, desiredBlocks) {
-  const desiredIds = new Set(desiredBlocks.map((entry) => entry.jotBlockId));
+  const desiredIds = new Set(desiredBlocks.map((entry) => entry.inkwellBlockId));
   const existingIds = new Set(existingMappings.map(mappingKey));
   const oldCommon = existingMappings
     .map(mappingKey)
     .filter((id) => desiredIds.has(id));
   const newCommon = desiredBlocks
-    .map((entry) => entry.jotBlockId)
+    .map((entry) => entry.inkwellBlockId)
     .filter((id) => existingIds.has(id));
 
   return oldCommon.length > 1 && oldCommon.join('\n') !== newCommon.join('\n');
 }
 
 function reorderedRange(existingMappings, desiredBlocks) {
-  const desiredIds = new Set(desiredBlocks.map((entry) => entry.jotBlockId));
+  const desiredIds = new Set(desiredBlocks.map((entry) => entry.inkwellBlockId));
   const existingIds = new Set(existingMappings.map(mappingKey));
   const oldCommon = existingMappings
     .map(mappingKey)
     .filter((id) => desiredIds.has(id));
   const newCommon = desiredBlocks
-    .map((entry) => entry.jotBlockId)
+    .map((entry) => entry.inkwellBlockId)
     .filter((id) => existingIds.has(id));
   let first = 0;
   let last = newCommon.length - 1;
@@ -330,7 +330,7 @@ function reorderedRange(existingMappings, desiredBlocks) {
 
   const affectedIds = new Set(newCommon.slice(first, last + 1));
   const indexes = desiredBlocks
-    .map((entry, index) => affectedIds.has(entry.jotBlockId) ? index : -1)
+    .map((entry, index) => affectedIds.has(entry.inkwellBlockId) ? index : -1)
     .filter((index) => index >= 0);
 
   return {
