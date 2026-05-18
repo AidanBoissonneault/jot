@@ -776,7 +776,7 @@ export function createProjectDatabaseHelpers({
   };
 }
 
-export function projectProperties(project) {
+function projectProperties(project) {
   const createdAt = project.createdAt ?? new Date().toISOString();
   const updatedAt = project.updatedAt ?? createdAt;
   const category = String(project.category ?? '').trim();

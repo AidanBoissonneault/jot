@@ -15,7 +15,7 @@ export function youtubeEmbedUrl(value: string): string {
   return url.toString();
 }
 
-export function youtubeVideoInfo(value: string): { id: string; start: number } | null {
+function youtubeVideoInfo(value: string): { id: string; start: number } | null {
   try {
     const url = new URL(value);
     const host = url.hostname.toLowerCase();
@@ -48,7 +48,7 @@ export function youtubeVideoInfo(value: string): { id: string; start: number } |
   }
 }
 
-export function youtubeStartSeconds(value: string): number {
+function youtubeStartSeconds(value: string): number {
   if (!value) {
     return 0;
   }

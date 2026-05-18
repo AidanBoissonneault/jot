@@ -2,7 +2,7 @@ import { Extension } from '@tiptap/core';
 import { Plugin } from '@tiptap/pm/state';
 import type { DocumentContent } from '@/src/types/capture';
 
-export const INKWELL_BLOCK_ID_ATTR = 'inkwellBlockId';
+const INKWELL_BLOCK_ID_ATTR = 'inkwellBlockId';
 
 const TOP_LEVEL_BLOCK_TYPES = [
   'paragraph',

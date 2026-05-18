@@ -434,6 +434,39 @@ describe('page title and content saves', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  test('local queue waits 10 seconds after the latest edit before pushing compacted updates', async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn(async () =>
+      jsonResponse({ queued: true, versions: { 'page-inkwell': 2 } }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const store = useInkwellStore();
+    const startingPage = { ...basePage, content: docWithBlock('debounced-block', 'first') };
+
+    await setupStoreWithPages(store, [startingPage]);
+    store.currentPage = startingPage;
+    await store.saveCurrentPageContent(docWithBlock('debounced-block', 'second'), {
+      preserveLocalContent: true,
+    });
+    await vi.advanceTimersByTimeAsync(5_000);
+    await store.saveCurrentPageContent(docWithBlock('debounced-block', 'third'), {
+      preserveLocalContent: true,
+    });
+
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+    await flushPromises(10);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [, requestInit] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    const requestBody = JSON.parse(String(requestInit.body));
+    expect(requestBody.ops).toHaveLength(1);
+    expect(requestBody.ops[0].type).toBe('block_update');
+    expect(requestBody.ops[0].payload.block).toEqual(blockWithId('debounced-block', 'third'));
+  });
+
   test('force flushing sends pending edits immediately', async () => {
     vi.useFakeTimers();
     const fetchMock = vi.fn(async () =>
@@ -491,6 +524,64 @@ describe('page title and content saves', () => {
     const updates = compacted.filter((op) => op.type === 'block_update');
     expect(updates).toHaveLength(1);
     expect(updates[0].payload.block).toEqual(blockWithId('same-block', 'third'));
+  });
+
+  test('mark-only formatting changes enqueue a block update', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      throw new TypeError('offline');
+    }));
+    const store = useInkwellStore();
+    const startingPage = { ...basePage, content: docWithBlock('formatted-block', 'plain') };
+    const formattedContent = docWithMarkedBlock('formatted-block', 'plain', [{ type: 'bold' }]);
+
+    await setupStoreWithPages(store, [startingPage]);
+    store.currentPage = startingPage;
+    await store.saveCurrentPageContent(formattedContent, {
+      preserveLocalContent: true,
+    });
+
+    const updates = compactPendingSyncOps(await listPendingSyncOps())
+      .filter((op) => op.type === 'block_update');
+    expect(updates).toHaveLength(1);
+    expect(updates[0].payload.block).toEqual(formattedContent.content?.[0]);
+  });
+
+  test('highlight formatting changes enqueue a block update', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      throw new TypeError('offline');
+    }));
+    const store = useInkwellStore();
+    const startingPage = { ...basePage, content: docWithBlock('highlight-block', 'plain') };
+    const highlightedContent = docWithMarkedBlock('highlight-block', 'plain', [
+      { type: 'textStyle', attrs: { backgroundColor: '#fef08a', color: null, fontSize: null } },
+    ]);
+
+    await setupStoreWithPages(store, [startingPage]);
+    store.currentPage = startingPage;
+    await store.saveCurrentPageContent(highlightedContent, {
+      preserveLocalContent: true,
+    });
+
+    const updates = compactPendingSyncOps(await listPendingSyncOps())
+      .filter((op) => op.type === 'block_update');
+    expect(updates).toHaveLength(1);
+    expect(updates[0].payload.block).toEqual(highlightedContent.content?.[0]);
+  });
+
+  test('saving unchanged content does not enqueue a fallback page upsert', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      throw new TypeError('offline');
+    }));
+    const store = useInkwellStore();
+    const startingPage = { ...basePage, content: docWithBlock('unchanged-block', 'same') };
+
+    await setupStoreWithPages(store, [startingPage]);
+    store.currentPage = startingPage;
+    await store.saveCurrentPageContent(startingPage.content, {
+      preserveLocalContent: true,
+    });
+
+    expect(await listPendingSyncOps()).toEqual([]);
   });
 
   test('a create followed by update keeps the complete latest block snapshot', async () => {
@@ -921,6 +1012,23 @@ function blockWithId(inkwellBlockId: string, text: string): DocumentContent {
     type: 'paragraph',
     attrs: { inkwellBlockId },
     content: [{ type: 'text', text }],
+  };
+}
+
+function docWithMarkedBlock(
+  inkwellBlockId: string,
+  text: string,
+  marks: NonNullable<DocumentContent['marks']>,
+): DocumentContent {
+  return {
+    type: 'doc',
+    content: [
+      {
+        type: 'paragraph',
+        attrs: { inkwellBlockId },
+        content: [{ type: 'text', text, marks }],
+      },
+    ],
   };
 }
 

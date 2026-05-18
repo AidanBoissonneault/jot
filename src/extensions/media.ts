@@ -3,7 +3,7 @@ import { Image } from '@tiptap/extension-image';
 import { Youtube } from '@tiptap/extension-youtube';
 import { Audio } from '@tiptap/extension-audio';
 import { NodeSelection } from '@tiptap/pm/state';
-import { INKWELL_IMAGE_MOVE_MIME, rememberInkwellImageMovePayload } from '@/src/extensions/mediaDrop';
+import { INKWELL_IMAGE_MOVE_MIME, rememberInkwellImageMovePayload } from '@/src/extensions/inkwellImageMove';
 import { notionClient } from '@/src/services/notionClient';
 import { youtubeEmbedUrl } from '@/src/lib/youtubeUtils';
 export { youtubeEmbedUrl } from '@/src/lib/youtubeUtils';
@@ -12,7 +12,7 @@ const DEFAULT_SYNC_SERVER_URL = 'http://localhost:8787';
 const YOUTUBE_ALLOW =
   'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share';
 
-export const InkwellImage = Image.extend({
+const InkwellImage = Image.extend({
   addAttributes() {
     return {
       ...this.parent?.(),
@@ -238,7 +238,7 @@ export const InkwellYoutube = Youtube.configure({
   },
 });
 
-export const InkwellAudio = Audio.extend({
+const InkwellAudio = Audio.extend({
   addCommands() {
     return {
       setAudio:

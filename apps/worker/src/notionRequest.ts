@@ -120,7 +120,7 @@ export async function uploadFileToNotion(
   return id;
 }
 
-export function createRateLimiter({
+function createRateLimiter({
   requestsPerSecond = DEFAULT_REQUESTS_PER_SECOND,
   sleep = defaultSleep,
   now = Date.now,

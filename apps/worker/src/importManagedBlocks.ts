@@ -32,7 +32,7 @@ export async function importManagedBlocks({
   return mapped.content?.length ? mapped : null;
 }
 
-export function rebuildImportedBlockMappings({
+function rebuildImportedBlockMappings({
   hash = defaultHash,
   imported,
   localPageId,

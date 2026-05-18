@@ -1,7 +1,7 @@
 import type { DocumentContent, Project, ProjectPage } from '@/src/types/capture';
 import { idbGet, idbSet } from '@/src/services/idbStore';
-import type { SyncBlockOperation as BlockSyncOp, SyncBlockOperationType as BlockSyncOpType } from '@/src/types/sync';
-export type { BlockSyncOp, BlockSyncOpType };
+import type { SyncBlockOperation as BlockSyncOp } from '@/src/types/sync';
+export type { BlockSyncOp };
 
 const PENDING_SYNC_OPS_KEY = 'pending_sync_ops';
 const SYNC_SEQUENCE_KEY = 'pending_sync_sequence';
@@ -114,7 +114,7 @@ export function buildPageSyncOps({
     });
   }
 
-  return ops.length ? ops : [{ ...base, type: 'page_upsert' }];
+  return ops;
 }
 
 export function compactPendingSyncOps(ops: BlockSyncOp[]): BlockSyncOp[] {

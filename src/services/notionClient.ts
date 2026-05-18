@@ -48,16 +48,6 @@ type InkwellStorage = {
   syncConfig?: SyncConfig;
 };
 
-export type OptimisticProjectCreation = {
-  page: ProjectPage;
-  project: Project;
-  settled: Promise<{ page: ProjectPage; project: Project }>;
-};
-
-export type OptimisticPageCreation = {
-  page: ProjectPage;
-  settled: Promise<ProjectPage>;
-};
 
 const STORAGE_KEYS: Array<keyof InkwellStorage> = [
   'activePageIdsByProject',
@@ -530,13 +520,15 @@ async function enqueuePageSync(
     content: normalizeInkwellBlockIds(page.content),
   };
 
-  await addPendingSyncOps(buildPageSyncOps({
+  const pendingOps = await addPendingSyncOps(buildPageSyncOps({
     previousPage,
     page: normalizedPage,
     project,
     selectedParentPageId: syncConfig.selectedParentPageId,
   }));
-  triggerQueueDelivery();
+  if (pendingOps.length) {
+    triggerQueueDelivery();
+  }
 
   return syncConfig.connected
     ? withSyncStatus(normalizedPage, 'saved')
@@ -546,13 +538,7 @@ async function enqueuePageSync(
 
 function triggerQueueDelivery(): void {
   if (queueDeliveryPromise) return;
-  if (queueDeliveryTimer) {
-    clearTimeout(queueDeliveryTimer);
-  }
-  queueDeliveryTimer = setTimeout(() => {
-    queueDeliveryTimer = undefined;
-    runQueueDelivery();
-  }, 0);
+  scheduleNextQueueDelivery(LOCAL_QUEUE_DELIVERY_DELAY_MS);
 }
 
 function runQueueDelivery(): void {

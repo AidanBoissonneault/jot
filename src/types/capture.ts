@@ -1,7 +1,6 @@
 export type CaptureType = 'quote' | 'task' | 'idea' | 'link';
 export type OptimisticStatus = 'creating' | 'saving' | 'saved' | 'stale' | 'error';
 export type SaveStatus = 'idle' | OptimisticStatus;
-export type MediaUploadStatus = OptimisticStatus;
 
 export type HighlightMeta = {
   text: string;
@@ -73,22 +72,6 @@ export type ProjectPage = {
   syncState?: SaveStatus;
 };
 
-export type CreateCaptureInput = Omit<Capture, 'id' | 'createdAt'> & {
-  createdAt?: string;
-};
-
-export type NotionBlockMapping = {
-  localPageId: string;
-  inkwellBlockId?: string;
-  localNodeId?: string;
-  captureId?: string;
-  notionBlockId: string;
-  kind: 'page-title' | 'paragraph' | 'heading' | 'quote' | 'task' | 'source' | 'media' | 'divider' | 'code';
-  lastSyncedHash: string;
-  oldState?: unknown;
-  newState?: unknown;
-  order?: number;
-};
 
 export type SyncConfig = {
   serverUrl: string;

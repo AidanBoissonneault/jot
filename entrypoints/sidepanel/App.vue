@@ -20,17 +20,19 @@ import { InkwellBlockIds, normalizeInkwellBlockIds } from '@/src/extensions/inkw
 import {
   AUDIO_UPLOAD_MAX_BYTES,
   IMAGE_UPLOAD_MAX_BYTES,
-  type InkwellImageMovePayload,
-  isEditorInternalDrop,
   isUploadableAudioFile,
   isUploadableImageFile,
   peekUploadableAudioDrop,
   peekUploadableImageDrop,
-  readInkwellImageMovePayload,
   readAudioDropSrc,
   readImageDropSrc,
   readYoutubeDropSrc,
 } from '@/src/extensions/mediaDrop';
+import {
+  type InkwellImageMovePayload,
+  isEditorInternalDrop,
+  readInkwellImageMovePayload,
+} from '@/src/extensions/inkwellImageMove';
 import {
   createCapturedContent,
   createLinkedHeadingContent,
@@ -934,32 +936,41 @@ function setContextBlockType(event: Event) {
   applyBlockType((event.target as HTMLSelectElement).value);
 }
 
-function applyBlockType(value: string) {
-  const chain = editor.value?.chain().focus();
+function runEditorFormattingCommand(command: () => boolean | undefined) {
+  const didRun = command() ?? false;
 
-  if (!chain) {
+  if (!didRun) {
     return;
   }
 
+  window.clearTimeout(saveTimer.value);
+  void saveEditorContentOptimistically();
+}
+
+function applyBlockType(value: string) {
   if (value === 'paragraph') {
-    chain.setParagraph().run();
+    runEditorFormattingCommand(() => editor.value?.chain().focus().setParagraph().run());
     return;
   }
 
   if (value.startsWith('heading-')) {
-    chain
-      .toggleHeading({ level: Number(value.replace('heading-', '')) as 1 | 2 | 3 | 4 | 5 | 6 })
-      .run();
+    runEditorFormattingCommand(() =>
+      editor.value
+        ?.chain()
+        .focus()
+        .toggleHeading({ level: Number(value.replace('heading-', '')) as 1 | 2 | 3 | 4 | 5 | 6 })
+        .run(),
+    );
     return;
   }
 
   if (value === 'blockquote') {
-    chain.toggleBlockquote().run();
+    runEditorFormattingCommand(() => editor.value?.chain().focus().toggleBlockquote().run());
     return;
   }
 
   if (value === 'codeBlock') {
-    chain.toggleCodeBlock().run();
+    runEditorFormattingCommand(() => editor.value?.chain().focus().toggleCodeBlock().run());
   }
 }
 
@@ -974,9 +985,9 @@ function setContextFontSize(event: Event) {
 
 function applyFontSize(value: string) {
   if (value) {
-    editor.value?.chain().focus().setFontSize(value).run();
+    runEditorFormattingCommand(() => editor.value?.chain().focus().setFontSize(value).run());
   } else {
-    editor.value?.chain().focus().unsetFontSize().run();
+    runEditorFormattingCommand(() => editor.value?.chain().focus().unsetFontSize().run());
   }
 }
 
@@ -991,9 +1002,9 @@ function applyContextTextColor(value: string) {
 
 function applyTextColor(value: string) {
   if (value) {
-    editor.value?.chain().focus().setTextColor(value).run();
+    runEditorFormattingCommand(() => editor.value?.chain().focus().setTextColor(value).run());
   } else {
-    editor.value?.chain().focus().unsetTextColor().run();
+    runEditorFormattingCommand(() => editor.value?.chain().focus().unsetTextColor().run());
   }
 }
 
@@ -1008,9 +1019,9 @@ function applyContextHighlightColor(value: string) {
 
 function applyHighlightColor(value: string) {
   if (value) {
-    editor.value?.chain().focus().setHighlightColor(value).run();
+    runEditorFormattingCommand(() => editor.value?.chain().focus().setHighlightColor(value).run());
   } else {
-    editor.value?.chain().focus().unsetHighlightColor().run();
+    runEditorFormattingCommand(() => editor.value?.chain().focus().unsetHighlightColor().run());
   }
 }
 
@@ -1041,16 +1052,20 @@ function applyLink(href: string) {
   const trimmedHref = href.trim();
 
   if (!trimmedHref) {
-    editor.value.chain().focus().extendMarkRange('link').unsetLink().run();
+    runEditorFormattingCommand(() =>
+      editor.value?.chain().focus().extendMarkRange('link').unsetLink().run(),
+    );
     return;
   }
 
-  editor.value
-    .chain()
-    .focus()
-    .extendMarkRange('link')
-    .setLink({ href: trimmedHref })
-    .run();
+  runEditorFormattingCommand(() =>
+    editor.value
+      ?.chain()
+      .focus()
+      .extendMarkRange('link')
+      .setLink({ href: trimmedHref })
+      .run(),
+  );
 }
 
 function showEditorContextMenu(view: EditorView, event: MouseEvent) {
@@ -1214,23 +1229,40 @@ function getEditorSelectedText() {
 
 function runContextMarkCommand(command: 'bold' | 'italic' | 'underline' | 'strike' | 'code') {
   restoreEditorContextSelection();
-  const chain = editor.value?.chain().focus();
+  runEditorMarkCommand(command);
+}
 
-  if (!chain) {
-    return;
-  }
+function runEditorMarkCommand(command: 'bold' | 'italic' | 'underline' | 'strike' | 'code' | 'superscript' | 'subscript') {
+  const commands = {
+    bold: () => editor.value?.chain().focus().toggleBold().run(),
+    italic: () => editor.value?.chain().focus().toggleItalic().run(),
+    underline: () => editor.value?.chain().focus().toggleUnderline().run(),
+    strike: () => editor.value?.chain().focus().toggleStrike().run(),
+    code: () => editor.value?.chain().focus().toggleCode().run(),
+    superscript: () => editor.value?.chain().focus().toggleSuperscript().run(),
+    subscript: () => editor.value?.chain().focus().toggleSubscript().run(),
+  };
 
-  if (command === 'bold') {
-    chain.toggleBold().run();
-  } else if (command === 'italic') {
-    chain.toggleItalic().run();
-  } else if (command === 'underline') {
-    chain.toggleUnderline().run();
-  } else if (command === 'strike') {
-    chain.toggleStrike().run();
-  } else {
-    chain.toggleCode().run();
-  }
+  runEditorFormattingCommand(commands[command]);
+}
+
+function runEditorListCommand(command: 'bullet' | 'ordered' | 'task') {
+  const commands = {
+    bullet: () => editor.value?.chain().focus().toggleBulletList().run(),
+    ordered: () => editor.value?.chain().focus().toggleOrderedList().run(),
+    task: () => editor.value?.chain().focus().toggleTaskList().run(),
+  };
+
+  runEditorFormattingCommand(commands[command]);
+}
+
+function runEditorBlockCommand(command: 'blockquote' | 'codeBlock') {
+  const commands = {
+    blockquote: () => editor.value?.chain().focus().toggleBlockquote().run(),
+    codeBlock: () => editor.value?.chain().focus().toggleCodeBlock().run(),
+  };
+
+  runEditorFormattingCommand(commands[command]);
 }
 
 function openContextLinkPanel() {
@@ -1514,7 +1546,7 @@ function findImageMoveSource(view: EditorView, payload: InkwellImageMovePayload)
 }
 
 function clearFormatting() {
-  editor.value?.chain().focus().unsetAllMarks().clearNodes().run();
+  runEditorFormattingCommand(() => editor.value?.chain().focus().unsetAllMarks().clearNodes().run());
 }
 
 async function flushEditorContent() {
@@ -1539,8 +1571,13 @@ async function saveEditorContentInBackground() {
 
   const content = normalizeInkwellBlockIds(sanitizeMediaForSync(editorContent));
   const title = pageTitleDraft.value;
+  const serializedContent = JSON.stringify(content);
 
-  lastAppliedContent = JSON.stringify(content);
+  if (serializedContent === lastAppliedContent && title === page.title) {
+    return;
+  }
+
+  lastAppliedContent = serializedContent;
   await store.savePageContentSnapshot(page, content, {
     preserveLocalContent: true,
     title,
@@ -1594,11 +1631,24 @@ async function runEditorSaveLoop() {
         return;
       }
 
+      const currentPage = store.currentPage;
+
+      if (!currentPage) {
+        return;
+      }
+
       const content = normalizeInkwellBlockIds(sanitizeMediaForSync(editorContent));
-      lastAppliedContent = JSON.stringify(content);
+      const title = pageTitleDraft.value;
+      const serializedContent = JSON.stringify(content);
+
+      if (serializedContent === lastAppliedContent && title === currentPage.title) {
+        return;
+      }
+
+      lastAppliedContent = serializedContent;
       await store.saveCurrentPageContent(content, {
         preserveLocalContent: true,
-        title: pageTitleDraft.value,
+        title,
       });
     } while (
       shouldSaveAgainAfterCurrentSave &&
@@ -2186,7 +2236,7 @@ function textFromNode(node: DocumentContent): string {
                 :disabled="!editor"
                 title="Bold"
                 aria-label="Bold"
-                @click="editor?.chain().focus().toggleBold().run()"
+                @click="runEditorMarkCommand('bold')"
               >
                 <font-awesome-icon :icon="['fas', 'bold']" fixed-width />
                 <span>Bold</span>
@@ -2198,7 +2248,7 @@ function textFromNode(node: DocumentContent): string {
                 :disabled="!editor"
                 title="Italic"
                 aria-label="Italic"
-                @click="editor?.chain().focus().toggleItalic().run()"
+                @click="runEditorMarkCommand('italic')"
               >
                 <font-awesome-icon :icon="['fas', 'italic']" fixed-width />
                 <span>Italic</span>
@@ -2210,7 +2260,7 @@ function textFromNode(node: DocumentContent): string {
                 :disabled="!editor"
                 title="Underline"
                 aria-label="Underline"
-                @click="editor?.chain().focus().toggleUnderline().run()"
+                @click="runEditorMarkCommand('underline')"
               >
                 <font-awesome-icon :icon="['fas', 'underline']" fixed-width />
                 <span>Underline</span>
@@ -2222,7 +2272,7 @@ function textFromNode(node: DocumentContent): string {
                 :disabled="!editor"
                 title="Strikethrough"
                 aria-label="Strikethrough"
-                @click="editor?.chain().focus().toggleStrike().run()"
+                @click="runEditorMarkCommand('strike')"
               >
                 <font-awesome-icon :icon="['fas', 'strikethrough']" fixed-width />
                 <span>Strike</span>
@@ -2234,7 +2284,7 @@ function textFromNode(node: DocumentContent): string {
                 :disabled="!editor"
                 title="Inline code"
                 aria-label="Inline code"
-                @click="editor?.chain().focus().toggleCode().run()"
+                @click="runEditorMarkCommand('code')"
               >
                 <font-awesome-icon :icon="['fas', 'code']" fixed-width />
                 <span>Code</span>
@@ -2246,7 +2296,7 @@ function textFromNode(node: DocumentContent): string {
                 :disabled="!editor"
                 title="Superscript"
                 aria-label="Superscript"
-                @click="editor?.chain().focus().toggleSuperscript().run()"
+                @click="runEditorMarkCommand('superscript')"
               >
                 <span aria-hidden="true" class="text-icon">x2</span>
                 <span>Super</span>
@@ -2258,7 +2308,7 @@ function textFromNode(node: DocumentContent): string {
                 :disabled="!editor"
                 title="Subscript"
                 aria-label="Subscript"
-                @click="editor?.chain().focus().toggleSubscript().run()"
+                @click="runEditorMarkCommand('subscript')"
               >
                 <span aria-hidden="true" class="text-icon">x_2</span>
                 <span>Sub</span>
@@ -2350,7 +2400,7 @@ function textFromNode(node: DocumentContent): string {
                 :disabled="!editor"
                 title="Bullet list"
                 aria-label="Bullet list"
-                @click="editor?.chain().focus().toggleBulletList().run()"
+                @click="runEditorListCommand('bullet')"
               >
                 <font-awesome-icon :icon="['fas', 'list-ul']" fixed-width />
                 <span>Bullet</span>
@@ -2362,7 +2412,7 @@ function textFromNode(node: DocumentContent): string {
                 :disabled="!editor"
                 title="Ordered list"
                 aria-label="Ordered list"
-                @click="editor?.chain().focus().toggleOrderedList().run()"
+                @click="runEditorListCommand('ordered')"
               >
                 <font-awesome-icon :icon="['fas', 'list-ol']" fixed-width />
                 <span>Number</span>
@@ -2374,7 +2424,7 @@ function textFromNode(node: DocumentContent): string {
                 :disabled="!editor"
                 title="Task list"
                 aria-label="Task list"
-                @click="editor?.chain().focus().toggleTaskList().run()"
+                @click="runEditorListCommand('task')"
               >
                 <font-awesome-icon :icon="['fas', 'list-check']" fixed-width />
                 <span>Task</span>
@@ -2389,7 +2439,7 @@ function textFromNode(node: DocumentContent): string {
                 :disabled="!editor"
                 title="Quote"
                 aria-label="Quote"
-                @click="editor?.chain().focus().toggleBlockquote().run()"
+                @click="runEditorBlockCommand('blockquote')"
               >
                 <font-awesome-icon :icon="['fas', 'quote-left']" fixed-width />
                 <span>Quote</span>
@@ -2401,7 +2451,7 @@ function textFromNode(node: DocumentContent): string {
                 :disabled="!editor"
                 title="Code block"
                 aria-label="Code block"
-                @click="editor?.chain().focus().toggleCodeBlock().run()"
+                @click="runEditorBlockCommand('codeBlock')"
               >
                 <font-awesome-icon :icon="['fas', 'code']" fixed-width />
                 <span>Code block</span>

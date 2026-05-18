@@ -91,7 +91,7 @@ function setTextStyleAttribute(
   };
 }
 
-export const TextStyle = Mark.create({
+const TextStyle = Mark.create({
   name: 'textStyle',
   priority: 101,
 
@@ -153,7 +153,7 @@ export const TextStyle = Mark.create({
   },
 });
 
-export const Underline = Mark.create({
+const Underline = Mark.create({
   name: 'underline',
 
   parseHTML() {
@@ -189,7 +189,7 @@ export const Underline = Mark.create({
   },
 });
 
-export const Superscript = Mark.create({
+const Superscript = Mark.create({
   name: 'superscript',
   excludes: 'subscript',
 
@@ -211,7 +211,7 @@ export const Superscript = Mark.create({
   },
 });
 
-export const Subscript = Mark.create({
+const Subscript = Mark.create({
   name: 'subscript',
   excludes: 'superscript',
 
@@ -233,7 +233,7 @@ export const Subscript = Mark.create({
   },
 });
 
-export const TaskList = Node.create({
+const TaskList = Node.create({
   name: 'taskList',
   group: 'block list',
   content: 'taskItem+',
@@ -265,7 +265,7 @@ export const TaskList = Node.create({
   },
 });
 
-export const TaskItem = Node.create({
+const TaskItem = Node.create({
   name: 'taskItem',
   content: 'paragraph block*',
   defining: true,

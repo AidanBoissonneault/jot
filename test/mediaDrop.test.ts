@@ -2,18 +2,20 @@ import { describe, expect, it } from 'vitest';
 import {
   AUDIO_UPLOAD_MAX_BYTES,
   IMAGE_UPLOAD_MAX_BYTES,
-  INKWELL_IMAGE_MOVE_MIME,
   isUploadableAudioFile,
   isUploadableImageFile,
-  isEditorInternalDrop,
   peekUploadableAudioDrop,
   peekUploadableImageDrop,
-  readInkwellImageMovePayload,
   readAudioDropSrc,
   readImageDropSrc,
   readYoutubeDropSrc,
-  rememberInkwellImageMovePayload,
 } from '@/src/extensions/mediaDrop';
+import {
+  INKWELL_IMAGE_MOVE_MIME,
+  isEditorInternalDrop,
+  readInkwellImageMovePayload,
+  rememberInkwellImageMovePayload,
+} from '@/src/extensions/inkwellImageMove';
 
 describe('media drop helpers', () => {
   it('extracts public image URLs from dropped HTML, URI lists, and plain text', () => {

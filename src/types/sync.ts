@@ -130,10 +130,6 @@ export type MediaRefreshResponse = {
   url?: string;
 };
 
-export type SyncErrorResponse = {
-  error?: string;
-  message?: string;
-};
 
 export type SyncEnqueueResponse = {
   queued: true;
@@ -142,12 +138,6 @@ export type SyncEnqueueResponse = {
   opVersions?: Record<string, number>;
 };
 
-export type SyncStatusResponse = {
-  status: 'pending' | 'syncing' | 'synced' | 'failed' | 'conflict';
-  localVersion?: number;
-  syncedVersion?: number;
-  notionBlockId?: string | null;
-};
 
 export type SyncEventMessage =
   | { status: 'synced'; pageId: string; notionBlockId?: string | null; version?: number }

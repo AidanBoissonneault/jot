@@ -221,7 +221,7 @@ export function createRootPageHelpers({
   };
 }
 
-export function pageSummary(page) {
+function pageSummary(page) {
   return {
     id: page.id,
     parentPageId: page.parentPageId,
