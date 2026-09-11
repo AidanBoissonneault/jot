@@ -44,6 +44,15 @@ import {
   LEGAL_TERMS_URL,
   storeCurrentLegalAcceptance,
 } from '@/src/services/legal';
+import {
+  DEFAULT_INTERFACE_SCALE,
+  INTERFACE_SCALE_STEP,
+  loadUserPreferences,
+  MAX_INTERFACE_SCALE,
+  MIN_INTERFACE_SCALE,
+  normalizeInterfaceScale,
+  saveUserPreferences,
+} from '@/src/services/preferences';
 import { useInkwellStore } from '@/src/stores/inkwell';
 import type { DocumentContent } from '@/src/types/capture';
 import type {
@@ -110,7 +119,8 @@ const parentPageTitleDraft = ref('');
 const uiMessage = ref('');
 const hasAcceptedLegalTerms = ref(false);
 const isLegalAcceptanceLoaded = ref(false);
-const activeTab = ref<'editor' | 'projects' | 'media' | 'sync'>('editor');
+const activeTab = ref<'editor' | 'projects' | 'media' | 'sync' | 'settings'>('editor');
+const interfaceScale = ref(DEFAULT_INTERFACE_SCALE);
 const editorToolbarMode = ref<'style' | 'insert' | 'controls'>('style');
 const editorContextMenuRef = ref<HTMLElement | null>(null);
 const editorContextMenu = ref({
@@ -458,7 +468,24 @@ const tabs = [
   { id: 'projects', label: 'Projects', icon: ['fas', 'folder-tree'] },
   { id: 'media', label: 'Media', icon: ['fas', 'photo-film'] },
   { id: 'sync', label: 'Sync', icon: ['fas', 'cloud-arrow-up'] },
+  { id: 'settings', label: 'Settings', icon: ['fas', 'gear'] },
 ] as const;
+
+const interfaceScaleLabel = computed(() => {
+  if (interfaceScale.value < 100) {
+    return 'Compact';
+  }
+
+  if (interfaceScale.value === 100) {
+    return 'Default';
+  }
+
+  if (interfaceScale.value <= 120) {
+    return 'Large';
+  }
+
+  return 'Extra large';
+});
 
 const editorToolbarModes = [
   { id: 'style', label: 'Style', icon: ['fas', 'wand-magic-sparkles'] },
@@ -562,8 +589,20 @@ onMounted(() => {
   document.addEventListener('pointerdown', handleEditorContextMenuPointerDown);
   document.addEventListener('keydown', handleEditorContextMenuKeydown);
   void loadLegalAcceptance();
+  void loadPreferences();
   void initializePanel();
 });
+
+watch(
+  interfaceScale,
+  (scale) => {
+    document.documentElement.style.setProperty(
+      '--inkwell-base-font-size',
+      `${14 * scale / 100}px`,
+    );
+  },
+  { immediate: true },
+);
 
 onBeforeUnmount(() => {
   window.clearTimeout(saveTimer.value);
@@ -675,6 +714,29 @@ async function initializePanel() {
 async function loadLegalAcceptance() {
   hasAcceptedLegalTerms.value = await hasAcceptedCurrentLegalTerms();
   isLegalAcceptanceLoaded.value = true;
+}
+
+async function loadPreferences() {
+  const preferences = await loadUserPreferences();
+  interfaceScale.value = preferences.interfaceScale;
+}
+
+function previewInterfaceScale(event: Event) {
+  interfaceScale.value = normalizeInterfaceScale(
+    Number((event.target as HTMLInputElement).value),
+  );
+}
+
+async function persistInterfaceScale() {
+  const preferences = await saveUserPreferences({
+    interfaceScale: interfaceScale.value,
+  });
+  interfaceScale.value = preferences.interfaceScale;
+}
+
+function setInterfaceScale(scale: number) {
+  interfaceScale.value = normalizeInterfaceScale(scale);
+  void persistInterfaceScale();
 }
 
 async function insertCaptureAtCursor(payload: CaptureSelectionPayload) {
@@ -2044,7 +2106,7 @@ function textFromNode(node: DocumentContent): string {
     </nav>
 
     <section
-      v-if="!store.syncConfig.connected"
+      v-if="!store.syncConfig.connected && activeTab !== 'settings'"
       class="auth-gate"
       aria-label="Notion login"
     >
@@ -3237,6 +3299,72 @@ function textFromNode(node: DocumentContent): string {
       </div>
     </section>
 
+    <section
+      v-if="activeTab === 'settings'"
+      class="tab-panel settings-panel"
+      aria-labelledby="settings-heading"
+    >
+      <div class="panel-section">
+        <div class="settings-heading">
+          <div>
+            <h2 id="settings-heading">Settings</h2>
+            <p>Make Inkwell comfortable to read and use.</p>
+          </div>
+          <span class="setting-value" aria-live="polite">
+            {{ interfaceScaleLabel }} · {{ interfaceScale }}%
+          </span>
+        </div>
+
+        <div class="setting-card">
+          <div class="setting-copy">
+            <label for="interface-scale">Interface size</label>
+            <p id="interface-scale-help">
+              Enlarges text throughout the sidebar. Changes appear immediately
+              and are saved on this browser.
+            </p>
+          </div>
+
+          <input
+            id="interface-scale"
+            class="scale-slider"
+            type="range"
+            :min="MIN_INTERFACE_SCALE"
+            :max="MAX_INTERFACE_SCALE"
+            :step="INTERFACE_SCALE_STEP"
+            :value="interfaceScale"
+            aria-describedby="interface-scale-help interface-scale-bounds"
+            :aria-valuetext="`${interfaceScaleLabel}, ${interfaceScale}%`"
+            @input="previewInterfaceScale"
+            @change="persistInterfaceScale"
+          >
+          <div id="interface-scale-bounds" class="scale-bounds" aria-hidden="true">
+            <span>Smaller</span>
+            <span>Larger</span>
+          </div>
+
+          <div class="scale-presets" aria-label="Interface size presets">
+            <button
+              v-for="preset in [90, 100, 120, 140]"
+              :key="preset"
+              type="button"
+              class="secondary-button"
+              :class="{ active: interfaceScale === preset }"
+              :aria-pressed="interfaceScale === preset"
+              @click="setInterfaceScale(preset)"
+            >
+              {{ preset === 100 ? 'Default' : `${preset}%` }}
+            </button>
+          </div>
+
+          <div class="scale-preview" aria-hidden="true">
+            <small>Preview</small>
+            <strong>Inkwell should feel easy to read.</strong>
+            <span>Adjust the slider until this text is comfortable.</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <div
       v-if="archiveTarget"
       class="modal-backdrop"
@@ -3399,7 +3527,7 @@ function textFromNode(node: DocumentContent): string {
   padding: 7px 12px;
   background: #fffbeb;
   border-bottom: 1px solid #f59e0b;
-  font-size: 12px;
+  font-size: 0.86rem;
   color: #92400e;
   flex-shrink: 0;
 }
@@ -3416,7 +3544,7 @@ function textFromNode(node: DocumentContent): string {
   border: 1px solid #d97706;
   background: transparent;
   color: #92400e;
-  font-size: 12px;
+  font-size: 0.86rem;
   cursor: pointer;
   white-space: nowrap;
 }
@@ -3490,7 +3618,7 @@ function textFromNode(node: DocumentContent): string {
 
 .tabs {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 4px;
   margin-top: 10px;
   padding: 3px;
@@ -3769,6 +3897,104 @@ function textFromNode(node: DocumentContent): string {
 .section-heading h2 {
   margin: 0;
   font-size: 0.95rem;
+}
+
+.settings-panel {
+  overflow: visible;
+}
+
+.settings-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.settings-heading h2,
+.settings-heading p,
+.setting-copy p {
+  margin: 0;
+}
+
+.settings-heading p,
+.setting-copy p {
+  margin-top: 3px;
+  color: var(--inkwell-muted);
+}
+
+.setting-value {
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: var(--inkwell-accent-soft);
+  color: var(--inkwell-accent-strong);
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.setting-card {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--inkwell-border);
+  border-radius: var(--inkwell-radius);
+  background: var(--inkwell-surface);
+  box-shadow: var(--inkwell-shadow);
+}
+
+.setting-copy label {
+  font-size: 0.95rem;
+  font-weight: 800;
+}
+
+.scale-slider {
+  min-height: 24px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  accent-color: var(--inkwell-accent);
+  cursor: pointer;
+}
+
+.scale-bounds {
+  display: flex;
+  justify-content: space-between;
+  margin-top: -10px;
+  color: var(--inkwell-muted);
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.scale-presets {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.scale-presets button {
+  min-width: 0;
+  min-height: 34px;
+  padding: 0 6px;
+  font-weight: 750;
+}
+
+.scale-presets button.active {
+  border-color: var(--inkwell-accent);
+  background: var(--inkwell-accent);
+  color: white;
+}
+
+.scale-preview {
+  display: grid;
+  gap: 3px;
+  padding: 12px;
+  border-radius: var(--inkwell-radius);
+  background: var(--inkwell-surface-muted);
+}
+
+.scale-preview small,
+.scale-preview span {
+  color: var(--inkwell-muted);
 }
 
 .field-label,

@@ -127,6 +127,11 @@ export function createProjectDatabaseHelpers({
   async function refreshDatabase(store, stored) {
     try {
       const database = await notionRequest(store, `/databases/${stored.databaseId}`);
+
+      if (isArchivedObject(database)) {
+        return undefined;
+      }
+
       const dataSourceId = stored.dataSourceId ?? firstDataSourceId(database);
 
       if (!dataSourceId) {
@@ -140,24 +145,51 @@ export function createProjectDatabaseHelpers({
       return refreshed;
     } catch (error) {
       appendLog(store, 'project_database_lookup_error', error.message);
-      return undefined;
+
+      // A missing/removed database is recoverable by discovery. Rate limits,
+      // network errors, and other transient failures are not evidence that the
+      // saved database is wrong; abandoning it can silently select or create a
+      // different Inkwell database.
+      if (isNotionObjectNotFound(error)) {
+        return undefined;
+      }
+
+      throw error;
     }
   }
 
   async function findExistingDatabase(store, { parentPageId, ignoredDatabaseIds = new Set() } = {}) {
-    const response = await notionRequest(store, '/search', {
-      method: 'POST',
-      body: {
+    const databases = [];
+    let cursor;
+
+    do {
+      const body = {
         query: INKWELL_DATABASE_TITLE,
-        page_size: 20,
+        page_size: 100,
         filter: {
           property: 'object',
           value: 'database',
         },
-      },
-    }).catch(() => ({ results: [] }));
+      };
 
-    for (const database of response.results ?? []) {
+      if (cursor) {
+        body.start_cursor = cursor;
+      }
+
+      // Discovery failures must stop the operation. Treating an API failure as
+      // an empty result would create a duplicate database and split user data.
+      const response = await notionRequest(store, '/search', {
+        method: 'POST',
+        body,
+      });
+
+      databases.push(...(response.results ?? []));
+      cursor = response.has_more ? response.next_cursor : undefined;
+    } while (cursor);
+
+    const candidates = [];
+
+    for (const database of databases) {
       const dataSourceId = firstDataSourceId(database);
 
       if (
@@ -167,11 +199,92 @@ export function createProjectDatabaseHelpers({
         (parentPageId === undefined || parentPageIdFromObject(database) === parentPageId) &&
         dataSourceId
       ) {
-        return databaseSummary(database, dataSourceId, parentPageId ?? parentPageIdFromObject(database));
+        candidates.push({
+          database,
+          dataSourceId,
+          mappedProjects: mappedProjectCount(store, database.id),
+          managedProjects: await managedProjectCount(store, dataSourceId),
+        });
       }
     }
 
-    return undefined;
+    candidates.sort(compareDatabaseCandidates);
+    const selected = candidates[0];
+
+    return selected
+      ? databaseSummary(
+          selected.database,
+          selected.dataSourceId,
+          parentPageId ?? parentPageIdFromObject(selected.database),
+        )
+      : undefined;
+  }
+
+  function mappedProjectCount(store, databaseId) {
+    return Object.values(store.projectPages ?? {}).filter(
+      (page) => page?.parentPageId === databaseId,
+    ).length;
+  }
+
+  async function managedProjectCount(store, dataSourceId) {
+    let count = 0;
+    let cursor;
+
+    try {
+      do {
+        const body = {
+          page_size: 100,
+          filter: {
+            property: PROJECT_PROPERTIES.managed,
+            checkbox: { equals: true },
+          },
+        };
+
+        if (cursor) {
+          body.start_cursor = cursor;
+        }
+
+        const response = await notionRequest(store, `/data_sources/${dataSourceId}/query`, {
+          method: 'POST',
+          body,
+        });
+        count += response.results?.length ?? 0;
+        cursor = response.has_more ? response.next_cursor : undefined;
+      } while (cursor);
+
+      return count;
+    } catch (error) {
+      // A same-named, non-Inkwell database will not have the managed property.
+      // Other failures may be transient, so abort discovery instead of making a
+      // guess that could split data across databases.
+      if (
+        error?.code === 'validation_error' &&
+        /managed by inkwell|property/i.test(error?.message ?? '')
+      ) {
+        return -1;
+      }
+
+      throw error;
+    }
+  }
+
+  function compareDatabaseCandidates(first, second) {
+    if (first.mappedProjects !== second.mappedProjects) {
+      return second.mappedProjects - first.mappedProjects;
+    }
+
+    if (first.managedProjects !== second.managedProjects) {
+      return second.managedProjects - first.managedProjects;
+    }
+
+    const editedDifference = Date.parse(second.database.last_edited_time ?? '') -
+      Date.parse(first.database.last_edited_time ?? '');
+
+    if (Number.isFinite(editedDifference) && editedDifference !== 0) {
+      return editedDifference;
+    }
+
+    return String(first.database.id).localeCompare(String(second.database.id));
   }
 
   async function createProjectDatabaseWithFallback(store, parentPageId, {

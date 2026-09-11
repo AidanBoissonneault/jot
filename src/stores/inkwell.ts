@@ -59,17 +59,22 @@ export const useInkwellStore = defineStore('inkwell', () => {
       syncConfig.value = await notionClient
         .refreshSyncSession()
         .catch(() => syncConfig.value);
-      const validateResult = await notionClient.validateNotionCache().catch(() => ({ stalePageIds: [], aheadPageIds: [] }));
-      stalePageIds.value = validateResult.stalePageIds;
-      aheadPageIds.value = validateResult.aheadPageIds;
-      syncConfig.value = await notionClient.getSyncConfig();
-      projects.value = await notionClient.listProjects();
-      const storedProjectId = await notionClient.getCurrentProjectId();
-      currentProjectId.value = projects.value.some(
-        (project) => project.id === storedProjectId,
-      )
-        ? storedProjectId
-        : projects.value[0]?.id ?? '';
+      const hydrated = await hydrateInitialNotionSnapshot();
+
+      if (!hydrated) {
+        const validateResult = await notionClient.validateNotionCache().catch(() => ({ stalePageIds: [], aheadPageIds: [] }));
+        stalePageIds.value = validateResult.stalePageIds;
+        aheadPageIds.value = validateResult.aheadPageIds;
+        syncConfig.value = await notionClient.getSyncConfig();
+        projects.value = await notionClient.listProjects();
+        const storedProjectId = await notionClient.getCurrentProjectId();
+        currentProjectId.value = projects.value.some(
+          (project) => project.id === storedProjectId,
+        )
+          ? storedProjectId
+          : projects.value[0]?.id ?? '';
+      }
+
       await loadCurrentPage();
       openSyncEvents();
     } catch (error) {
@@ -554,7 +559,11 @@ export const useInkwellStore = defineStore('inkwell', () => {
   async function refreshSyncSession() {
     try {
       syncConfig.value = await notionClient.refreshSyncSession();
-      if (!syncConfig.value.connected) {
+      if (syncConfig.value.connected) {
+        if (await hydrateInitialNotionSnapshot()) {
+          await loadCurrentPage();
+        }
+      } else {
         saveStatus.value = 'stale';
       }
     } catch (error) {
@@ -682,13 +691,8 @@ export const useInkwellStore = defineStore('inkwell', () => {
     errorMessage.value = '';
 
     try {
-      const reloaded = await notionClient.reloadFromNotion();
-      syncConfig.value = reloaded.syncConfig;
-      projects.value = reloaded.projects;
-      currentProjectId.value = reloaded.currentProjectId;
-      pages.value = reloaded.pages.filter(
-        (page) => page.projectId === currentProjectId.value && page.status !== 'archived',
-      );
+      const reloaded = await notionClient.reloadFromNotion({ force: true });
+      applyReloadedSnapshot(reloaded);
       currentPage.value = pages.value[0];
       saveStatus.value = currentPage.value?.syncState ?? 'saved';
       errorMessage.value = '';
@@ -699,6 +703,28 @@ export const useInkwellStore = defineStore('inkwell', () => {
     } finally {
       isLoading.value = false;
     }
+  }
+
+  async function hydrateInitialNotionSnapshot() {
+    if (!syncConfig.value.connected || !await notionClient.needsInitialNotionHydration()) {
+      return false;
+    }
+
+    const reloaded = await notionClient.reloadFromNotion({
+      force: true,
+      preserveLocalWhenRemoteEmpty: true,
+    });
+    applyReloadedSnapshot(reloaded);
+    return true;
+  }
+
+  function applyReloadedSnapshot(reloaded: Awaited<ReturnType<typeof notionClient.reloadFromNotion>>) {
+    syncConfig.value = reloaded.syncConfig;
+    projects.value = reloaded.projects;
+    currentProjectId.value = reloaded.currentProjectId;
+    pages.value = reloaded.pages.filter(
+      (page) => page.projectId === currentProjectId.value && page.status !== 'archived',
+    );
   }
 
   function mergeSavedPage(

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   notionBlocksToTiptapDocument,
   notionBlocksToTiptapDocumentStrict,
+  tiptapDocumentToNotionBlocks,
 } from '@/apps/worker/src/blockConversion';
 
 // ─── helpers ────────────────────────────────────────────────────────────────
@@ -69,6 +70,45 @@ describe('notionBlockToTiptapNode', () => {
     ]);
     expect(doc.content[0]).toMatchObject({ type: 'youtube' });
     expect(doc.content[0].attrs.src).toContain('youtube.com');
+  });
+
+  it('converts an Inkwell YouTube video to a normal linked Notion paragraph', () => {
+    const [block] = tiptapDocumentToNotionBlocks({
+      type: 'doc',
+      content: [{
+        type: 'youtube',
+        attrs: { src: 'https://youtu.be/abc123?t=1m2s' },
+      }],
+    });
+
+    expect(block.type).toBe('paragraph');
+    expect(block.paragraph.rich_text).toEqual([
+      expect.objectContaining({
+        type: 'text',
+        text: {
+          content: 'https://www.youtube.com/watch?v=abc123&t=1m2s',
+          link: { url: 'https://www.youtube.com/watch?v=abc123&t=1m2s' },
+        },
+      }),
+    ]);
+  });
+
+  it('restores an Inkwell YouTube video from its linked Notion paragraph', () => {
+    const url = 'https://www.youtube.com/watch?v=abc123&t=62';
+    const doc = notionBlocksToTiptapDocument([{
+      type: 'paragraph',
+      paragraph: {
+        rich_text: [{
+          type: 'text',
+          plain_text: url,
+          href: url,
+          text: { content: url, link: { url } },
+          annotations: {},
+        }],
+      },
+    }]);
+
+    expect(doc.content[0]).toEqual({ type: 'youtube', attrs: { src: url } });
   });
 
   it('returns null for image block with no URL (strict mode drops it)', () => {

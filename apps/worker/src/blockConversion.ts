@@ -99,11 +99,17 @@ function tiptapNodeToNotionBlock(node) {
     const src = node.attrs?.src;
     if (!src) return paragraphFallback('');
     const videoUrl = normalizeYoutubeVideoUrl(src);
-    return {
-      object: 'block',
-      type: 'video',
-      video: { type: 'external', external: { url: videoUrl } },
-    };
+    if (!videoUrl) return paragraphFallback('');
+
+    // Keep playback as an Inkwell concern. A regular linked paragraph remains
+    // usable in Notion clients and exports that do not support video embeds.
+    return paragraphFallback([
+      textNodeToRichText({
+        type: 'text',
+        text: videoUrl,
+        marks: [{ type: 'link', attrs: { href: videoUrl } }],
+      }),
+    ]);
   }
 
   if (node.type === 'audio') {
@@ -271,10 +277,31 @@ function notionBlockToTiptapNode(block) {
     return null;
   }
 
+  const youtubeUrl = youtubeUrlFromLinkedParagraph(block.paragraph.rich_text);
+  if (youtubeUrl) {
+    return { type: 'youtube', attrs: { src: youtubeUrl } };
+  }
+
   return {
     type: 'paragraph',
     content: richTextToTiptapInline(block.paragraph.rich_text),
   };
+}
+
+function youtubeUrlFromLinkedParagraph(richText = []) {
+  if (richText.length !== 1) {
+    return '';
+  }
+
+  const item = richText[0];
+  const href = item?.href ?? item?.text?.link?.url;
+  const text = item?.plain_text ?? item?.text?.content;
+
+  if (!href || text !== href) {
+    return '';
+  }
+
+  return normalizeYoutubeVideoUrl(href);
 }
 
 function richTextToTiptapInline(richText = []) {
@@ -354,21 +381,30 @@ function normalizeYoutubeVideoUrl(src) {
     const url = new URL(src);
     const host = url.hostname.toLowerCase();
 
-    if (host.endsWith('youtu.be')) {
+    if (host === 'youtu.be' || host.endsWith('.youtu.be')) {
       const id = url.pathname.split('/').filter(Boolean)[0];
-      return id ? youtubeWatchUrl(id, url.searchParams) : src;
+      return id && /^[\w-]+$/.test(id) ? youtubeWatchUrl(id, url.searchParams) : '';
+    }
+
+    if (
+      host !== 'youtube.com' &&
+      !host.endsWith('.youtube.com') &&
+      host !== 'youtube-nocookie.com' &&
+      !host.endsWith('.youtube-nocookie.com')
+    ) {
+      return '';
     }
 
     const embedMatch = url.pathname.match(/^\/(?:embed|shorts|v)\/([\w-]+)/i);
     const id = url.searchParams.get('v') ?? embedMatch?.[1];
 
     if (!id) {
-      return src;
+      return '';
     }
 
-    return youtubeWatchUrl(id, url.searchParams);
+    return /^[\w-]+$/.test(id) ? youtubeWatchUrl(id, url.searchParams) : '';
   } catch {
-    return src;
+    return '';
   }
 }
 

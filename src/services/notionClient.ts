@@ -43,9 +43,21 @@ type InkwellStorage = {
   captures?: Capture[];
   currentProjectId?: string;
   hasMigratedCapturesToPages?: boolean;
+  notionHydrationSource?: string;
   pages?: ProjectPage[];
   projects?: Project[];
   syncConfig?: SyncConfig;
+};
+
+type OptimisticProjectCreation = {
+  page: ProjectPage;
+  project: Project;
+  settled: Promise<{ page: ProjectPage; project: Project }>;
+};
+
+type OptimisticPageCreation = {
+  page: ProjectPage;
+  settled: Promise<ProjectPage>;
 };
 
 
@@ -54,6 +66,7 @@ const STORAGE_KEYS: Array<keyof InkwellStorage> = [
   'captures',
   'currentProjectId',
   'hasMigratedCapturesToPages',
+  'notionHydrationSource',
   'pages',
   'projects',
   'syncConfig',
@@ -300,6 +313,9 @@ async function readStorage(): Promise<Required<InkwellStorage>> {
     ...DEFAULT_SYNC_CONFIG,
     ...stored.syncConfig,
   };
+  const notionHydrationSource = stored.notionHydrationSource ?? (
+    hasRemoteBackedData(projects, pages) ? hydrationSource(syncConfig) : ''
+  );
 
   if (
     !stored.activePageIdsByProject ||
@@ -307,6 +323,7 @@ async function readStorage(): Promise<Required<InkwellStorage>> {
     !hasCompatiblePageStatuses ||
     !stored.projects ||
     !stored.currentProjectId ||
+    stored.notionHydrationSource === undefined ||
     !stored.syncConfig ||
     shouldCreatePages ||
     stored.hasMigratedCapturesToPages !== true
@@ -317,6 +334,7 @@ async function readStorage(): Promise<Required<InkwellStorage>> {
       currentProjectId,
       pages,
       syncConfig,
+      notionHydrationSource,
       hasMigratedCapturesToPages: true,
     });
   }
@@ -329,7 +347,25 @@ async function readStorage(): Promise<Required<InkwellStorage>> {
     pages,
     projects,
     syncConfig,
+    notionHydrationSource,
   };
+}
+
+function hasRemoteBackedData(projects: Project[], pages: ProjectPage[]) {
+  return projects.some((project) => Boolean(project.stateRemoteRevision)) ||
+    pages.some((page) => Boolean(
+      page.notionPageId ||
+      page.notionDatabaseId ||
+      page.notionDataSourceId ||
+      page.notionParentPageId ||
+      page.remoteRevision,
+    ));
+}
+
+function hydrationSource(syncConfig: SyncConfig) {
+  const serverUrl = cleanServerUrl(syncConfig.serverUrl);
+  const workspace = syncConfig.workspaceId?.trim() || 'connected-workspace';
+  return `${serverUrl}::${workspace}`;
 }
 
 function isLegacyStubProjectSet(projects: Project[]) {
@@ -976,6 +1012,18 @@ async function updateStoredSyncConfig(config: Partial<SyncConfig>): Promise<Sync
 export const notionClient = {
   flushPendingSyncOps,
 
+  async needsInitialNotionHydration(): Promise<boolean> {
+    const { notionHydrationSource, syncConfig } = await readStorage();
+
+    if (!syncConfig.connected || notionHydrationSource === hydrationSource(syncConfig)) {
+      return false;
+    }
+
+    // Never replace local edits that have not reached the sync server yet. Once
+    // the queue drains, a later startup can safely hydrate this workspace.
+    return (await listPendingSyncOps()).length === 0;
+  },
+
   async listProjects(): Promise<Project[]> {
     await waitForStub();
     const { projects } = await readStorage();
@@ -1222,7 +1270,10 @@ export const notionClient = {
     };
   },
 
-  async reloadFromNotion(): Promise<{
+  async reloadFromNotion(options: {
+    force?: boolean;
+    preserveLocalWhenRemoteEmpty?: boolean;
+  } = {}): Promise<{
     currentProjectId: string;
     pages: ProjectPage[];
     projects: Project[];
@@ -1234,8 +1285,14 @@ export const notionClient = {
       throw new Error('Connect Notion before reloading from Notion.');
     }
 
-    const validation = await this.validateNotionCache();
-    if (!validation.stalePageIds.length && !validation.aheadPageIds.length) {
+    const validation = options.force
+      ? { stalePageIds: [], aheadPageIds: [] }
+      : await this.validateNotionCache();
+    if (
+      !options.force &&
+      !validation.stalePageIds.length &&
+      !validation.aheadPageIds.length
+    ) {
       return {
         currentProjectId,
         pages: localPages,
@@ -1250,6 +1307,27 @@ export const notionClient = {
         selectedParentPageId: syncConfig.selectedParentPageId,
       }),
     }, syncConfig);
+    const nextSyncConfig = response.clearSelectedParentPage
+      ? {
+          ...syncConfig,
+          selectedParentPageId: undefined,
+          selectedParentPageTitle: undefined,
+        }
+      : syncConfig;
+
+    if (options.preserveLocalWhenRemoteEmpty && response.projects.length === 0) {
+      await writeStorage({
+        notionHydrationSource: hydrationSource(nextSyncConfig),
+        syncConfig: nextSyncConfig,
+      });
+      return {
+        currentProjectId,
+        pages: localPages,
+        projects: localProjects,
+        syncConfig: nextSyncConfig,
+      };
+    }
+
     const projects = response.projects.map(normalizeProject).sort(sortProjectsByUpdatedDesc);
     const pages = response.pages.map(normalizeStoredPage);
     const activePageIdsByProject = createCompatibleActivePageIds(
@@ -1260,14 +1338,6 @@ export const notionClient = {
     const nextCurrentProjectId = projects.some((project) => project.id === response.currentProjectId)
       ? response.currentProjectId ?? ''
       : projects[0]?.id ?? '';
-    const nextSyncConfig = response.clearSelectedParentPage
-      ? {
-          ...syncConfig,
-          selectedParentPageId: undefined,
-          selectedParentPageTitle: undefined,
-        }
-      : syncConfig;
-
     await writeStorage({
       activePageIdsByProject,
       currentProjectId: nextCurrentProjectId,
@@ -1275,6 +1345,7 @@ export const notionClient = {
       pages,
       projects,
       syncConfig: nextSyncConfig,
+      notionHydrationSource: hydrationSource(nextSyncConfig),
     });
 
     return {

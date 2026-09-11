@@ -199,11 +199,6 @@ describe('project metadata', () => {
     };
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(jsonResponse({
-        stalePageIds: [],
-        aheadPageIds: ['page-inkwell'],
-        serverVersions: { 'page-inkwell': 2 },
-      }))
-      .mockResolvedValueOnce(jsonResponse({
         activePageIdsByProject: { 'project-remote': 'page-remote' },
         currentProjectId: 'missing-local-project',
         pages: [reloadedPage],
@@ -226,7 +221,7 @@ describe('project metadata', () => {
     await store.reloadFromNotion();
     const storage = readBrowserStorage();
 
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(store.currentProjectId).toBe('project-remote');
     expect(store.currentPage?.id).toBe('page-remote');
     expect(store.pages.map((page) => page.id)).toEqual(['page-remote']);
@@ -237,11 +232,6 @@ describe('project metadata', () => {
 
   test('reloadFromNotion clears selected parent when server reports it invalid', async () => {
     vi.stubGlobal('fetch', vi.fn()
-      .mockResolvedValueOnce(jsonResponse({
-        stalePageIds: [],
-        aheadPageIds: ['page-inkwell'],
-        serverVersions: { 'page-inkwell': 2 },
-      }))
       .mockResolvedValueOnce(jsonResponse({
         activePageIdsByProject: {},
         clearSelectedParentPage: true,
@@ -263,12 +253,109 @@ describe('project metadata', () => {
       },
     });
 
-    await notionClient.reloadFromNotion();
+    await notionClient.reloadFromNotion({ force: true });
     const storage = readBrowserStorage();
 
     expect((storage.syncConfig as SyncConfig).selectedParentPageId).toBeUndefined();
     expect((storage.syncConfig as SyncConfig).selectedParentPageTitle).toBeUndefined();
     await expect(notionClient.listProjects()).resolves.toEqual([]);
+  });
+
+  test('initial hydration keeps the starter project when the remote workspace is new', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({
+      activePageIdsByProject: {},
+      currentProjectId: '',
+      pages: [],
+      projects: [],
+      status: 'saved',
+    })));
+    resetBrowserStorage({
+      activePageIdsByProject: { 'project-inkwell': 'page-inkwell' },
+      currentProjectId: 'project-inkwell',
+      hasMigratedCapturesToPages: true,
+      pages: [basePage],
+      projects: [baseProject],
+      syncConfig: {
+        ...connectedConfig,
+        workspaceId: 'workspace-new',
+      },
+    });
+
+    const reloaded = await notionClient.reloadFromNotion({
+      force: true,
+      preserveLocalWhenRemoteEmpty: true,
+    });
+
+    expect(reloaded.projects.map((project) => project.id)).toEqual(['project-inkwell']);
+    expect((readBrowserStorage().projects as Project[]).map((project) => project.id))
+      .toEqual(['project-inkwell']);
+    expect(readBrowserStorage().notionHydrationSource).toBe(
+      'http://localhost:8787::workspace-new',
+    );
+  });
+
+  test('a fresh extension install hydrates all projects from its connected workspace', async () => {
+    const remoteProjects = [
+      { ...baseProject, id: 'project-one', name: 'One' },
+      { ...baseProject, id: 'project-two', name: 'Two' },
+    ];
+    const remotePages = remoteProjects.map((project, index) => ({
+      ...basePage,
+      id: `page-${index + 1}`,
+      projectId: project.id,
+      notionPageId: `notion-page-${index + 1}`,
+    }));
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({
+        authenticated: true,
+        connected: true,
+        workspaceId: 'workspace-main',
+        workspaceName: 'Main workspace',
+      }))
+      .mockResolvedValueOnce(jsonResponse({
+        activePageIdsByProject: {
+          'project-one': 'page-1',
+          'project-two': 'page-2',
+        },
+        currentProjectId: 'project-one',
+        pages: remotePages,
+        projects: remoteProjects,
+        status: 'saved',
+      }));
+    vi.stubGlobal('fetch', fetchMock);
+    const OriginalEventSource = globalThis.EventSource;
+    globalThis.EventSource = class {
+      onerror = null;
+      onmessage = null;
+      onopen = null;
+      close() {}
+    } as unknown as typeof EventSource;
+    resetBrowserStorage({
+      syncConfig: {
+        serverUrl: 'http://localhost:8787',
+        authenticated: false,
+        connected: false,
+      },
+    });
+
+    try {
+      const store = useInkwellStore();
+      await store.initialize();
+
+      expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
+        'http://localhost:8787/session',
+        'http://localhost:8787/sync/reload',
+      ]);
+      expect(store.projects.map((project) => project.id)).toEqual([
+        'project-one',
+        'project-two',
+      ]);
+      expect(readBrowserStorage().notionHydrationSource).toBe(
+        'http://localhost:8787::workspace-main',
+      );
+    } finally {
+      globalThis.EventSource = OriginalEventSource;
+    }
   });
 
   test('listProjects sorts by updated date descending', async () => {
