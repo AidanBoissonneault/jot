@@ -45,15 +45,19 @@ function rebuildImportedBlockMappings({
       .map((mapping) => [mapping.notionBlockId, mapping]),
   );
   const content = imported.content.map((node, index) => {
-    const existing = existingByNotionId.get(notionBlocks[index]?.id);
+    const notionBlock = notionBlocks[index];
+    const existing = existingByNotionId.get(notionBlock?.id);
     const inkwellBlockId =
       existing?.inkwellBlockId ?? existing?.localNodeId ?? `inkwell-block-${randomUUID()}`;
+    const fileUploadId = fileUploadIdFromMapping(existing);
 
     return {
       ...node,
       attrs: {
         ...(node.attrs ?? {}),
         [INKWELL_BLOCK_ID_ATTR]: inkwellBlockId,
+        ...(notionBlock?.id && isMediaNode(node) ? { notionBlockId: notionBlock.id } : {}),
+        ...(fileUploadId ? { notionFileUploadId: fileUploadId, uploadState: 'done' } : {}),
       },
     };
   });
@@ -82,6 +86,20 @@ function rebuildImportedBlockMappings({
   });
 
   return mapped;
+}
+
+function fileUploadIdFromMapping(mapping) {
+  for (const state of [mapping?.newState, mapping?.oldState]) {
+    const type = state?.type;
+    const fileUploadId = type ? state?.[type]?.file_upload?.id : undefined;
+    if (fileUploadId) return fileUploadId;
+  }
+
+  return undefined;
+}
+
+function isMediaNode(node) {
+  return node?.type === 'image' || node?.type === 'audio';
 }
 
 function defaultHash(value) {

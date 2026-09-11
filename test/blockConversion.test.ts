@@ -1,9 +1,24 @@
 import { describe, expect, it } from 'vitest';
 import {
+  isNotionFileUploadBlock,
   notionBlocksToTiptapDocument,
   notionBlocksToTiptapDocumentStrict,
   tiptapDocumentToNotionBlocks,
 } from '@/apps/worker/src/blockConversion';
+
+describe('Notion media blocks', () => {
+  it('identifies uploads that must be retried instead of replaced by a fallback', () => {
+    expect(isNotionFileUploadBlock({
+      type: 'image',
+      image: { type: 'file_upload', file_upload: { id: 'upload-1' } },
+    })).toBe(true);
+    expect(isNotionFileUploadBlock({
+      type: 'image',
+      image: { type: 'external', external: { url: 'https://example.com/image.png' } },
+    })).toBe(false);
+    expect(isNotionFileUploadBlock({ type: 'paragraph', paragraph: {} })).toBe(false);
+  });
+});
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
@@ -59,9 +74,15 @@ describe('notionBlockToTiptapNode', () => {
 
   it('converts image block with file URL to image node', () => {
     const doc = notionBlocksToTiptapDocument([
-      { type: 'image', image: { file: { url: 'https://s3.amazonaws.com/img.jpg' } } },
+      { id: 'notion-image-block', type: 'image', image: { file: { url: 'https://s3.amazonaws.com/img.jpg' } } },
     ]);
-    expect(doc.content[0]).toMatchObject({ type: 'image', attrs: { src: 'https://s3.amazonaws.com/img.jpg' } });
+    expect(doc.content[0]).toMatchObject({
+      type: 'image',
+      attrs: {
+        src: 'https://s3.amazonaws.com/img.jpg',
+        notionBlockId: 'notion-image-block',
+      },
+    });
   });
 
   it('converts video block to youtube node', () => {

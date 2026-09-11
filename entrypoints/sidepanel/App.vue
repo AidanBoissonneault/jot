@@ -919,14 +919,6 @@ function setEditorToolbarMode(mode: typeof editorToolbarModes[number]['id']) {
     mode === 'insert' ? 'link' : mode === 'controls' ? 'history' : 'type';
 }
 
-function showEditorMenu(menu: NonNullable<typeof activeEditorMenu.value>) {
-  activeEditorMenu.value = menu;
-
-  if (menu === 'link') {
-    openLinkTools();
-  }
-}
-
 function toggleEditorMenu(menu: NonNullable<typeof activeEditorMenu.value>) {
   const closing = activeEditorMenu.value === menu;
   activeEditorMenu.value = closing ? null : menu;
@@ -2210,7 +2202,6 @@ function textFromNode(node: DocumentContent): string {
         <div
           class="editor-tools"
           aria-label="Editor toolbar"
-          @mouseleave="closeEditorMenu"
         >
           <div class="editor-tool-tabs" role="tablist" aria-label="Editor tool groups">
             <button
@@ -2224,7 +2215,6 @@ function textFromNode(node: DocumentContent): string {
               :title="mode.label"
               :aria-label="mode.label"
               @click="setEditorToolbarMode(mode.id)"
-              @mouseenter="setEditorToolbarMode(mode.id)"
             >
               <font-awesome-icon :icon="mode.icon" fixed-width />
               <span>{{ mode.label }}</span>
@@ -2242,7 +2232,6 @@ function textFromNode(node: DocumentContent): string {
               :title="item.title"
               :aria-label="item.title"
               @click="toggleEditorMenu(item.id)"
-              @mouseenter="showEditorMenu(item.id)"
             >
               <font-awesome-icon :icon="item.icon" fixed-width />
               <span>{{ item.label }}</span>
@@ -2585,6 +2574,7 @@ function textFromNode(node: DocumentContent): string {
         v-if="editor"
         class="editor"
         :editor="editor"
+        @click="closeEditorMenu"
         @scroll="hideEditorContextMenu"
       />
 
@@ -3407,15 +3397,15 @@ function textFromNode(node: DocumentContent): string {
   display: grid;
   grid-template-rows: auto auto auto 1fr;
   min-height: 100vh;
-  padding: 14px;
+  padding: 10px;
 }
 
 .topbar {
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 10px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
   align-items: center;
-  padding-bottom: 12px;
+  padding-bottom: 10px;
   border-bottom: 1px solid var(--inkwell-border);
 }
 
@@ -3448,13 +3438,12 @@ function textFromNode(node: DocumentContent): string {
 .sync-badge {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   justify-self: start;
   gap: 0;
-  overflow: hidden;
   min-height: 28px;
-  min-width: 28px;
-  max-width: 100%;
-  padding: 0 9px;
+  width: 28px;
+  padding: 0;
   border: 1px solid var(--inkwell-border);
   border-radius: 999px;
   background: var(--inkwell-surface-muted);
@@ -3477,26 +3466,15 @@ function textFromNode(node: DocumentContent): string {
 }
 
 .sync-label {
-  display: inline-block;
-  max-width: 0;
-  margin-left: 0;
-  opacity: 0;
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
   overflow: hidden;
+  clip: rect(0, 0, 0, 0);
   white-space: nowrap;
-  transform: translateX(-4px);
-  transition:
-    max-width 160ms ease,
-    opacity 140ms ease,
-    transform 160ms ease,
-    margin-left 160ms ease;
-}
-
-.sync-badge:hover .sync-label,
-.sync-badge:focus-visible .sync-label {
-  max-width: 12ch;
-  margin-left: 6px;
-  opacity: 1;
-  transform: translateX(0);
+  border: 0;
 }
 
 .sync-badge.error {
@@ -3585,6 +3563,7 @@ function textFromNode(node: DocumentContent): string {
 
 .topbar-switchers {
   display: grid;
+  grid-column: 1 / -1;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 6px;
 }
@@ -3594,15 +3573,15 @@ function textFromNode(node: DocumentContent): string {
 }
 
 .topbar-actions {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 6px;
+  display: flex;
+  gap: 3px;
 }
 
 .topbar-actions button {
-  justify-self: stretch;
+  flex: 0 0 30px;
+  width: 30px;
   min-height: 30px;
-  padding: 0 8px;
+  padding: 0;
   font-weight: 750;
 }
 
@@ -3611,16 +3590,11 @@ function textFromNode(node: DocumentContent): string {
   max-width: 100%;
 }
 
-.topbar-actions .icon-label-button:hover > span:not(.text-icon),
-.topbar-actions .icon-label-button:focus-visible > span:not(.text-icon) {
-  max-width: 10ch;
-}
-
 .tabs {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 4px;
-  margin-top: 10px;
+  gap: 2px;
+  margin-top: 8px;
   padding: 3px;
   border: 1px solid var(--inkwell-border);
   border-radius: var(--inkwell-radius);
@@ -3629,7 +3603,7 @@ function textFromNode(node: DocumentContent): string {
 
 .tabs button {
   min-width: 0;
-  min-height: 30px;
+  min-height: 34px;
   border-color: transparent;
   background: transparent;
   color: var(--inkwell-muted);
@@ -3657,10 +3631,9 @@ function textFromNode(node: DocumentContent): string {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 0;
+  gap: 6px;
   min-width: 32px;
   max-width: 100%;
-  overflow: hidden;
   white-space: nowrap;
 }
 
@@ -3671,31 +3644,35 @@ function textFromNode(node: DocumentContent): string {
 }
 
 .icon-label-button > span:not(.text-icon) {
-  display: inline-block;
-  max-width: 0;
-  opacity: 0;
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
   overflow: hidden;
-  transform: translateX(-4px);
-  transition:
-    max-width 160ms ease,
-    opacity 140ms ease,
-    transform 160ms ease,
-    margin-left 160ms ease;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
-.icon-label-button:hover > span:not(.text-icon),
-.icon-label-button:focus-visible > span:not(.text-icon) {
-  max-width: min(18ch, calc(100vw - 84px));
-  margin-left: 6px;
-  opacity: 1;
-  transform: translateX(0);
+.auth-gate > .icon-label-button,
+.stack-form > .icon-label-button,
+.modal-actions .icon-label-button {
+  width: auto;
+  padding-inline: 12px;
 }
 
-.icon-label-button:disabled:hover > span:not(.text-icon) {
-  max-width: 0;
-  margin-left: 0;
-  opacity: 0;
-  transform: translateX(-4px);
+.auth-gate > .icon-label-button > span:not(.text-icon),
+.stack-form > .icon-label-button > span:not(.text-icon),
+.modal-actions .icon-label-button > span:not(.text-icon) {
+  position: static;
+  width: auto;
+  height: auto;
+  padding: initial;
+  margin: 0;
+  overflow: visible;
+  clip: auto;
+  white-space: nowrap;
 }
 
 .text-icon {
@@ -3819,8 +3796,8 @@ function textFromNode(node: DocumentContent): string {
 
 .editor-header {
   display: grid;
-  gap: 10px;
-  padding: 10px;
+  gap: 8px;
+  padding: 8px;
   border-bottom: 1px solid var(--inkwell-border);
 }
 
@@ -4163,13 +4140,15 @@ function textFromNode(node: DocumentContent): string {
 .editor-tools {
   position: relative;
   display: grid;
-  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+  align-items: center;
 }
 
 .editor-tool-tabs {
   display: grid;
-  grid-template-columns: repeat(3, minmax(92px, 1fr));
-  gap: 3px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 2px;
   width: 100%;
   padding: 3px;
   border: 1px solid var(--inkwell-border);
@@ -4180,7 +4159,7 @@ function textFromNode(node: DocumentContent): string {
 .editor-tool-tabs button {
   min-width: 0;
   min-height: 32px;
-  padding: 0 8px;
+  padding: 0 5px;
   border-color: transparent;
   background: transparent;
   color: var(--inkwell-muted);
@@ -4192,11 +4171,6 @@ function textFromNode(node: DocumentContent): string {
   justify-self: stretch;
 }
 
-.editor-tool-tabs .icon-label-button:hover > span:not(.text-icon),
-.editor-tool-tabs .icon-label-button:focus-visible > span:not(.text-icon) {
-  max-width: 11ch;
-}
-
 .editor-tool-tabs button.active {
   border-color: var(--inkwell-border);
   background: var(--inkwell-surface);
@@ -4204,25 +4178,40 @@ function textFromNode(node: DocumentContent): string {
 }
 
 .editor-quickbar {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(92px, max-content));
-  gap: 6px;
+  display: flex;
+  gap: 2px;
   align-items: center;
+  padding: 3px;
+  border: 1px solid var(--inkwell-border);
+  border-radius: var(--inkwell-radius);
+  background: var(--inkwell-surface-muted);
 }
 
 .tool-icon-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 0;
-  min-width: 42px;
-  max-width: 100%;
+  flex: 0 0 32px;
+  width: 32px;
+  min-width: 32px;
   min-height: 32px;
-  padding: 0 8px;
-  border-color: var(--inkwell-border);
-  background: var(--inkwell-surface-muted);
+  padding: 0;
+  border-color: transparent;
+  background: transparent;
   color: var(--inkwell-text);
   font-weight: 800;
+}
+
+.tool-icon-button > span {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .tool-icon-button.active {
@@ -4232,8 +4221,14 @@ function textFromNode(node: DocumentContent): string {
 }
 
 .tool-popover {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 6px);
+  right: 0;
+  left: 0;
   display: grid;
-  max-width: 100%;
+  max-height: min(280px, calc(100vh - 190px));
+  overflow: auto;
   padding: 10px;
   border: 1px solid var(--inkwell-border);
   border-radius: var(--inkwell-radius);
@@ -4269,7 +4264,7 @@ function textFromNode(node: DocumentContent): string {
 
 .button-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(36px, 1fr));
   width: 100%;
 }
 

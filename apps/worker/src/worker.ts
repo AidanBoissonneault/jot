@@ -5,6 +5,7 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { createClient } from '@supabase/supabase-js';
 import { createAuth } from './auth.js';
 import {
+  isNotionFileUploadBlock,
   kindFromNotionBlock,
   notionBlocksToTiptapDocument,
   tiptapDocumentToNotionBlocks,
@@ -15,7 +16,7 @@ import {
   replaceManagedBlocks as replaceManagedBlocksWithDependencies,
 } from './managedBlocks.js';
 import { createNotionRequester, uploadFileToNotion } from './notionRequest.js';
-import { pushPageToNotionCore } from './pageSync.js';
+import { normalizeSyncedMediaContent, pushPageToNotionCore } from './pageSync.js';
 import {
   createProjectDatabaseHelpers,
   projectStateKey,
@@ -646,10 +647,15 @@ app.post('/media/upload', async (c) => {
 app.post('/media/refresh', async (c) => {
   const body = await c.req.json<MediaRefreshRequest>().catch(() => ({}));
   const fileUploadId = String(body?.fileUploadId ?? '').trim();
-  if (!fileUploadId) return c.json({ error: 'Missing fileUploadId.' }, 400);
+  const requestedBlockId = String(body?.notionBlockId ?? '').trim();
+  if (!fileUploadId && !requestedBlockId) {
+    return c.json({ error: 'Missing media identity.' }, 400);
+  }
 
   const store = await requireConnectedStore(c);
-  const notionBlockId = findNotionBlockIdByFileUploadId(store, fileUploadId);
+  const notionBlockId =
+    (fileUploadId ? findNotionBlockIdByFileUploadId(store, fileUploadId) : null) ??
+    findMappedNotionBlockId(store, requestedBlockId);
   if (!notionBlockId) return c.json({ error: 'Media block is not synced yet.' }, 404);
 
   const block = await notionRequest(store, `/blocks/${notionBlockId}`);
@@ -864,7 +870,8 @@ async function applyBlockOpsToNotionForInstallation(installationId, { ops, page,
       await updateThreadToggleTitle?.(freshStore, page);
       notionPageId = toggle.id;
       parentPageId = projectPage.id;
-      await applyManagedBlockOps(freshStore, page.id, notionPageId, ops, page.content);
+      const replacement = await applyManagedBlockOps(freshStore, page.id, notionPageId, ops, page.content);
+      page.content = normalizeSyncedMediaContent(page.content, replacement?.createdBlocks ?? []);
       refreshed = await notionRequest(freshStore, `/blocks/${notionPageId}`).catch(() => toggle);
       freshStore.notePages[page.id] = {
         notionPageId,
@@ -886,7 +893,8 @@ async function applyBlockOpsToNotionForInstallation(installationId, { ops, page,
       await updateChildNotePage(freshStore, notePage.id, page);
       notionPageId = notePage.id;
       parentPageId = projectRootPage.id;
-      await applyManagedBlockOps(freshStore, page.id, notionPageId, ops, page.content);
+      const replacement = await applyManagedBlockOps(freshStore, page.id, notionPageId, ops, page.content);
+      page.content = normalizeSyncedMediaContent(page.content, replacement?.createdBlocks ?? []);
       refreshed = await notionRequest(freshStore, `/pages/${notionPageId}`).catch(() => notePage);
       freshStore.notePages[page.id] = {
         notionPageId,
@@ -1448,7 +1456,14 @@ async function appendBlocksWithFallback(store, notionPageId, blocks, position) {
       });
       results.push(...response.results);
       position = positionAfterCreatedBlocks(position, response.results);
-    } catch {
+    } catch (error) {
+      // A Notion file upload is the only durable copy of a dropped local file.
+      // Never turn a transient attach failure into a permanent placeholder;
+      // fail the sync job so the queue retries the original upload instead.
+      if (isNotionFileUploadBlock(block)) {
+        throw error;
+      }
+
       const fallback = mediaFallbackBlock(block);
       try {
         const response = await notionRequest(store, `/blocks/${notionPageId}/children`, {
@@ -1542,13 +1557,26 @@ function mediaUrlFromNotionBlock(block) {
 function findNotionBlockIdByFileUploadId(store, fileUploadId) {
   for (const mappings of Object.values(store.blockMappings ?? {})) {
     for (const mapping of mappings ?? []) {
-      const state = mapping?.newState;
-      const type = state?.type;
-      const uploadedId = type ? state?.[type]?.file_upload?.id : undefined;
+      for (const state of [mapping?.newState, mapping?.oldState]) {
+        const type = state?.type;
+        const uploadedId = type ? state?.[type]?.file_upload?.id : undefined;
 
-      if (uploadedId === fileUploadId && mapping?.notionBlockId) {
-        return mapping.notionBlockId;
+        if (uploadedId === fileUploadId && mapping?.notionBlockId) {
+          return mapping.notionBlockId;
+        }
       }
+    }
+  }
+
+  return null;
+}
+
+function findMappedNotionBlockId(store, notionBlockId) {
+  if (!notionBlockId) return null;
+
+  for (const mappings of Object.values(store.blockMappings ?? {})) {
+    if ((mappings ?? []).some((mapping) => mapping?.notionBlockId === notionBlockId)) {
+      return notionBlockId;
     }
   }
 

@@ -1689,14 +1689,14 @@ export const notionClient = {
     return response.fileUploadId;
   },
 
-  async refreshMediaUrl(fileUploadId: string): Promise<string> {
-    if (!fileUploadId) {
-      throw new Error('Missing Notion file upload id.');
+  async refreshMediaUrl(fileUploadId?: string, notionBlockId?: string): Promise<string> {
+    if (!fileUploadId && !notionBlockId) {
+      throw new Error('Missing Notion media identity.');
     }
 
     const response = await requestServer<MediaRefreshResponse>('/media/refresh', {
       method: 'POST',
-      body: JSON.stringify({ fileUploadId }),
+      body: JSON.stringify({ fileUploadId, notionBlockId }),
     });
 
     if (!response.url) {

@@ -213,7 +213,7 @@ async function pushPageToProjectDatabase({
   };
 }
 
-function normalizeSyncedMediaContent(content, createdBlocks) {
+export function normalizeSyncedMediaContent(content, createdBlocks) {
   if (!content?.content?.length) {
     return content;
   }
@@ -237,6 +237,7 @@ function normalizeSyncedMediaNode(node, createdBlock) {
           ...node.attrs,
           src: url,
           uploadState: 'done',
+          ...(createdBlock?.id ? { notionBlockId: createdBlock.id } : {}),
         },
       };
     }

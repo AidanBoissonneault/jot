@@ -124,6 +124,7 @@ export type MediaUploadResponse = {
 
 export type MediaRefreshRequest = {
   fileUploadId?: string;
+  notionBlockId?: string;
 };
 
 export type MediaRefreshResponse = {

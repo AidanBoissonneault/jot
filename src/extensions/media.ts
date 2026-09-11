@@ -12,7 +12,7 @@ const DEFAULT_SYNC_SERVER_URL = 'http://localhost:8787';
 const YOUTUBE_ALLOW =
   'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share';
 
-const InkwellImage = Image.extend({
+export const InkwellImage = Image.extend({
   addAttributes() {
     return {
       ...this.parent?.(),
@@ -20,6 +20,7 @@ const InkwellImage = Image.extend({
       mimeType: { default: '' },
       kind: { default: 'image' },
       notionFileUploadId: { default: '' },
+      notionBlockId: { default: '' },
       width: {
         default: '',
         parseHTML: (element: HTMLElement) => element.getAttribute('data-width') ?? '',
@@ -38,8 +39,8 @@ const InkwellImage = Image.extend({
       wrapper.draggable = true;
       wrapper.tabIndex = -1;
       const uploadState = String(node.attrs.uploadState ?? 'idle');
-      const src = node.attrs.src ?? '';
       let currentNode = node;
+      let isRefreshing = false;
 
       if (uploadState === 'error') {
         wrapper.classList.add('is-error');
@@ -53,21 +54,69 @@ const InkwellImage = Image.extend({
 
       const img = document.createElement('img');
       img.draggable = false;
-      img.src = src;
+      img.src = String(node.attrs.src ?? '');
       if (node.attrs.alt) img.alt = node.attrs.alt;
       if (node.attrs.title) img.title = node.attrs.title;
       applyImageWidth(wrapper, img, node.attrs.width);
       applyImageUploadState(wrapper, uploadState);
 
-      img.addEventListener('error', () => {
-        wrapper.removeChild(img);
-        const link = document.createElement('a');
-        link.href = src;
-        link.textContent = src;
-        link.target = '_blank';
-        link.rel = 'noopener noreferrer';
-        wrapper.appendChild(link);
-      });
+      const onImageError = () => {
+        const fileUploadId = String(currentNode.attrs.notionFileUploadId ?? '');
+        const notionBlockId = String(currentNode.attrs.notionBlockId ?? '');
+        const failedSrc = String(currentNode.attrs.src ?? img.src ?? '');
+
+        if (isRefreshing) {
+          return;
+        }
+
+        if (!fileUploadId && !notionBlockId) {
+          showImageFallback(wrapper, img, failedSrc);
+          return;
+        }
+
+        isRefreshing = true;
+        wrapper.classList.add('is-uploading');
+        void notionClient.refreshMediaUrl(fileUploadId, notionBlockId)
+          .then((freshSrc) => {
+            if (!freshSrc || freshSrc === img.src) {
+              throw new Error('Media URL did not change.');
+            }
+
+            restoreImageElement(wrapper, img);
+            img.src = freshSrc;
+
+            // Uploaded files keep a stable upload id, so persisting the fresh URL
+            // cannot turn the Notion file into an external, expiring URL.
+            if (fileUploadId) {
+              const pos = typeof getPos === 'function' ? getPos() : undefined;
+              if (typeof pos === 'number') {
+                const attrs = {
+                  ...currentNode.attrs,
+                  src: freshSrc,
+                  uploadState: 'done',
+                  ...(notionBlockId ? { notionBlockId } : {}),
+                };
+                currentNode = currentNode.type.create(
+                  attrs,
+                  currentNode.content,
+                  currentNode.marks,
+                );
+                editor.view.dispatch(
+                  editor.view.state.tr.setNodeMarkup(pos, undefined, attrs),
+                );
+              }
+            }
+          })
+          .catch(() => {
+            showImageFallback(wrapper, img, failedSrc);
+          })
+          .finally(() => {
+            isRefreshing = false;
+            wrapper.classList.remove('is-uploading');
+          });
+      };
+
+      img.addEventListener('error', onImageError);
 
       wrapper.appendChild(img);
       const resizeHandle = document.createElement('span');
@@ -182,7 +231,9 @@ const InkwellImage = Image.extend({
           currentNode = nextNode;
           applyImageBlockId(wrapper, nextNode.attrs.inkwellBlockId);
           applyImageUploadState(wrapper, String(nextNode.attrs.uploadState ?? 'idle'));
-          img.src = String(nextNode.attrs.src ?? '');
+          restoreImageElement(wrapper, img);
+          const nextSrc = String(nextNode.attrs.src ?? '');
+          if (img.getAttribute('src') !== nextSrc) img.src = nextSrc;
           img.alt = String(nextNode.attrs.alt ?? '');
           img.title = String(nextNode.attrs.title ?? '');
           applyImageWidth(wrapper, img, nextNode.attrs.width);
@@ -197,6 +248,7 @@ const InkwellImage = Image.extend({
         destroy() {
           wrapper.removeEventListener('click', onClick);
           wrapper.removeEventListener('dragstart', onDragStart, true);
+          img.removeEventListener('error', onImageError);
           img.removeEventListener('dragstart', onDragStart, true);
           resizeHandle.removeEventListener('pointerdown', onResizePointerDown);
         },
@@ -259,6 +311,7 @@ const InkwellAudio = Audio.extend({
       mimeType: { default: '' },
       kind: { default: 'audio' },
       notionFileUploadId: { default: '' },
+      notionBlockId: { default: '' },
       duration: { default: 0 },
     };
   },
@@ -268,8 +321,7 @@ const InkwellAudio = Audio.extend({
       const wrapper = document.createElement('div');
       wrapper.className = 'inkwell-audio-wrapper';
       const uploadState = String(node.attrs.uploadState ?? 'idle');
-      const src = String(node.attrs.src ?? '');
-      const fileUploadId = String(node.attrs.notionFileUploadId ?? '');
+      let currentNode = node;
       let isRefreshing = false;
 
       if (uploadState === 'error') {
@@ -284,13 +336,17 @@ const InkwellAudio = Audio.extend({
 
       const audio = document.createElement('audio');
       audio.controls = true;
-      audio.src = src;
+      audio.src = String(node.attrs.src ?? '');
       audio.preload = 'metadata';
 
       audio.addEventListener('error', () => {
-        if (fileUploadId && !isRefreshing) {
+        const fileUploadId = String(currentNode.attrs.notionFileUploadId ?? '');
+        const notionBlockId = String(currentNode.attrs.notionBlockId ?? '');
+        const failedSrc = String(currentNode.attrs.src ?? audio.src ?? '');
+
+        if ((fileUploadId || notionBlockId) && !isRefreshing) {
           isRefreshing = true;
-          void notionClient.refreshMediaUrl(fileUploadId)
+          void notionClient.refreshMediaUrl(fileUploadId, notionBlockId)
             .then((freshSrc) => {
               if (!freshSrc || freshSrc === audio.src) {
                 throw new Error('Media URL did not change.');
@@ -298,18 +354,24 @@ const InkwellAudio = Audio.extend({
 
               audio.src = freshSrc;
               const pos = typeof getPos === 'function' ? getPos() : undefined;
-              if (typeof pos === 'number') {
+              if (fileUploadId && typeof pos === 'number') {
+                const attrs = {
+                  ...currentNode.attrs,
+                  src: freshSrc,
+                  uploadState: 'done',
+                };
+                currentNode = currentNode.type.create(
+                  attrs,
+                  currentNode.content,
+                  currentNode.marks,
+                );
                 editor.view.dispatch(
-                  editor.view.state.tr.setNodeMarkup(pos, undefined, {
-                    ...node.attrs,
-                    src: freshSrc,
-                    uploadState: 'done',
-                  }),
+                  editor.view.state.tr.setNodeMarkup(pos, undefined, attrs),
                 );
               }
             })
             .catch(() => {
-              showAudioFallback(wrapper, audio, src);
+              showAudioFallback(wrapper, audio, failedSrc);
             })
             .finally(() => {
               isRefreshing = false;
@@ -317,7 +379,7 @@ const InkwellAudio = Audio.extend({
           return;
         }
 
-        showAudioFallback(wrapper, audio, src);
+        showAudioFallback(wrapper, audio, failedSrc);
       });
 
       wrapper.appendChild(audio);
@@ -325,6 +387,26 @@ const InkwellAudio = Audio.extend({
     };
   },
 });
+
+function showImageFallback(wrapper: HTMLElement, img: HTMLImageElement, src: string) {
+  img.remove();
+  if (wrapper.querySelector('[data-inkwell-image-fallback]')) {
+    return;
+  }
+
+  const link = document.createElement('a');
+  link.dataset.inkwellImageFallback = '';
+  link.href = src;
+  link.textContent = 'Open image';
+  link.target = '_blank';
+  link.rel = 'noopener noreferrer';
+  wrapper.prepend(link);
+}
+
+function restoreImageElement(wrapper: HTMLElement, img: HTMLImageElement) {
+  wrapper.querySelector('[data-inkwell-image-fallback]')?.remove();
+  if (!img.isConnected) wrapper.prepend(img);
+}
 
 function showAudioFallback(wrapper: HTMLElement, audio: HTMLAudioElement, src: string) {
   if (!audio.isConnected && wrapper.querySelector('a')) {

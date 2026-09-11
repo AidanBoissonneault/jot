@@ -3,6 +3,14 @@ export function tiptapDocumentToNotionBlocks(doc) {
   return (doc?.content ?? []).map((node) => tiptapNodeToNotionBlock(node));
 }
 
+export function isNotionFileUploadBlock(block) {
+  const type = block?.type;
+  return (
+    (type === 'image' || type === 'audio') &&
+    Boolean(block?.[type]?.file_upload?.id)
+  );
+}
+
 function tiptapNodeToNotionBlock(node) {
   const richText = inlineContentToRichText(node.content);
 
@@ -257,7 +265,13 @@ function notionBlockToTiptapNode(block) {
   if (block.type === 'image') {
     const url = block.image?.external?.url ?? block.image?.file?.url ?? block.image?.file_upload?.url;
     if (!url) return null;
-    return { type: 'image', attrs: { src: url } };
+    return {
+      type: 'image',
+      attrs: {
+        src: url,
+        ...(block.id ? { notionBlockId: block.id } : {}),
+      },
+    };
   }
 
   if (block.type === 'video' || block.type === 'embed') {
@@ -270,7 +284,13 @@ function notionBlockToTiptapNode(block) {
   if (block.type === 'audio') {
     const url = block.audio?.external?.url ?? block.audio?.file?.url ?? block.audio?.file_upload?.url;
     if (!url) return null;
-    return { type: 'audio', attrs: { src: url } };
+    return {
+      type: 'audio',
+      attrs: {
+        src: url,
+        ...(block.id ? { notionBlockId: block.id } : {}),
+      },
+    };
   }
 
   if (block.type !== 'paragraph') {
