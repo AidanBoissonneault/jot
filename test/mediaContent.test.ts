@@ -61,6 +61,33 @@ describe('media content helpers', () => {
     });
   });
 
+  it('keeps local-only data media recoverable while excluding it from sync', () => {
+    const localImage = image({
+      src: 'data:image/png;base64,YQ==',
+      filename: 'offline.png',
+      uploadState: 'local',
+    });
+    const content = doc([localImage, paragraph('Saved locally')]);
+
+    expect(markUnrecoverableTransientMedia(content).content?.[0]).toEqual(localImage);
+    expect(hasPendingTransientMedia(content)).toBe(true);
+    expect(sanitizeMediaForSync(content).content).toEqual([paragraph('Saved locally')]);
+  });
+
+  it('removes large data payloads after assigning a Notion upload id', () => {
+    const content = doc([image({
+      src: 'data:image/png;base64,YQ==',
+      notionFileUploadId: 'upload-id',
+      uploadState: 'done',
+    })]);
+
+    expect(sanitizeMediaForSync(content).content?.[0].attrs).toMatchObject({
+      src: '',
+      notionFileUploadId: 'upload-id',
+      uploadState: 'done',
+    });
+  });
+
   it('handles transient audio uploads like image uploads', () => {
     const content = doc([
       audio({
@@ -111,4 +138,3 @@ describe('media content helpers', () => {
     ]);
   });
 });
-

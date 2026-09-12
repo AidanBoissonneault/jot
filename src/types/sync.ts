@@ -61,6 +61,7 @@ export type SyncBlockOperation = {
     block?: DocumentContent;
     previousBlock?: DocumentContent;
     order?: string[];
+    replaceAll?: boolean;
     selectedParentPageId?: string;
   };
 };

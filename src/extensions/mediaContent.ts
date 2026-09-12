@@ -52,6 +52,7 @@ function sanitizeNode(node: DocumentContent): DocumentContent | undefined {
       ...node,
       attrs: {
         ...attrs,
+        ...(isTransient && hasUpload && /^data:/i.test(src) ? { src: '' } : {}),
         ...(isTransient && hasUpload ? { uploadState: 'done' } : {}),
       },
     };
@@ -146,7 +147,9 @@ function markNode(node: DocumentContent): DocumentContent {
     const attrs = node.attrs ?? {};
     const src = String(attrs.src ?? '');
 
-    if (isTransientUrl(src) && !attrs.notionFileUploadId) {
+    // Blob URLs die with their document; data URLs are deliberately persisted
+    // so local-only media remains available across extension reloads.
+    if (/^blob:/i.test(src) && !attrs.notionFileUploadId) {
       return {
         ...node,
         attrs: {

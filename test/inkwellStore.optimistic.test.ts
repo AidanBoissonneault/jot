@@ -2,9 +2,14 @@ import { setActivePinia, createPinia } from 'pinia';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { nextTick } from 'vue';
 import { notionClient } from '@/src/services/notionClient';
-import { compactPendingSyncOps, listPendingSyncOps } from '@/src/services/syncQueue';
+import {
+  compactPendingSyncOps,
+  listPendingProjectSyncEvents,
+  listPendingSyncOps,
+} from '@/src/services/syncQueue';
 import { useInkwellStore } from '@/src/stores/inkwell';
 import type { DocumentContent, Project, ProjectPage, SyncConfig } from '@/src/types/capture';
+import type { SyncBlockOperation } from '@/src/types/sync';
 import { readBrowserStorage, resetBrowserStorage } from './setup';
 import { doc, paragraph, image } from './helpers/docBuilders';
 
@@ -103,19 +108,19 @@ describe('optimistic project creation', () => {
     )).toBe(false);
   });
 
-  test('rolls back temp records and restores selection when sync fails', async () => {
+  test('keeps a new project locally and queues it when sync fails', async () => {
     const { projectSync, store } = await setupProjectSyncTest('Broken');
     const tempProjectId = store.currentProjectId;
 
     projectSync.reject(new Error('Notion unavailable'));
     await waitFor(() => {
-      expect(store.currentProjectId).toBe('project-inkwell');
-      expect(store.errorMessage).toBe('Notion unavailable');
+      expect(store.currentProjectId).not.toBe(tempProjectId);
+      expect(store.saveStatus).not.toBe('creating');
     });
 
-    expect(store.currentProjectId).toBe('project-inkwell');
+    expect(store.currentProject?.name).toBe('Broken');
     expect(store.projects.some((project) => project.id === tempProjectId)).toBe(false);
-    expect(store.errorMessage).toBe('Notion unavailable');
+    expect(await notionClient.pendingSyncEventCount()).toBeGreaterThan(0);
   });
 });
 
@@ -776,6 +781,240 @@ describe('page title and content saves', () => {
     expect(updates).toHaveLength(1);
     expect(updates[0].payload.page.title).toBe('Latest title');
     expect(updates[0].payload.block).toEqual(blockWithId('snapshot-block', 'third'));
+  });
+});
+
+describe('offline queue lifecycle', () => {
+  test('expands the first sync into a complete local workspace snapshot', async () => {
+    const secondProject = {
+      ...baseProject,
+      id: 'project-local-two',
+      name: 'Local Two',
+    };
+    const secondPage = {
+      ...basePage,
+      id: 'page-local-two',
+      projectId: secondProject.id,
+      title: 'Second local page',
+      content: docWithText('untouched sibling content'),
+    };
+    resetBrowserStorage({
+      activePageIdsByProject: {
+        'project-inkwell': 'page-inkwell',
+        [secondProject.id]: secondPage.id,
+      },
+      currentProjectId: 'project-inkwell',
+      hasMigratedCapturesToPages: true,
+      pages: [basePage, secondPage],
+      projects: [baseProject, secondProject],
+      syncConfig: { ...connectedConfig, connected: false },
+    });
+    await notionClient.updateProjectPage({
+      ...basePage,
+      content: docWithText('local-only edit'),
+    });
+    await notionClient.updateSyncConfig({
+      connected: true,
+      workspaceId: 'workspace-first-sync',
+    });
+
+    expect(await notionClient.prepareLocalWorkspaceForFirstSync()).toBe(true);
+
+    const projectEvents = await listPendingProjectSyncEvents();
+    const pageOps = await listPendingSyncOps();
+    expect(projectEvents.map((event) => event.projectId).sort()).toEqual([
+      'project-inkwell',
+      'project-local-two',
+    ]);
+    expect(new Set(pageOps.map((op) => op.pageId))).toEqual(new Set([
+      'page-inkwell',
+      'page-local-two',
+    ]));
+    expect(pageOps).toHaveLength(2);
+    expect(pageOps.every((op) =>
+      op.type === 'block_reorder' && op.payload.replaceAll === true,
+    )).toBe(true);
+    expect(readBrowserStorage().notionHydrationSource).toBe(
+      'http://localhost:8787::workspace-first-sync',
+    );
+    expect(await notionClient.needsInitialNotionHydration()).toBe(false);
+    expect(await notionClient.prepareLocalWorkspaceForFirstSync()).toBe(false);
+  });
+
+  test('repairs legacy first-sync block batches into one authoritative snapshot', () => {
+    const page = {
+      ...basePage,
+      content: docWithBlock('legacy-block', 'only once'),
+    };
+    const shared = {
+      pageId: page.id,
+      projectId: baseProject.id,
+      createdAt: '2026-09-11T12:00:00.000Z',
+      payload: { page, project: baseProject },
+    };
+    const legacyOps: SyncBlockOperation[] = [
+      {
+        ...shared,
+        opId: 'legacy-page-upsert',
+        type: 'page_upsert',
+        sequence: 1,
+        localVersion: 1,
+      },
+      {
+        ...shared,
+        opId: 'legacy-block-create',
+        type: 'block_create',
+        inkwellBlockId: 'legacy-block',
+        sequence: 2,
+        localVersion: 2,
+        payload: {
+          ...shared.payload,
+          block: blockWithId('legacy-block', 'only once'),
+        },
+      },
+    ];
+
+    const compacted = compactPendingSyncOps(legacyOps);
+
+    expect(compacted).toHaveLength(1);
+    expect(compacted[0]).toMatchObject({
+      opId: 'legacy-page-upsert',
+      type: 'block_reorder',
+      localVersion: 2,
+      payload: {
+        order: ['legacy-block'],
+        replaceAll: true,
+      },
+    });
+  });
+
+  test('restores local edits and their queue after an offline reload', async () => {
+    vi.useFakeTimers();
+    const originalNavigator = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+    Object.defineProperty(globalThis, 'navigator', {
+      configurable: true,
+      value: { onLine: false },
+    });
+    const offlineConfig = { ...connectedConfig, connected: false };
+    resetBrowserStorage({
+      activePageIdsByProject: { 'project-inkwell': 'page-inkwell' },
+      currentProjectId: 'project-inkwell',
+      hasMigratedCapturesToPages: true,
+      pages: [basePage],
+      projects: [baseProject],
+      syncConfig: offlineConfig,
+    });
+
+    try {
+      const offlineContent = docWithText('available after reload');
+      await notionClient.updateProjectPage({ ...basePage, content: offlineContent });
+
+      setActivePinia(createPinia());
+      const reloadedStore = useInkwellStore();
+      const initialization = reloadedStore.initialize();
+      await vi.runAllTimersAsync();
+      await initialization;
+
+      expect(stripInkwellBlockIds(reloadedStore.currentPage?.content)).toEqual(offlineContent);
+      expect(reloadedStore.pendingSyncCount).toBeGreaterThan(0);
+      expect(reloadedStore.isOnline).toBe(false);
+    } finally {
+      if (originalNavigator) {
+        Object.defineProperty(globalThis, 'navigator', originalNavigator);
+      } else {
+        Reflect.deleteProperty(globalThis, 'navigator');
+      }
+    }
+  });
+
+  test('uploads persisted local media as part of the first Notion sync', async () => {
+    const localMediaPage = {
+      ...basePage,
+      content: doc([image({
+        src: 'data:image/png;base64,YQ==',
+        filename: 'offline.png',
+        mimeType: 'image/png',
+        uploadState: 'local',
+        inkwellBlockId: 'offline-image',
+      })]),
+    };
+    resetBrowserStorage({
+      activePageIdsByProject: { 'project-inkwell': 'page-inkwell' },
+      currentProjectId: 'project-inkwell',
+      hasMigratedCapturesToPages: true,
+      pages: [localMediaPage],
+      projects: [baseProject],
+      syncConfig: { ...connectedConfig, workspaceId: 'workspace-media' },
+    });
+    const fetchMock = vi.fn(async (url: string, _init?: RequestInit) => {
+      if (String(url).endsWith('/media/upload')) {
+        return jsonResponse({ fileUploadId: 'notion-upload-id' });
+      }
+      if (String(url).endsWith('/sync/project')) {
+        return jsonResponse({ status: 'saved', project: baseProject });
+      }
+      return jsonResponse({ queued: true, versions: { 'page-inkwell': 1 } });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    expect(await notionClient.prepareLocalWorkspaceForFirstSync()).toBe(true);
+    await notionClient.flushPendingSyncOps({ force: true });
+
+    const pushCall = fetchMock.mock.calls.find(([url]) => String(url).endsWith('/sync/push'));
+    const pushBody = JSON.parse(String(pushCall?.[1]?.body));
+    const serializedPush = JSON.stringify(pushBody);
+    const storedPage = (readBrowserStorage().pages as ProjectPage[])[0];
+    expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
+      'http://localhost:8787/sync/project',
+      'http://localhost:8787/media/upload',
+      'http://localhost:8787/sync/push',
+    ]);
+    expect(serializedPush).not.toContain('data:image/png');
+    expect(serializedPush).toContain('notion-upload-id');
+    expect(storedPage.content.content?.[0].attrs).toMatchObject({
+      src: 'data:image/png;base64,YQ==',
+      notionFileUploadId: 'notion-upload-id',
+      uploadState: 'done',
+    });
+    expect(await notionClient.pendingSyncEventCount()).toBe(0);
+  });
+
+  test('flushes restored queue entries when the browser comes online', async () => {
+    const fetchMock = vi.fn(async (url: string) =>
+      String(url).endsWith('/session')
+        ? jsonResponse({ authenticated: true, connected: true })
+        : jsonResponse({ queued: true, versions: { 'page-inkwell': 1 } }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const OriginalEventSource = globalThis.EventSource;
+    globalThis.EventSource = class {
+      onerror = null;
+      onmessage = null;
+      onopen = null;
+      close() {}
+    } as unknown as typeof EventSource;
+
+    try {
+      await notionClient.updateProjectPage({
+        ...basePage,
+        content: docWithText('sync on reconnect'),
+      });
+      const store = useInkwellStore();
+      await seedStore(store);
+      store.handleOffline();
+
+      await store.handleOnline();
+
+      expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
+        'http://localhost:8787/session',
+        'http://localhost:8787/sync/project',
+        'http://localhost:8787/sync/push',
+      ]);
+      expect(store.pendingSyncCount).toBe(0);
+      expect(await notionClient.pendingSyncEventCount()).toBe(0);
+    } finally {
+      globalThis.EventSource = OriginalEventSource;
+    }
   });
 });
 

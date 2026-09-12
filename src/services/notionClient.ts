@@ -13,6 +13,7 @@ import type {
   CaptureSelectionPayload,
   SourceOpenPayload,
 } from '@/src/types/messages';
+import { normalizeCodeLanguage } from '@/src/lib/codeLanguages';
 import type {
   CreateNotionPageResponse,
   ListNotionPagesResponse,
@@ -26,15 +27,18 @@ import type {
   SyncSessionResponse,
   SyncValidationResponse,
 } from '@/src/types/sync';
-import { markUnrecoverableTransientMedia } from '@/src/extensions/mediaContent';
+import { markUnrecoverableTransientMedia, sanitizeMediaForSync } from '@/src/extensions/mediaContent';
 import { normalizeInkwellBlockIds } from '@/src/extensions/inkwellBlockIds';
 import {
+  addPendingProjectSyncEvent,
   addPendingSyncOps,
   buildPageSyncOps,
-  compactPendingSyncOps,
+  compactStoredPendingSyncOps,
+  listPendingProjectSyncEvents,
   listPendingSyncOps,
+  pendingSyncEventCount as queuedSyncEventCount,
+  removePendingProjectSyncEvents,
   removePendingSyncOps,
-  replacePendingSyncOps,
   type BlockSyncOp,
 } from '@/src/services/syncQueue';
 
@@ -151,6 +155,27 @@ function sourceLinkAttrs(payload: CaptureSelectionPayload) {
 export function createCapturedContent(payload: CaptureSelectionPayload): DocumentContent[] {
   if (payload.highlightMeta.isHeading) {
     return createLinkedHeadingContent(payload);
+  }
+
+  if (payload.highlightMeta.isCodeBlock) {
+    return [
+      {
+        type: 'codeBlock',
+        attrs: {
+          language: normalizeCodeLanguage(payload.highlightMeta.codeLanguage),
+        },
+        content: payload.text ? [{ type: 'text', text: payload.text }] : undefined,
+      },
+      textParagraph(`Source: ${payload.pageTitle || 'Untitled page'} - ${payload.sourceUrl}`, [
+        {
+          type: 'link',
+          attrs: sourceLinkAttrs(payload),
+        },
+      ]),
+      {
+        type: 'paragraph',
+      },
+    ];
   }
 
   return [
@@ -410,31 +435,51 @@ function createCompatibleActivePageIds(
 
 async function syncProject(project: Project): Promise<Project | undefined> {
   const { syncConfig } = await readStorage();
+  const queuedEvent = await addPendingProjectSyncEvent(
+    project,
+    syncConfig.selectedParentPageId,
+  );
+  triggerQueueDelivery();
 
-  if (!syncConfig.connected) {
-    return;
-  }
-
-  const response = await requestServer<SyncProjectResponse>('/sync/project', {
-    method: 'POST',
-    body: JSON.stringify({
+  if (!syncConfig.connected || isBrowserOffline()) {
+    return withProjectSyncStatus(
       project,
-      selectedParentPageId: syncConfig.selectedParentPageId,
-    }),
-  }, syncConfig);
-
-  if (response.parentPage) {
-    await updateStoredSyncConfig({
-      selectedParentPageId: response.parentPage.id,
-      selectedParentPageTitle: response.parentPage.title,
-    });
+      'stale',
+      syncConfig.connected
+        ? 'Saved locally. Will sync when a connection is available.'
+        : 'Saved locally. Connect Notion to sync this project.',
+    );
   }
 
-  if (response.status === 'error') {
-    throw new Error(response.message ?? 'Unable to sync this project.');
-  }
+  try {
+    const response = await requestServer<SyncProjectResponse>('/sync/project', {
+      method: 'POST',
+      body: JSON.stringify({
+        project,
+        selectedParentPageId: syncConfig.selectedParentPageId,
+      }),
+    }, syncConfig);
 
-  return response.project;
+    if (response.parentPage) {
+      await updateStoredSyncConfig({
+        selectedParentPageId: response.parentPage.id,
+        selectedParentPageTitle: response.parentPage.title,
+      });
+    }
+
+    if (response.status === 'error') {
+      throw new Error(response.message ?? 'Unable to sync this project.');
+    }
+
+    await removePendingProjectSyncEvents([queuedEvent.eventId]);
+    return response.project ?? withProjectSyncStatus(project, 'saved');
+  } catch {
+    return withProjectSyncStatus(
+      project,
+      'stale',
+      'Saved locally. Will sync when a connection is available.',
+    );
+  }
 }
 
 function createEmptyPage(projectId: string, title: string): ProjectPage {
@@ -499,6 +544,18 @@ function withSyncStatus(
   };
 }
 
+function withProjectSyncStatus(
+  project: Project,
+  status: Exclude<SaveStatus, 'idle' | 'saving' | 'creating'>,
+  message?: string,
+): Project {
+  return {
+    ...project,
+    syncMessage: message,
+    syncState: status,
+  };
+}
+
 function uncachePageNotionMetadata(page: ProjectPage): ProjectPage {
   return {
     ...page,
@@ -515,6 +572,10 @@ function uncachePageNotionMetadata(page: ProjectPage): ProjectPage {
 
 function cleanServerUrl(url: string) {
   return url.trim().replace(/\/+$/, '') || DEFAULT_SYNC_CONFIG.serverUrl;
+}
+
+function isBrowserOffline() {
+  return typeof navigator !== 'undefined' && navigator.onLine === false;
 }
 
 async function requestServer<T>(
@@ -545,6 +606,144 @@ async function requestServer<T>(
   return payload;
 }
 
+async function pendingLocalWorkCount(): Promise<number> {
+  const [{ pages }, queuedCount] = await Promise.all([
+    readStorage(),
+    queuedSyncEventCount(),
+  ]);
+  return queuedCount + pages.filter((page) => page.status !== 'archived').reduce(
+    (count, page) => count + countPendingLocalMedia(page.content),
+    0,
+  );
+}
+
+function countPendingLocalMedia(node: DocumentContent): number {
+  const attrs = node.attrs ?? {};
+  const isPendingMedia =
+    (node.type === 'image' || node.type === 'audio') &&
+    /^data:/i.test(String(attrs.src ?? '')) &&
+    !attrs.notionFileUploadId;
+  return (isPendingMedia ? 1 : 0) + (node.content ?? []).reduce(
+    (count, child) => count + countPendingLocalMedia(child),
+    0,
+  );
+}
+
+async function uploadMediaBlob(
+  blob: Blob,
+  mimeType: string,
+  filename: string,
+  syncConfig: SyncConfig,
+): Promise<string> {
+  const buf = await blob.arrayBuffer();
+  const bytes = new Uint8Array(buf);
+  let binary = '';
+  const chunkSize = 8192;
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+  }
+
+  const response = await requestServer<MediaUploadResponse>('/media/upload', {
+    method: 'POST',
+    body: JSON.stringify({ dataBase64: btoa(binary), mimeType, filename }),
+  }, syncConfig);
+
+  if (!response.fileUploadId) {
+    throw new Error('The sync server did not return a Notion file upload id.');
+  }
+  return response.fileUploadId;
+}
+
+function blobFromDataUrl(src: string): { blob: Blob; mimeType: string } | undefined {
+  const match = /^data:([^;,]+)?;base64,([\s\S]+)$/i.exec(src);
+  if (!match) return undefined;
+  const mimeType = match[1] || 'application/octet-stream';
+  const binary = atob(match[2]);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return { blob: new Blob([bytes], { type: mimeType }), mimeType };
+}
+
+async function uploadLocalMediaInNode(
+  node: DocumentContent,
+  syncConfig: SyncConfig,
+): Promise<{ content: DocumentContent; changed: boolean; failed: boolean }> {
+  const attrs = node.attrs ?? {};
+  const src = String(attrs.src ?? '');
+
+  if (
+    (node.type === 'image' || node.type === 'audio') &&
+    /^data:/i.test(src) &&
+    !attrs.notionFileUploadId
+  ) {
+    const decoded = blobFromDataUrl(src);
+    if (!decoded) return { content: node, changed: false, failed: true };
+    try {
+      const fileUploadId = await uploadMediaBlob(
+        decoded.blob,
+        String(attrs.mimeType || decoded.mimeType),
+        String(attrs.filename || `${node.type}-${crypto.randomUUID()}`),
+        syncConfig,
+      );
+      return {
+        content: {
+          ...node,
+          attrs: {
+            ...attrs,
+            notionFileUploadId: fileUploadId,
+            uploadState: 'done',
+          },
+        },
+        changed: true,
+        failed: false,
+      };
+    } catch {
+      return { content: node, changed: false, failed: true };
+    }
+  }
+
+  if (!node.content?.length) {
+    return { content: node, changed: false, failed: false };
+  }
+
+  let changed = false;
+  let failed = false;
+  const content: DocumentContent[] = [];
+  for (const child of node.content) {
+    const result = await uploadLocalMediaInNode(child, syncConfig);
+    content.push(result.content);
+    changed ||= result.changed;
+    failed ||= result.failed;
+  }
+  return {
+    content: changed ? { ...node, content } : node,
+    changed,
+    failed,
+  };
+}
+
+async function uploadPendingLocalMedia(syncConfig: SyncConfig): Promise<boolean> {
+  const { pages, projects } = await readStorage();
+  let hadFailures = false;
+
+  for (const page of pages) {
+    if (page.status === 'archived') continue;
+    const result = await uploadLocalMediaInNode(page.content, syncConfig);
+    hadFailures ||= result.failed;
+    if (!result.changed) continue;
+    const project = projects.find((candidate) => candidate.id === page.projectId);
+    if (!project) continue;
+    const updatedPage = markPageDirty({ ...page, content: result.content });
+    await persistPage(updatedPage);
+    const queuedPage = await enqueuePageSync(updatedPage, project, page);
+    await persistPage(queuedPage);
+  }
+
+  return hadFailures;
+}
+
 async function enqueuePageSync(
   page: ProjectPage,
   project: Project,
@@ -555,20 +754,33 @@ async function enqueuePageSync(
     ...page,
     content: normalizeInkwellBlockIds(page.content),
   };
+  const syncablePage = {
+    ...normalizedPage,
+    content: sanitizeMediaForSync(normalizedPage.content),
+  };
+  const syncablePreviousPage = previousPage
+    ? { ...previousPage, content: sanitizeMediaForSync(previousPage.content) }
+    : undefined;
 
   const pendingOps = await addPendingSyncOps(buildPageSyncOps({
-    previousPage,
-    page: normalizedPage,
+    previousPage: syncablePreviousPage,
+    page: syncablePage,
     project,
     selectedParentPageId: syncConfig.selectedParentPageId,
   }));
-  if (pendingOps.length) {
+  if (pendingOps.length || countPendingLocalMedia(normalizedPage.content) > 0) {
     triggerQueueDelivery();
   }
 
-  return syncConfig.connected
+  return syncConfig.connected && !isBrowserOffline()
     ? withSyncStatus(normalizedPage, 'saved')
-    : withSyncStatus(normalizedPage, 'stale', 'Connect Notion to sync this page.');
+    : withSyncStatus(
+        normalizedPage,
+        'stale',
+        syncConfig.connected
+          ? 'Saved locally. Will sync when a connection is available.'
+          : 'Connect Notion to sync this page.',
+      );
 
 }
 
@@ -585,7 +797,15 @@ function runQueueDelivery(): void {
     })
     .finally(() => {
       queueDeliveryPromise = undefined;
+      void scheduleQueueDeliveryIfNeeded();
     });
+}
+
+async function scheduleQueueDeliveryIfNeeded(): Promise<void> {
+  const { syncConfig } = await readStorage();
+  if (syncConfig.connected && !isBrowserOffline() && await pendingLocalWorkCount()) {
+    scheduleNextQueueDelivery(LOCAL_QUEUE_DELIVERY_DELAY_MS);
+  }
 }
 
 function scheduleNextQueueDelivery(delayMs: number): void {
@@ -654,7 +874,7 @@ export async function clearStalePages(pageIds: string[]): Promise<void> {
 async function syncPullPage(page: ProjectPage, options: { force?: boolean } = {}): Promise<ProjectPage> {
   const { syncConfig } = await readStorage();
 
-  if (!syncConfig.connected || !page.notionPageId) {
+  if (!syncConfig.connected || isBrowserOffline() || !page.notionPageId) {
     return page;
   }
 
@@ -738,11 +958,24 @@ function requireActiveProject(projects: Project[], projectId: string): Project {
 }
 
 async function saveProjectUpdate(projects: Project[], projectId: string, updatedProject: Project): Promise<Project> {
-  const syncedProject = await syncProject(updatedProject);
-  const savedProject = syncedProject ?? updatedProject;
   await writeStorage({
     projects: projects
-      .map((p) => (p.id === projectId ? savedProject : p))
+      .map((project) => (project.id === projectId ? updatedProject : project))
+      .sort(sortProjectsByUpdatedDesc),
+  });
+
+  const syncedProject = await syncProject(updatedProject);
+  const savedProject = syncedProject ?? updatedProject;
+  const { projects: latestProjects } = await readStorage();
+  const latestProject = latestProjects.find((project) => project.id === projectId);
+
+  if (latestProject?.updatedAt !== updatedProject.updatedAt) {
+    return latestProject ?? savedProject;
+  }
+
+  await writeStorage({
+    projects: latestProjects
+      .map((project) => (project.id === projectId ? savedProject : project))
       .sort(sortProjectsByUpdatedDesc),
   });
   return savedProject;
@@ -903,13 +1136,19 @@ async function flushPendingSyncOps(options: { force?: boolean } = {}): Promise<v
       return forcedQueueDeliveryPromise;
     }
 
-    forcedQueueDeliveryPromise = deliverPendingSyncOps({ force: true })
+    forcedQueueDeliveryPromise = (async () => {
+      if (queueDeliveryPromise) {
+        await queueDeliveryPromise;
+      }
+      await deliverPendingSyncOps({ force: true });
+    })()
       .catch((error) => {
         scheduleNextQueueDelivery(LOCAL_QUEUE_DELIVERY_DELAY_MS);
         throw error;
       })
       .finally(() => {
         forcedQueueDeliveryPromise = undefined;
+        void scheduleQueueDeliveryIfNeeded();
       });
 
     return forcedQueueDeliveryPromise;
@@ -920,38 +1159,83 @@ async function flushPendingSyncOps(options: { force?: boolean } = {}): Promise<v
 
 async function deliverPendingSyncOps({ force }: { force: boolean }): Promise<void> {
   const { syncConfig } = await readStorage();
-  if (!syncConfig.connected) return;
+  if (!syncConfig.connected || isBrowserOffline()) return;
 
-  const pending = await listPendingSyncOps();
-  if (!pending.length) return;
+  await deliverPendingProjectSyncEvents(syncConfig);
+  const hadMediaFailures = await uploadPendingLocalMedia(syncConfig);
 
-  const compacted = compactPendingSyncOps(pending);
-  if (compacted.length !== pending.length) {
-    await replacePendingSyncOps(compacted);
+  const pending = await compactStoredPendingSyncOps();
+  if (pending.length) {
+    const now = Date.now();
+    const eligible = force
+      ? pending
+      : pending.filter((op) => now - Date.parse(op.createdAt) >= LOCAL_QUEUE_DELIVERY_DELAY_MS);
+
+    if (!eligible.length) {
+      scheduleNextQueueDelivery(msUntilOldestOpIsEligible(pending, now));
+      return;
+    }
+
+    const response = await requestServer<SyncEnqueueResponse>('/sync/push', {
+      method: 'POST',
+      body: JSON.stringify({ ops: eligible }),
+    }, syncConfig);
+
+    await removePendingSyncOps(eligible.map((op) => op.opId));
+    await applyQueuedVersions(eligible, response);
   }
 
-  const now = Date.now();
-  const eligible = force
-    ? compacted
-    : compacted.filter((op) => now - Date.parse(op.createdAt) >= LOCAL_QUEUE_DELIVERY_DELAY_MS);
-
-  if (!eligible.length) {
-    scheduleNextQueueDelivery(msUntilOldestOpIsEligible(compacted, now));
-    return;
+  if (hadMediaFailures) {
+    throw new Error('Some local media is still waiting for a connection.');
   }
-
-  const response = await requestServer<SyncEnqueueResponse>('/sync/push', {
-    method: 'POST',
-    body: JSON.stringify({ ops: eligible }),
-  }, syncConfig);
-
-  await removePendingSyncOps(eligible.map((op) => op.opId));
-  await applyQueuedVersions(eligible, response);
 
   const remaining = await listPendingSyncOps();
   if (remaining.length) {
     scheduleNextQueueDelivery(msUntilOldestOpIsEligible(remaining));
   }
+}
+
+async function deliverPendingProjectSyncEvents(syncConfig: SyncConfig): Promise<void> {
+  const events = await listPendingProjectSyncEvents();
+
+  for (const event of events) {
+    const response = await requestServer<SyncProjectResponse>('/sync/project', {
+      method: 'POST',
+      body: JSON.stringify({
+        project: event.payload.project,
+        selectedParentPageId: event.payload.selectedParentPageId,
+      }),
+    }, syncConfig);
+
+    if (response.status === 'error') {
+      throw new Error(response.message ?? 'Unable to sync this project.');
+    }
+
+    if (response.parentPage) {
+      await updateStoredSyncConfig({
+        selectedParentPageId: response.parentPage.id,
+        selectedParentPageTitle: response.parentPage.title,
+      });
+    }
+
+    await applySyncedProject(event.payload.project, response.project);
+    await removePendingProjectSyncEvents([event.eventId]);
+  }
+}
+
+async function applySyncedProject(queuedProject: Project, responseProject?: Project): Promise<void> {
+  const { projects } = await readStorage();
+  await writeStorage({
+    projects: projects.map((project) =>
+      project.id === queuedProject.id && project.updatedAt === queuedProject.updatedAt
+        ? {
+            ...(responseProject ?? project),
+            syncState: 'saved' as const,
+            syncMessage: undefined,
+          }
+        : project,
+    ),
+  });
 }
 
 async function applyQueuedVersions(ops: BlockSyncOp[], response: SyncEnqueueResponse): Promise<void> {
@@ -1011,6 +1295,46 @@ async function updateStoredSyncConfig(config: Partial<SyncConfig>): Promise<Sync
 
 export const notionClient = {
   flushPendingSyncOps,
+  pendingSyncEventCount: pendingLocalWorkCount,
+
+  async prepareLocalWorkspaceForFirstSync(): Promise<boolean> {
+    const storage = await readStorage();
+    const { syncConfig } = storage;
+
+    if (
+      !syncConfig.connected ||
+      storage.notionHydrationSource === hydrationSource(syncConfig) ||
+      await pendingLocalWorkCount() === 0
+    ) {
+      return false;
+    }
+
+    const pages = storage.pages.map((page) => ({
+      ...page,
+      content: normalizeInkwellBlockIds(page.content),
+    }));
+    await writeStorage({ pages });
+
+    for (const project of storage.projects) {
+      await addPendingProjectSyncEvent(project, syncConfig.selectedParentPageId);
+    }
+
+    for (const page of pages) {
+      const project = storage.projects.find((candidate) => candidate.id === page.projectId);
+      if (!project) continue;
+      await addPendingSyncOps(buildPageSyncOps({
+        page: { ...page, content: sanitizeMediaForSync(page.content) },
+        project,
+        selectedParentPageId: syncConfig.selectedParentPageId,
+      }));
+    }
+
+    // Mark the destination before delivery. If the extension closes midway,
+    // startup keeps the local snapshot and resumes the still-durable queue.
+    await writeStorage({ notionHydrationSource: hydrationSource(syncConfig) });
+    triggerQueueDelivery();
+    return true;
+  },
 
   async needsInitialNotionHydration(): Promise<boolean> {
     const { notionHydrationSource, syncConfig } = await readStorage();
@@ -1021,7 +1345,7 @@ export const notionClient = {
 
     // Never replace local edits that have not reached the sync server yet. Once
     // the queue drains, a later startup can safely hydrate this workspace.
-    return (await listPendingSyncOps()).length === 0;
+    return await pendingLocalWorkCount() === 0;
   },
 
   async listProjects(): Promise<Project[]> {
@@ -1072,15 +1396,30 @@ export const notionClient = {
       };
 
       try {
-        const syncedProject = await syncProject(realProject);
-        const savedProject = syncedProject ?? realProject;
+        // Reconcile temporary IDs before touching the network so the project
+        // and its first page remain usable if the request hangs or the panel closes.
         await replaceTempProject({
           tempPage: page,
           tempProject: project,
           realPage,
-          realProject: savedProject,
+          realProject,
         });
-        const savedPage = await replayTempPageSave(page.id, realPage);
+        const syncedProject = await syncProject(realProject);
+        const savedProject = syncedProject ?? realProject;
+        const { projects: latestProjects } = await readStorage();
+        const latestProject = latestProjects.find(
+          (storedProject) => storedProject.id === realProject.id,
+        );
+        if (latestProject?.updatedAt === realProject.updatedAt) {
+          await writeStorage({
+            projects: latestProjects.map((storedProject) =>
+              storedProject.id === realProject.id ? savedProject : storedProject,
+            ),
+          });
+        }
+        const queuedPage = await enqueuePageSync(realPage, savedProject);
+        await persistPage(queuedPage);
+        const savedPage = await replayTempPageSave(page.id, queuedPage);
         return { page: savedPage, project: savedProject };
       } catch (error) {
         const message =
@@ -1135,13 +1474,10 @@ export const notionClient = {
         )
       : undefined;
 
-    const syncedProject = await syncProject(archivedProject);
-    const savedProject = syncedProject ?? archivedProject;
-
     await writeStorage({
       currentProjectId: replacementProject?.id ?? '',
       projects: projects.map((storedProject) =>
-        storedProject.id === projectId ? savedProject : storedProject,
+        storedProject.id === projectId ? archivedProject : storedProject,
       ),
       activePageIdsByProject: {
         ...activePageIdsByProject,
@@ -1150,6 +1486,19 @@ export const notionClient = {
         : {}),
       },
     });
+
+    const syncedProject = await syncProject(archivedProject);
+    const savedProject = syncedProject ?? archivedProject;
+    const { projects: latestProjects } = await readStorage();
+    const latestProject = latestProjects.find((storedProject) => storedProject.id === projectId);
+
+    if (latestProject?.updatedAt === archivedProject.updatedAt) {
+      await writeStorage({
+        projects: latestProjects.map((storedProject) =>
+          storedProject.id === projectId ? savedProject : storedProject,
+        ),
+      });
+    }
 
     return {
       currentProjectId: replacementProject?.id ?? '',
@@ -1663,30 +2012,15 @@ export const notionClient = {
 
   async uploadMedia(blob: Blob, mimeType: string, filename: string): Promise<string> {
     const { syncConfig } = await readStorage();
-    if (!syncConfig.connected) {
-      throw new Error('Connect Notion before uploading media.');
+    if (!syncConfig.connected || isBrowserOffline()) {
+      throw new Error(
+        syncConfig.connected
+          ? 'Reconnect before uploading media.'
+          : 'Connect Notion before uploading media.',
+      );
     }
 
-    const buf = await blob.arrayBuffer();
-    const bytes = new Uint8Array(buf);
-    // Build base64 in chunks to avoid call-stack limits on large media files.
-    let binary = '';
-    const chunkSize = 8192;
-    for (let i = 0; i < bytes.length; i += chunkSize) {
-      binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
-    }
-    const dataBase64 = btoa(binary);
-
-    const response = await requestServer<MediaUploadResponse>('/media/upload', {
-      method: 'POST',
-      body: JSON.stringify({ dataBase64, mimeType, filename }),
-    });
-
-    if (!response.fileUploadId) {
-      throw new Error('The sync server did not return a Notion file upload id.');
-    }
-
-    return response.fileUploadId;
+    return uploadMediaBlob(blob, mimeType, filename, syncConfig);
   },
 
   async refreshMediaUrl(fileUploadId?: string, notionBlockId?: string): Promise<string> {

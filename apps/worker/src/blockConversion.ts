@@ -1,4 +1,6 @@
 // @ts-nocheck
+import { normalizeCodeLanguage } from '../../../src/lib/codeLanguages.js';
+
 export function tiptapDocumentToNotionBlocks(doc) {
   return (doc?.content ?? []).map((node) => tiptapNodeToNotionBlock(node));
 }
@@ -44,7 +46,7 @@ function tiptapNodeToNotionBlock(node) {
       type: 'code',
       code: {
         rich_text: plainRichText(textFromNode(node)),
-        language: 'plain text',
+        language: normalizeCodeLanguage(node.attrs?.language),
       },
     };
   }
@@ -252,6 +254,9 @@ function notionBlockToTiptapNode(block) {
   if (block.type === 'code') {
     return {
       type: 'codeBlock',
+      attrs: {
+        language: normalizeCodeLanguage(block.code.language),
+      },
       content: plainTiptapText(block.code.rich_text.map((text) => text.plain_text).join('')),
     };
   }

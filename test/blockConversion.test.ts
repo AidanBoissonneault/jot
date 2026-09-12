@@ -53,11 +53,33 @@ describe('notionBlockToTiptapNode', () => {
     expect(doc.content[0].content[0].type).toBe('paragraph');
   });
 
-  it('converts code block to codeBlock node', () => {
+  it('converts code block to codeBlock node and preserves its language', () => {
     const doc = notionBlocksToTiptapDocument([
-      { type: 'code', code: { rich_text: [{ plain_text: 'const x = 1' }] } },
+      {
+        type: 'code',
+        code: { language: 'javascript', rich_text: [{ plain_text: 'const x = 1' }] },
+      },
     ]);
-    expect(doc.content[0]).toMatchObject({ type: 'codeBlock' });
+    expect(doc.content[0]).toMatchObject({
+      type: 'codeBlock',
+      attrs: { language: 'javascript' },
+    });
+  });
+
+  it('sends a code block language to Notion', () => {
+    const [block] = tiptapDocumentToNotionBlocks({
+      type: 'doc',
+      content: [{
+        type: 'codeBlock',
+        attrs: { language: 'typescript' },
+        content: [{ type: 'text', text: 'const answer: number = 42' }],
+      }],
+    });
+
+    expect(block).toMatchObject({
+      type: 'code',
+      code: { language: 'typescript' },
+    });
   });
 
   it('converts divider block to horizontalRule node', () => {

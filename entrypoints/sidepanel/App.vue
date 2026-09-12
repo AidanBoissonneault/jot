@@ -5,6 +5,7 @@ import AudioRecorder from '@/src/components/AudioRecorder.vue';
 import { NodeSelection, TextSelection } from '@tiptap/pm/state';
 import type { EditorView } from '@tiptap/pm/view';
 import StarterKit from '@tiptap/starter-kit';
+import { CodeNotebook } from '@/src/extensions/codeNotebook';
 import {
   decodeInkwellSource,
   INKWELL_SOURCE_ATTR,
@@ -12,10 +13,6 @@ import {
 } from '@/src/extensions/inkwellLink';
 import { PortableTextEditingKit } from '@/src/extensions/textFormatting';
 import { MediaKit } from '@/src/extensions/media';
-import {
-  hasPendingTransientMedia,
-  sanitizeMediaForSync,
-} from '@/src/extensions/mediaContent';
 import { InkwellBlockIds, normalizeInkwellBlockIds } from '@/src/extensions/inkwellBlockIds';
 import {
   AUDIO_UPLOAD_MAX_BYTES,
@@ -173,7 +170,9 @@ const editor = useEditor({
       },
       link: false,
       underline: false,
+      codeBlock: false,
     }),
+    CodeNotebook,
     InkwellLink,
     InkwellBlockIds,
     PortableTextEditingKit,
@@ -410,6 +409,14 @@ const saveLabel = computed(() => {
     return 'Save failed';
   }
 
+  if (store.pendingSyncCount > 0) {
+    return `${store.pendingSyncCount} ${store.pendingSyncCount === 1 ? 'change' : 'changes'} queued`;
+  }
+
+  if (!store.isOnline) {
+    return 'Offline · saved locally';
+  }
+
   if (store.saveStatus === 'stale') {
     return 'Stale';
   }
@@ -422,8 +429,16 @@ const syncBadgeTitle = computed(() => {
     return store.errorMessage;
   }
 
+  if (!store.isOnline) {
+    return 'You are offline. Changes are saved on this device and will sync automatically when you reconnect.';
+  }
+
   if (!store.syncConfig.connected) {
-    return 'Log in with Notion to sync across devices.';
+    return 'Changes are saved on this device. Connect Notion when you are ready to sync.';
+  }
+
+  if (store.pendingSyncCount > 0) {
+    return `${store.pendingSyncCount} queued ${store.pendingSyncCount === 1 ? 'change is' : 'changes are'} waiting to sync with Notion.`;
   }
 
   const sseNote = store.sseStatus === 'connected'
@@ -448,17 +463,21 @@ const syncBadgeClass = computed(() => ({
   error: store.saveStatus === 'error',
   stale:
     store.saveStatus === 'stale' ||
-    !store.syncConfig.connected,
+    !store.syncConfig.connected ||
+    !store.isOnline ||
+    store.pendingSyncCount > 0,
   saving:
     store.saveStatus === 'saving' ||
     store.saveStatus === 'creating' ||
     store.isLoading,
   saved:
     store.saveStatus === 'saved' &&
-    store.syncConfig.connected,
+    store.syncConfig.connected &&
+    store.isOnline &&
+    store.pendingSyncCount === 0,
 }));
 
-const canUseEditor = computed(() => store.syncConfig.connected);
+const canUseEditor = computed(() => !store.isLoading && store.projects.length > 0);
 const canLoginWithNotion = computed(
   () => isLegalAcceptanceLoaded.value && hasAcceptedLegalTerms.value && !isSigningIn.value,
 );
@@ -519,7 +538,7 @@ const activeToolbarItems = computed(() => {
 const accountLabel = computed(() =>
   store.syncConfig.userEmail ||
   store.syncConfig.userName ||
-  (store.syncConfig.connected ? 'Connected' : 'Signed out'),
+  (store.syncConfig.connected ? 'Connected' : 'Local only'),
 );
 
 const workspaceLabel = computed(() =>
@@ -584,6 +603,8 @@ onMounted(() => {
   store.startRuntimeListener();
   store.registerCaptureInsertHandler(insertCaptureAtCursor);
   window.addEventListener('pagehide', handlePanelExit);
+  window.addEventListener('online', store.handleOnline);
+  window.addEventListener('offline', store.handleOffline);
   window.addEventListener('resize', hideEditorContextMenu);
   document.addEventListener('visibilitychange', handleVisibilityChange);
   document.addEventListener('pointerdown', handleEditorContextMenuPointerDown);
@@ -608,6 +629,8 @@ onBeforeUnmount(() => {
   window.clearTimeout(saveTimer.value);
   window.clearInterval(sessionPollTimer);
   window.removeEventListener('pagehide', handlePanelExit);
+  window.removeEventListener('online', store.handleOnline);
+  window.removeEventListener('offline', store.handleOffline);
   window.removeEventListener('resize', hideEditorContextMenu);
   document.removeEventListener('visibilitychange', handleVisibilityChange);
   document.removeEventListener('pointerdown', handleEditorContextMenuPointerDown);
@@ -883,7 +906,16 @@ function cancelArchive() {
 
 async function resync() {
   await flushEditorContent();
+  const hadPendingLocalChanges = await notionClient.pendingSyncEventCount() > 0;
+  await store.syncPendingChanges();
+
+  if (hadPendingLocalChanges) {
+    uiMessage.value = 'Changes sent to Notion. They may take a moment to appear.';
+    return;
+  }
+
   await store.reloadFromNotion();
+  uiMessage.value = 'Up to date with Notion.';
 }
 
 async function loginWithNotion() {
@@ -1619,11 +1651,7 @@ async function saveEditorContentInBackground() {
   const page = { ...store.currentPage };
   const editorContent = editor.value.getJSON() as DocumentContent;
 
-  if (hasPendingTransientMedia(editorContent)) {
-    return;
-  }
-
-  const content = normalizeInkwellBlockIds(sanitizeMediaForSync(editorContent));
+  const content = normalizeInkwellBlockIds(editorContent);
   const title = pageTitleDraft.value;
   const serializedContent = JSON.stringify(content);
 
@@ -1681,17 +1709,13 @@ async function runEditorSaveLoop() {
         return;
       }
 
-      if (hasPendingTransientMedia(editorContent)) {
-        return;
-      }
-
       const currentPage = store.currentPage;
 
       if (!currentPage) {
         return;
       }
 
-      const content = normalizeInkwellBlockIds(sanitizeMediaForSync(editorContent));
+      const content = normalizeInkwellBlockIds(editorContent);
       const title = pageTitleDraft.value;
       const serializedContent = JSON.stringify(content);
 
@@ -1723,6 +1747,10 @@ async function uploadMediaFile(file: File, label: string): Promise<string> {
 
   let fileUploadId = '';
 
+  if (!store.syncConfig.connected || !store.isOnline) {
+    return fileUploadId;
+  }
+
   try {
     fileUploadId = await notionClient.uploadMedia(file, file.type, file.name);
   } catch (error) {
@@ -1748,7 +1776,7 @@ function updateMediaNodeUploadState(
           tr.setNodeMarkup(pos, undefined, {
             ...node.attrs,
             ...(fileUploadId ? { notionFileUploadId: fileUploadId } : {}),
-            uploadState: fileUploadId ? 'done' : 'error',
+            uploadState: fileUploadId ? 'done' : 'local',
           });
           return true;
         })
@@ -1768,18 +1796,19 @@ async function handleUploadableImageDrop(info: { kind: 'file'; file: File }): Pr
     return;
   }
 
-  const localSrc = URL.createObjectURL(file);
+  const localSrc = await fileToDataUrl(file);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   shouldSkipNextUpdateSave = true;
-  editor.value?.chain().focus().setImage({ src: localSrc, uploadState: 'uploading' } as any).run();
+  editor.value?.chain().focus().setImage({
+    src: localSrc,
+    uploadState: store.syncConfig.connected && store.isOnline ? 'uploading' : 'local',
+    filename: file.name,
+  } as any).run();
+  await saveEditorContentOptimistically();
   const fileUploadId = await uploadMediaFile(file, 'image');
   updateMediaNodeUploadState(editor.value, 'image', localSrc, fileUploadId);
 
-  if (!fileUploadId) {
-    return;
-  }
-
-  void saveEditorContentOptimistically();
+  if (fileUploadId) void saveEditorContentOptimistically();
 }
 
 async function handleUploadableAudioDrop(info: { kind: 'file'; file: File }): Promise<void> {
@@ -1792,7 +1821,7 @@ async function handleUploadableAudioFile(file: File): Promise<void> {
     return;
   }
 
-  const localSrc = URL.createObjectURL(file);
+  const localSrc = await fileToDataUrl(file);
   shouldSkipNextUpdateSave = true;
   const editorInstance = editor.value;
   if (editorInstance) {
@@ -1800,18 +1829,26 @@ async function handleUploadableAudioFile(file: File): Promise<void> {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     editorInstance.chain().focus(insertPos || 'end').setAudio({
       src: localSrc,
-      uploadState: 'uploading',
+      uploadState: store.syncConfig.connected && store.isOnline ? 'uploading' : 'local',
       mimeType: file.type,
+      filename: file.name,
     } as any).run();
   }
+  await saveEditorContentOptimistically();
   const fileUploadId = await uploadMediaFile(file, 'audio');
   updateMediaNodeUploadState(editor.value, 'audio', localSrc, fileUploadId);
 
-  if (!fileUploadId) {
-    return;
-  }
+  if (fileUploadId) void saveEditorContentOptimistically();
+}
 
-  void saveEditorContentOptimistically();
+async function fileToDataUrl(file: File): Promise<string> {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let binary = '';
+  const chunkSize = 8192;
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+  }
+  return `data:${file.type || 'application/octet-stream'};base64,${btoa(binary)}`;
 }
 
 function stopAudioStream() {
@@ -2002,7 +2039,7 @@ function textFromNode(node: DocumentContent): string {
 
       <div class="topbar-switchers">
         <select
-          v-if="store.syncConfig.connected"
+          v-if="canUseEditor"
           v-model="currentProjectModel"
           aria-label="Quick project"
           :disabled="store.isLoading || store.projects.length === 0"
@@ -2017,7 +2054,7 @@ function textFromNode(node: DocumentContent): string {
         </select>
 
         <select
-          v-if="store.syncConfig.connected"
+          v-if="canUseEditor"
           v-model="currentPageModel"
           aria-label="Quick page"
           :disabled="store.isLoading || store.pages.length === 0"
@@ -2032,7 +2069,7 @@ function textFromNode(node: DocumentContent): string {
         </select>
       </div>
 
-      <div v-if="store.syncConfig.connected" class="topbar-actions">
+      <div v-if="canUseEditor" class="topbar-actions">
         <button
           type="button"
           class="icon-label-button secondary-button"
@@ -2059,7 +2096,7 @@ function textFromNode(node: DocumentContent): string {
         <button
           type="button"
           class="icon-label-button secondary-button"
-          :disabled="store.isLoading"
+          :disabled="store.isLoading || !store.syncConfig.connected || !store.isOnline"
           title="Resync with Notion"
           aria-label="Resync with Notion"
           @click="resync"
@@ -2068,6 +2105,7 @@ function textFromNode(node: DocumentContent): string {
           <span>Sync</span>
         </button>
         <button
+          v-if="store.syncConfig.connected"
           type="button"
           class="icon-label-button secondary-button"
           title="Logout"
@@ -2096,52 +2134,6 @@ function textFromNode(node: DocumentContent): string {
         <span>{{ tab.label }}</span>
       </button>
     </nav>
-
-    <section
-      v-if="!store.syncConfig.connected && activeTab !== 'settings'"
-      class="auth-gate"
-      aria-label="Notion login"
-    >
-      <h2>Log in with Notion</h2>
-      <p>
-        Inkwell connects to Notion, syncs selected workspace content, and stores
-        account, session, and sync metadata needed to provide the service.
-      </p>
-      <label class="legal-consent">
-        <input
-          v-model="hasAcceptedLegalTerms"
-          type="checkbox"
-          :disabled="!isLegalAcceptanceLoaded"
-        >
-        <span>
-          I have read and agree to the
-          <a
-            :href="LEGAL_TERMS_URL"
-            target="_blank"
-            rel="noopener noreferrer"
-            @click.prevent="openLegalUrl(LEGAL_TERMS_URL)"
-          >Terms</a>
-          and
-          <a
-            :href="LEGAL_PRIVACY_URL"
-            target="_blank"
-            rel="noopener noreferrer"
-            @click.prevent="openLegalUrl(LEGAL_PRIVACY_URL)"
-          >Privacy Policy</a>.
-        </span>
-      </label>
-      <button
-        type="button"
-        class="icon-label-button"
-        :disabled="!canLoginWithNotion"
-        :title="isSigningIn ? 'Connecting' : 'Continue with Notion'"
-        :aria-label="isSigningIn ? 'Connecting' : 'Continue with Notion'"
-        @click="loginWithNotion"
-      >
-        <font-awesome-icon :icon="['fas', 'cloud-arrow-up']" fixed-width />
-        <span>{{ isSigningIn ? 'Connecting...' : 'Continue with Notion' }}</span>
-      </button>
-    </section>
 
     <p v-if="hasInlineMessage" class="error">
       {{ uiMessage || store.errorMessage }}
@@ -3133,6 +3125,14 @@ function textFromNode(node: DocumentContent): string {
             <dt>Status</dt>
             <dd>{{ saveLabel }}</dd>
           </div>
+          <div>
+            <dt>Connection</dt>
+            <dd>{{ store.isOnline ? 'Online' : 'Offline' }}</dd>
+          </div>
+          <div>
+            <dt>Local queue</dt>
+            <dd>{{ store.pendingSyncCount }} {{ store.pendingSyncCount === 1 ? 'change' : 'changes' }}</dd>
+          </div>
         </dl>
 
         <div
@@ -3140,8 +3140,9 @@ function textFromNode(node: DocumentContent): string {
           class="legal-disclosure"
         >
           <p>
-            Inkwell connects to Notion, syncs selected workspace content, and
-            stores account, session, and sync metadata needed to provide the service.
+            Notion sync is optional. Inkwell can stay local to this device indefinitely.
+            If you connect later, your complete local workspace is uploaded first, then
+            future changes use normal online and offline syncing.
           </p>
           <label class="legal-consent">
             <input
@@ -4542,6 +4543,88 @@ function textFromNode(node: DocumentContent): string {
   background: transparent;
   color: inherit;
   padding: 0;
+}
+
+.editor :deep(.inkwell-code-cell) {
+  overflow: hidden;
+  margin: 0 0 0.85rem;
+  border: 1px solid var(--inkwell-border-strong);
+  border-radius: 8px;
+  background: #111113;
+}
+
+.editor :deep(.inkwell-code-toolbar) {
+  display: flex;
+  min-height: 36px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border-bottom: 1px solid rgb(255 255 255 / 12%);
+  background: #202024;
+  padding: 5px 7px 5px 10px;
+}
+
+.editor :deep(.inkwell-code-language) {
+  min-width: 0;
+  max-width: 170px;
+  border: 0;
+  background: transparent;
+  color: #e4e4e7;
+  font: 600 0.78rem/1.2 inherit;
+  outline: none;
+}
+
+.editor :deep(.inkwell-code-language option) {
+  background: #ffffff;
+  color: #18181b;
+}
+
+.editor :deep(.inkwell-code-actions) {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.editor :deep(.inkwell-code-run),
+.editor :deep(.inkwell-code-clear) {
+  min-height: 25px;
+  border: 1px solid rgb(255 255 255 / 18%);
+  border-radius: 5px;
+  background: rgb(255 255 255 / 8%);
+  color: #f4f4f5;
+  padding: 0 8px;
+  font: 600 0.72rem/1 inherit;
+  cursor: pointer;
+}
+
+.editor :deep(.inkwell-code-run::before) {
+  content: '▶';
+  margin-right: 5px;
+  font-size: 0.65em;
+}
+
+.editor :deep(.inkwell-code-run:disabled) {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.editor :deep(.inkwell-code-cell pre) {
+  margin: 0;
+  border-radius: 0;
+  padding: 12px;
+}
+
+.editor :deep(.inkwell-code-output) {
+  border-top: 1px solid var(--inkwell-border-strong);
+  background: #fafafa;
+}
+
+.editor :deep(.inkwell-code-runner) {
+  display: block;
+  width: 100%;
+  height: 72px;
+  border: 0;
+  background: transparent;
 }
 
 .editor :deep(.tiptap hr) {

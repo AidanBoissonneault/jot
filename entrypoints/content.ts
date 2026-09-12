@@ -5,6 +5,7 @@ import type {
   RestoreHighlightMessage,
   TextDragStartedMessage,
 } from '@/src/types/messages';
+import { detectCodeLanguage } from '@/src/lib/codeLanguages';
 
 const BUTTON_ID = 'inkwell-inline-save';
 const INKWELL_DRAG_MIME = 'application/x-inkwell-capture';
@@ -195,6 +196,49 @@ export default defineContentScript({
       );
     }
 
+    function getSelectionCodeElement(selection: Selection) {
+      const range = selection.rangeCount ? selection.getRangeAt(0) : null;
+      const candidates = [
+        getElementFromNode(selection.anchorNode),
+        getElementFromNode(selection.focusNode),
+        getElementFromNode(range?.commonAncestorContainer ?? null),
+      ];
+
+      for (const candidate of candidates) {
+        const codeElement = candidate?.closest('code,pre');
+        if (codeElement) {
+          return codeElement.closest('pre') ?? codeElement;
+        }
+      }
+
+      return null;
+    }
+
+    function languageFromCodeElement(element: Element) {
+      const code = element.matches('code') ? element : element.querySelector('code');
+      const parent = element.closest('figure,[data-language],[data-lang]');
+      const ancestor = element.parentElement;
+      const outerAncestor = ancestor?.parentElement;
+
+      return detectCodeLanguage([
+        code?.getAttribute('data-language'),
+        code?.getAttribute('data-lang'),
+        code?.className,
+        element.getAttribute('data-language'),
+        element.getAttribute('data-lang'),
+        element.className,
+        parent?.getAttribute('data-language'),
+        parent?.getAttribute('data-lang'),
+        parent?.className,
+        ancestor?.getAttribute('data-language'),
+        ancestor?.getAttribute('data-lang'),
+        ancestor?.className,
+        outerAncestor?.getAttribute('data-language'),
+        outerAncestor?.getAttribute('data-lang'),
+        outerAncestor?.className,
+      ]);
+    }
+
     function getHeadingElement(element: Element) {
       const heading = element.closest('h1,h2,h3,h4,h5,h6');
 
@@ -266,6 +310,7 @@ export default defineContentScript({
         ? getHeadingElement(selectionElement)
         : null;
       const headingLevel = getHeadingLevel(selection);
+      const codeElement = getSelectionCodeElement(selection);
       const range = selection.rangeCount ? selection.getRangeAt(0) : null;
       const textNode = range ? getSelectionTextNode(range) : null;
       const offset =
@@ -278,7 +323,7 @@ export default defineContentScript({
           : {};
       const sourceLink = buildSourceLink(
         text,
-        headingLevel ? headingElement : null,
+        codeElement ?? (headingLevel ? headingElement : null),
       );
 
       return {
@@ -291,8 +336,10 @@ export default defineContentScript({
           xpath: textNode ? getNodeXPath(textNode) : undefined,
           offset: typeof offset === 'number' && offset >= 0 ? offset : undefined,
           ...context,
-          isHeading: includeHeadingMetadata && Boolean(headingLevel),
-          headingLevel: includeHeadingMetadata ? headingLevel : undefined,
+          isHeading: includeHeadingMetadata && !codeElement && Boolean(headingLevel),
+          headingLevel: includeHeadingMetadata && !codeElement ? headingLevel : undefined,
+          isCodeBlock: Boolean(codeElement),
+          codeLanguage: codeElement ? languageFromCodeElement(codeElement) : undefined,
         },
       } satisfies CaptureSelectionMessage['payload'];
     }
@@ -414,9 +461,9 @@ export default defineContentScript({
 
       removeTimer = window.setTimeout(() => {
         const selection = window.getSelection();
-        const selectedText = selection?.toString().trim();
+        const selectedText = selection?.toString().replace(/\r\n/g, '\n').trimEnd() ?? '';
 
-        if (!selection || !selectedText) {
+        if (!selection || !selectedText.trim()) {
           hideButton();
           return;
         }
@@ -472,9 +519,9 @@ export default defineContentScript({
         }
 
         const selection = window.getSelection();
-        const selectedText = selection?.toString().trim();
+        const selectedText = selection?.toString().replace(/\r\n/g, '\n').trimEnd() ?? '';
 
-        if (!selection || !selectedText) {
+        if (!selection || !selectedText.trim()) {
           return;
         }
 

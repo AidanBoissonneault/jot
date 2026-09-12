@@ -122,7 +122,14 @@ export async function applyManagedBlockOps({
   kindFromNotionBlock,
   hash,
 }) {
-  if (ops.some((op) => op.type === 'block_reorder')) {
+  const replacementOp = ops.find((op) => op.type === 'block_reorder');
+  if (replacementOp) {
+    if (replacementOp.payload?.replaceAll) {
+      // A full local snapshot is authoritative. Clearing the mappings makes
+      // replaceManagedBlocks remove every current child first, including any
+      // untracked blocks left by an interrupted or older first-sync attempt.
+      store.blockMappings[localPageId] = [];
+    }
     return replaceManagedBlocks(store, localPageId, notionPageId, content);
   }
 

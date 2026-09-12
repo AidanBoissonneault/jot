@@ -21,6 +21,7 @@ export const InkwellImage = Image.extend({
       kind: { default: 'image' },
       notionFileUploadId: { default: '' },
       notionBlockId: { default: '' },
+      filename: { default: '' },
       width: {
         default: '',
         parseHTML: (element: HTMLElement) => element.getAttribute('data-width') ?? '',
@@ -312,6 +313,7 @@ const InkwellAudio = Audio.extend({
       kind: { default: 'audio' },
       notionFileUploadId: { default: '' },
       notionBlockId: { default: '' },
+      filename: { default: '' },
       duration: { default: 0 },
     };
   },

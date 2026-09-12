@@ -60,6 +60,10 @@ export default defineBackground(() => {
 
     return false;
   });
+
+  // A background restart (including a browser reload) is an opportunity to
+  // resume durable work that was queued while the network was unavailable.
+  void notionClient.flushPendingSyncOps({ force: true }).catch(() => undefined);
 });
 
 function handleHeadingDragStarted(message: HeadingDragStartedMessage) {

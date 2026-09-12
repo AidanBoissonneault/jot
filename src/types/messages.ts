@@ -22,6 +22,8 @@ export type CaptureSelectionPayload = {
   highlightMeta: SourceHighlightMeta & {
     isHeading?: boolean;
     headingLevel?: 1 | 2 | 3 | 4 | 5 | 6;
+    isCodeBlock?: boolean;
+    codeLanguage?: string;
   };
 };
 

@@ -11,6 +11,8 @@ export type HighlightMeta = {
   suffix?: string;
   isHeading?: boolean;
   headingLevel?: 1 | 2 | 3 | 4 | 5 | 6;
+  isCodeBlock?: boolean;
+  codeLanguage?: string;
 };
 
 export type Capture = {
