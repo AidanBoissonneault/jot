@@ -8,12 +8,19 @@ import StarterKit from '@tiptap/starter-kit';
 import { CodeNotebook } from '@/src/extensions/codeNotebook';
 import {
   decodeInkwellSource,
+  isAccessibleInkwellSource,
   INKWELL_SOURCE_ATTR,
   InkwellLink,
+  safeInkwellSourceUrl,
 } from '@/src/extensions/inkwellLink';
 import { PortableTextEditingKit } from '@/src/extensions/textFormatting';
 import { MediaKit } from '@/src/extensions/media';
 import { InkwellBlockIds, normalizeInkwellBlockIds } from '@/src/extensions/inkwellBlockIds';
+import {
+  capturedBlockId,
+  sourceFromProjectState,
+  visibleProjectStateContent,
+} from '@/src/extensions/sourceRegistry';
 import {
   AUDIO_UPLOAD_MAX_BYTES,
   IMAGE_UPLOAD_MAX_BYTES,
@@ -57,6 +64,7 @@ import type {
   ConsumeHeadingDragMessage,
   ConsumeTextDragMessage,
   OpenSourceRequestMessage,
+  SourceOpenPayload,
 } from '@/src/types/messages';
 
 const INKWELL_DRAG_MIME = 'application/x-inkwell-capture';
@@ -126,6 +134,7 @@ const editorContextMenu = ref({
   top: 0,
 });
 const editorContextMenuHasSelection = ref(false);
+const editorContextMenuSource = ref<SourceOpenPayload | null>(null);
 const editorContextMenuPanel = ref<'main' | 'link' | 'color'>('main');
 const contextMenuLinkDraft = ref('');
 let editorContextSelection: { from: number; to: number } | null = null;
@@ -560,6 +569,17 @@ const parentPageLabel = computed(() =>
 
 const hasInlineMessage = computed(() => Boolean(uiMessage.value || store.errorMessage));
 
+const editorContextMenuSourceHost = computed(() => {
+  const payload = editorContextMenuSource.value;
+  const sourceUrl = payload ? safeInkwellSourceUrl(payload) : null;
+
+  try {
+    return sourceUrl ? new URL(sourceUrl).hostname.replace(/^www\./, '') : '';
+  } catch {
+    return '';
+  }
+});
+
 const activeBlockType = computed(() => {
   editorStateVersion.value;
 
@@ -697,7 +717,9 @@ watch(
   (project) => {
     projectNameDraft.value = project?.name ?? '';
     projectCategoryDraft.value = project?.category ?? '';
-    projectStateDraft.value = plainTextFromDocument(project?.stateContent);
+    projectStateDraft.value = plainTextFromDocument(
+      visibleProjectStateContent(project?.stateContent),
+    );
   },
   { immediate: true },
 );
@@ -767,12 +789,16 @@ async function insertCaptureAtCursor(payload: CaptureSelectionPayload) {
     return false;
   }
 
+  const capturedContent = createCapturedContent(payload);
   shouldSkipNextUpdateSave = true;
-  editor.value.chain().focus().insertContent(createCapturedContent(payload)).run();
+  editor.value.chain().focus().insertContent(capturedContent).run();
   queueMicrotask(() => {
     shouldSkipNextUpdateSave = false;
   });
-  await saveEditorContentOptimistically();
+  await Promise.all([
+    saveEditorContentOptimistically(),
+    registerCapturedSource(capturedContent, payload),
+  ]);
   return true;
 }
 
@@ -824,7 +850,9 @@ async function saveProjectMetadata() {
 
   if (
     projectCategoryDraft.value === (project.category ?? '') &&
-    stateText === plainTextFromDocument(project.stateContent)
+    stateText === plainTextFromDocument(
+      visibleProjectStateContent(project.stateContent),
+    )
   ) {
     return;
   }
@@ -1183,6 +1211,7 @@ function showEditorContextMenu(view: EditorView, event: MouseEvent) {
     to: view.state.selection.to,
   };
   editorContextMenuHasSelection.value = !view.state.selection.empty;
+  editorContextMenuSource.value = sourceForEditorContext(view, pos?.pos);
   contextMenuLinkDraft.value = String(editor.value?.getAttributes('link').href ?? '');
   editorContextMenuPanel.value = 'main';
   editorContextMenu.value = {
@@ -1224,7 +1253,116 @@ function restoreEditorContextSelection() {
 
 function hideEditorContextMenu() {
   editorContextMenu.value.visible = false;
+  editorContextMenuSource.value = null;
   editorContextMenuPanel.value = 'main';
+}
+
+function sourceForEditorContext(view: EditorView, clickedPosition?: number) {
+  const sources = new Map<string, SourceOpenPayload>();
+  const blockIds = new Set<string>();
+  const { from, to, empty } = view.state.selection;
+
+  if (!empty) {
+    view.state.doc.nodesBetween(from, to, (node) => {
+      collectNodeSources(node, sources, blockIds);
+      return true;
+    });
+  }
+
+  collectProjectStateSources(blockIds, sources);
+
+  if (sources.size === 1) {
+    return sources.values().next().value ?? null;
+  }
+
+  if (sources.size > 1 || typeof clickedPosition !== 'number') {
+    return null;
+  }
+
+  const resolved = view.state.doc.resolve(
+    clamp(clickedPosition, 0, view.state.doc.content.size),
+  );
+
+  for (let depth = resolved.depth; depth >= 0; depth -= 1) {
+    collectNodeSources(resolved.node(depth), sources, blockIds);
+  }
+
+  collectNodeSources(resolved.nodeBefore, sources, blockIds);
+  collectNodeSources(resolved.nodeAfter, sources, blockIds);
+  collectProjectStateSources(blockIds, sources);
+
+  return sources.size === 1 ? sources.values().next().value ?? null : null;
+}
+
+function collectNodeSources(
+  node: { attrs?: Record<string, unknown>; marks?: readonly { attrs?: Record<string, unknown> }[] } | null,
+  sources: Map<string, SourceOpenPayload>,
+  blockIds: Set<string>,
+) {
+  if (!node) {
+    return;
+  }
+
+  collectSource(node.attrs?.[INKWELL_SOURCE_ATTR], sources);
+  const blockId = node.attrs?.inkwellBlockId;
+  if (typeof blockId === 'string' && blockId) {
+    blockIds.add(blockId);
+  }
+
+  for (const mark of node.marks ?? []) {
+    collectSource(mark.attrs?.[INKWELL_SOURCE_ATTR], sources);
+  }
+}
+
+function collectProjectStateSources(
+  blockIds: Set<string>,
+  sources: Map<string, SourceOpenPayload>,
+) {
+  for (const blockId of blockIds) {
+    collectSource(
+      sourceFromProjectState(store.currentProject?.stateContent, blockId),
+      sources,
+    );
+  }
+}
+
+function collectSource(
+  value: unknown,
+  sources: Map<string, SourceOpenPayload>,
+) {
+  const payload = decodeInkwellSource(value);
+
+  if (!isAccessibleInkwellSource(payload) || !payload) {
+    return;
+  }
+
+  const key = [
+    payload.sourceUrl,
+    payload.highlightMeta.xpath,
+    payload.highlightMeta.offset,
+    payload.highlightMeta.text,
+  ].join('\n');
+  sources.set(key, payload);
+}
+
+async function openEditorContextSource() {
+  const payload = editorContextMenuSource.value;
+
+  if (!payload || !isAccessibleInkwellSource(payload)) {
+    return;
+  }
+
+  hideEditorContextMenu();
+
+  await browser.runtime.sendMessage({
+    type: 'inkwell.openSourceRequest',
+    payload,
+  } satisfies OpenSourceRequestMessage).catch(async () => {
+    const url = safeInkwellSourceUrl(payload);
+    if (url) {
+      await browser.tabs.create({ active: true, url });
+    }
+  });
 }
 
 function handleEditorContextMenuPointerDown(event: PointerEvent) {
@@ -1903,14 +2041,18 @@ function insertCapturedTextAtDrop(
   payload: CaptureSelectionPayload,
 ) {
   moveEditorSelectionToDrop(view, event);
+  const capturedContent = createCapturedContent(payload);
   shouldSkipNextUpdateSave = true;
-  editor.value?.chain().focus().insertContent(createCapturedContent(payload)).run();
+  editor.value?.chain().focus().insertContent(capturedContent).run();
   queueMicrotask(() => {
     shouldSkipNextUpdateSave = false;
   });
 
   if (editor.value) {
-    void saveEditorContentOptimistically();
+    void Promise.all([
+      saveEditorContentOptimistically(),
+      registerCapturedSource(capturedContent, payload),
+    ]);
   }
 }
 
@@ -1979,17 +2121,31 @@ function insertLinkedHeadingAtDrop(
   }
 
   shouldSkipNextUpdateSave = true;
+  const capturedContent = createLinkedHeadingContent(payload);
   editor.value
     ?.chain()
     .focus()
-    .insertContent(createLinkedHeadingContent(payload))
+    .insertContent(capturedContent)
     .run();
   queueMicrotask(() => {
     shouldSkipNextUpdateSave = false;
   });
 
   if (editor.value) {
-    void saveEditorContentOptimistically();
+    void Promise.all([
+      saveEditorContentOptimistically(),
+      registerCapturedSource(capturedContent, payload),
+    ]);
+  }
+}
+
+async function registerCapturedSource(
+  content: DocumentContent[],
+  payload: CaptureSelectionPayload,
+) {
+  const blockId = capturedBlockId(content);
+  if (blockId) {
+    await store.registerCurrentProjectSource(blockId, payload);
   }
 }
 
@@ -2730,6 +2886,23 @@ function textFromNode(node: DocumentContent): string {
               <span aria-hidden="true" class="context-color-icon">A</span>
             </button>
           </div>
+
+          <template v-if="editorContextMenuSource">
+            <div class="context-menu-divider" />
+            <button
+              type="button"
+              class="context-menu-button source-action"
+              :title="`Open the original text on ${editorContextMenuSourceHost}`"
+              aria-label="Go to source"
+              @mousedown.prevent
+              @click="openEditorContextSource"
+            >
+              <span>Go to source</span>
+              <span v-if="editorContextMenuSourceHost" class="source-action-host">
+                {{ editorContextMenuSourceHost }}
+              </span>
+            </button>
+          </template>
         </div>
 
         <form
@@ -4347,6 +4520,26 @@ function textFromNode(node: DocumentContent): string {
   padding: 0 8px;
 }
 
+.context-menu-button.source-action {
+  display: flex;
+  justify-content: space-between;
+  width: 100%;
+  min-width: 220px;
+  padding: 0 8px;
+  text-align: left;
+}
+
+.source-action-host {
+  max-width: 150px;
+  margin-left: 16px;
+  overflow: hidden;
+  color: var(--inkwell-muted);
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .context-color-icon {
   display: inline-grid;
   place-items: center;
@@ -4612,6 +4805,67 @@ function textFromNode(node: DocumentContent): string {
   margin: 0;
   border-radius: 0;
   padding: 12px;
+}
+
+.editor :deep(.inkwell-code-cell .hljs-comment),
+.editor :deep(.inkwell-code-cell .hljs-quote) {
+  color: #8b949e;
+  font-style: italic;
+}
+
+.editor :deep(.inkwell-code-cell .hljs-keyword),
+.editor :deep(.inkwell-code-cell .hljs-selector-tag),
+.editor :deep(.inkwell-code-cell .hljs-doctag) {
+  color: #ff7b72;
+}
+
+.editor :deep(.inkwell-code-cell .hljs-title),
+.editor :deep(.inkwell-code-cell .hljs-title.function_),
+.editor :deep(.inkwell-code-cell .hljs-section),
+.editor :deep(.inkwell-code-cell .hljs-type),
+.editor :deep(.inkwell-code-cell .hljs-built_in) {
+  color: #d2a8ff;
+}
+
+.editor :deep(.inkwell-code-cell .hljs-string),
+.editor :deep(.inkwell-code-cell .hljs-regexp),
+.editor :deep(.inkwell-code-cell .hljs-addition),
+.editor :deep(.inkwell-code-cell .hljs-attribute) {
+  color: #a5d6ff;
+}
+
+.editor :deep(.inkwell-code-cell .hljs-number),
+.editor :deep(.inkwell-code-cell .hljs-literal),
+.editor :deep(.inkwell-code-cell .hljs-symbol),
+.editor :deep(.inkwell-code-cell .hljs-bullet) {
+  color: #79c0ff;
+}
+
+.editor :deep(.inkwell-code-cell .hljs-variable),
+.editor :deep(.inkwell-code-cell .hljs-template-variable),
+.editor :deep(.inkwell-code-cell .hljs-params),
+.editor :deep(.inkwell-code-cell .hljs-meta) {
+  color: #ffa657;
+}
+
+.editor :deep(.inkwell-code-cell .hljs-attr),
+.editor :deep(.inkwell-code-cell .hljs-property),
+.editor :deep(.inkwell-code-cell .hljs-selector-class),
+.editor :deep(.inkwell-code-cell .hljs-selector-id) {
+  color: #7ee787;
+}
+
+.editor :deep(.inkwell-code-cell .hljs-deletion) {
+  color: #ffa198;
+  background: rgb(248 81 73 / 15%);
+}
+
+.editor :deep(.inkwell-code-cell .hljs-emphasis) {
+  font-style: italic;
+}
+
+.editor :deep(.inkwell-code-cell .hljs-strong) {
+  font-weight: 700;
 }
 
 .editor :deep(.inkwell-code-output) {

@@ -1,6 +1,7 @@
 import { computed, ref } from 'vue';
 import { defineStore } from 'pinia';
 import { mergeSyncedMediaContent } from '@/src/extensions/mediaContent';
+import { mergeVisibleProjectState } from '@/src/extensions/sourceRegistry';
 import { notionClient, connectSyncEvents, applySyncResult, clearStalePages } from '@/src/services/notionClient';
 import { onSyncQueueChange } from '@/src/services/syncQueue';
 import type { SyncEventMessage } from '@/src/types/sync';
@@ -200,7 +201,10 @@ export const useInkwellStore = defineStore('inkwell', () => {
         category: metadata.category,
         stateContent: metadata.stateText === undefined
           ? undefined
-          : documentFromPlainText(metadata.stateText),
+          : mergeVisibleProjectState(
+              documentFromPlainText(metadata.stateText),
+              currentProject.value?.stateContent,
+            ),
       });
       projects.value = projects.value
         .map((storedProject) =>
@@ -214,6 +218,26 @@ export const useInkwellStore = defineStore('inkwell', () => {
         error instanceof Error ? error.message : 'Unable to update this project.';
       saveStatus.value = 'error';
     }
+  }
+
+  async function registerCurrentProjectSource(
+    blockId: string,
+    payload: CaptureSelectionPayload,
+  ) {
+    if (!currentProjectId.value || !blockId) {
+      return;
+    }
+
+    const project = await notionClient.addProjectSource(
+      currentProjectId.value,
+      blockId,
+      payload,
+    );
+    projects.value = projects.value
+      .map((storedProject) =>
+        storedProject.id === project.id ? project : storedProject,
+      )
+      .sort(sortProjectsByUpdatedDesc);
   }
 
   async function archiveCurrentProject() {
@@ -890,6 +914,7 @@ export const useInkwellStore = defineStore('inkwell', () => {
     pendingSyncCount,
     projects,
     registerCaptureInsertHandler,
+    registerCurrentProjectSource,
     renameCurrentProject,
     updateCurrentProjectMetadata,
     renameCurrentPage,

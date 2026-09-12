@@ -8,7 +8,12 @@ import type {
   SyncConfig,
 } from '@/src/types/capture';
 import { idbGet, idbGetMany, idbSet, idbSetMany } from '@/src/services/idbStore';
-import { encodeInkwellSource, INKWELL_SOURCE_ATTR } from '@/src/extensions/inkwellLink';
+import { createInkwellBlockId, normalizeInkwellBlockIds } from '@/src/extensions/inkwellBlockIds';
+import {
+  addSourceToProjectState,
+  capturedBlockId,
+  migratePageSourcesToProjectState,
+} from '@/src/extensions/sourceRegistry';
 import type {
   CaptureSelectionPayload,
   SourceOpenPayload,
@@ -28,7 +33,6 @@ import type {
   SyncValidationResponse,
 } from '@/src/types/sync';
 import { markUnrecoverableTransientMedia, sanitizeMediaForSync } from '@/src/extensions/mediaContent';
-import { normalizeInkwellBlockIds } from '@/src/extensions/inkwellBlockIds';
 import {
   addPendingProjectSyncEvent,
   addPendingSyncOps,
@@ -127,10 +131,9 @@ function textParagraph(text: string, marks?: DocumentContent['marks']): Document
   };
 }
 
-function sourcePayloadFromCapture(payload: CaptureSelectionPayload): SourceOpenPayload {
+export function sourcePayloadFromCapture(payload: CaptureSelectionPayload): SourceOpenPayload {
   return {
     sourceUrl: payload.sourceUrl,
-    pageTitle: payload.pageTitle,
     highlightMeta: {
       text: payload.highlightMeta.text || payload.text,
       sourceLink: payload.highlightMeta.sourceLink,
@@ -139,16 +142,6 @@ function sourcePayloadFromCapture(payload: CaptureSelectionPayload): SourceOpenP
       prefix: payload.highlightMeta.prefix,
       suffix: payload.highlightMeta.suffix,
     },
-  };
-}
-
-function sourceLinkAttrs(payload: CaptureSelectionPayload) {
-  return {
-    href: payload.highlightMeta.sourceLink || payload.sourceUrl,
-    target: '_blank',
-    rel: 'noopener noreferrer nofollow',
-    class: null,
-    [INKWELL_SOURCE_ATTR]: encodeInkwellSource(sourcePayloadFromCapture(payload)),
   };
 }
 
@@ -163,15 +156,10 @@ export function createCapturedContent(payload: CaptureSelectionPayload): Documen
         type: 'codeBlock',
         attrs: {
           language: normalizeCodeLanguage(payload.highlightMeta.codeLanguage),
+          inkwellBlockId: createInkwellBlockId(),
         },
         content: payload.text ? [{ type: 'text', text: payload.text }] : undefined,
       },
-      textParagraph(`Source: ${payload.pageTitle || 'Untitled page'} - ${payload.sourceUrl}`, [
-        {
-          type: 'link',
-          attrs: sourceLinkAttrs(payload),
-        },
-      ]),
       {
         type: 'paragraph',
       },
@@ -182,16 +170,10 @@ export function createCapturedContent(payload: CaptureSelectionPayload): Documen
     {
       type: 'blockquote',
       attrs: {
-        inkwellCaptureId: crypto.randomUUID(),
+        inkwellBlockId: createInkwellBlockId(),
       },
       content: [textParagraph(payload.text)],
     },
-    textParagraph(`Source: ${payload.pageTitle || 'Untitled page'} - ${payload.sourceUrl}`, [
-      {
-        type: 'link',
-        attrs: sourceLinkAttrs(payload),
-      },
-    ]),
     {
       type: 'paragraph',
     },
@@ -207,19 +189,13 @@ export function createLinkedHeadingContent(
     {
       type: 'heading',
       attrs: {
-        inkwellCaptureId: crypto.randomUUID(),
+        inkwellBlockId: createInkwellBlockId(),
         level,
       },
       content: [
         {
           type: 'text',
           text: payload.text,
-          marks: [
-            {
-              type: 'link',
-              attrs: sourceLinkAttrs(payload),
-            },
-          ],
         },
       ],
     },
@@ -306,7 +282,7 @@ async function readStorage(): Promise<Required<InkwellStorage>> {
   const stored = (await idbGetMany(STORAGE_KEYS)) as InkwellStorage;
 
   const storedProjects = stored.projects !== undefined ? stored.projects : defaultProjects;
-  const projects = (isLegacyStubProjectSet(storedProjects)
+  let projects = (isLegacyStubProjectSet(storedProjects)
     ? defaultProjects
     : storedProjects
   ).map(normalizeProject)
@@ -316,10 +292,34 @@ async function readStorage(): Promise<Required<InkwellStorage>> {
     !stored.pages?.length ||
     !stored.hasMigratedCapturesToPages ||
     isLegacyStubProjectSet(storedProjects);
-  const pages = (shouldCreatePages
+  let pages = (shouldCreatePages
     ? createDefaultPages(projects)
     : stored.pages ?? createDefaultPages(projects)
   ).map(normalizeStoredPage);
+  const stateByProjectId = new Map(
+    projects.map((project) => [project.id, project.stateContent]),
+  );
+  let sourceMigrationChanged = false;
+  pages = pages.map((page) => {
+    const migration = migratePageSourcesToProjectState(
+      page.content,
+      stateByProjectId.get(page.projectId),
+    );
+    if (!migration.changed) {
+      return page;
+    }
+
+    sourceMigrationChanged = true;
+    stateByProjectId.set(page.projectId, migration.stateContent);
+    return { ...page, content: migration.content };
+  });
+
+  if (sourceMigrationChanged) {
+    projects = projects.map((project) => ({
+      ...project,
+      stateContent: stateByProjectId.get(project.id) ?? project.stateContent,
+    }));
+  }
   const activeProjects = projects.filter((project) => project.status !== 'archived');
   const currentProjectId = activeProjects.some((project) => project.id === stored.currentProjectId)
     ? stored.currentProjectId ?? ''
@@ -351,7 +351,8 @@ async function readStorage(): Promise<Required<InkwellStorage>> {
     stored.notionHydrationSource === undefined ||
     !stored.syncConfig ||
     shouldCreatePages ||
-    stored.hasMigratedCapturesToPages !== true
+    stored.hasMigratedCapturesToPages !== true ||
+    sourceMigrationChanged
   ) {
     await idbSetMany({
       activePageIdsByProject,
@@ -1519,6 +1520,23 @@ export const notionClient = {
     return saveProjectUpdate(projects, projectId, updatedProject);
   },
 
+  async addProjectSource(
+    projectId: string,
+    blockId: string,
+    payload: CaptureSelectionPayload,
+  ): Promise<Project> {
+    const { projects } = await readStorage();
+    const project = requireActiveProject(projects, projectId);
+    const updatedProject = touchProject(project, {
+      stateContent: addSourceToProjectState(
+        project.stateContent,
+        blockId,
+        sourcePayloadFromCapture(payload),
+      ),
+    });
+    return saveProjectUpdate(projects, projectId, updatedProject);
+  },
+
   async getSyncConfig(): Promise<SyncConfig> {
     const { syncConfig } = await readStorage();
     return { ...syncConfig };
@@ -1997,7 +2015,21 @@ export const notionClient = {
       throw new Error('No Inkwell page is available for this capture.');
     }
 
-    const updatedPage = appendContent(page, createCapturedContent(payload));
+    const capturedContent = createCapturedContent(payload);
+    const sourceBlockId = capturedBlockId(capturedContent);
+    const updatedProject = sourceBlockId
+      ? touchProject(project, {
+          stateContent: addSourceToProjectState(
+            project.stateContent,
+            sourceBlockId,
+            sourcePayloadFromCapture(payload),
+          ),
+        })
+      : project;
+    const savedProject = sourceBlockId
+      ? (await saveProjectUpdate(projects, project.id, updatedProject))
+      : project;
+    const updatedPage = appendContent(page, capturedContent);
 
     await writeStorage({
       pages: pages.map((storedPage) =>
@@ -2005,7 +2037,7 @@ export const notionClient = {
       ),
     });
 
-    const syncedPage = await enqueuePageSync(updatedPage, project, page);
+    const syncedPage = await enqueuePageSync(updatedPage, savedProject, page);
     await persistPage(syncedPage);
     return syncedPage;
   },

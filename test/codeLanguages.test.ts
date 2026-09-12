@@ -37,11 +37,14 @@ describe('code languages', () => {
       },
     });
 
-    expect(content[0]).toEqual({
+    expect(content[0]).toMatchObject({
       type: 'codeBlock',
-      attrs: { language: 'javascript' },
+      attrs: {
+        language: 'javascript',
+        inkwellBlockId: expect.any(String),
+      },
       content: [{ type: 'text', text: 'const answer = 42;' }],
     });
-    expect(content[1]).toMatchObject({ type: 'paragraph' });
+    expect(content[1]).toEqual({ type: 'paragraph' });
   });
 });

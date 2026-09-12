@@ -1,5 +1,9 @@
 import { mergeAttributes } from '@tiptap/core';
 import { CodeBlock } from '@tiptap/extension-code-block';
+import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
+import { Plugin, PluginKey } from '@tiptap/pm/state';
+import { Decoration, DecorationSet } from '@tiptap/pm/view';
+import { common, createLowlight } from 'lowlight';
 import {
   browserExecutableLanguage,
   CODE_LANGUAGES,
@@ -13,7 +17,50 @@ type RunnerMessage = {
   height?: number;
 };
 
+type HighlightNode = {
+  type: string;
+  value?: string;
+  properties?: {
+    className?: string | string[];
+  };
+  children?: HighlightNode[];
+};
+
+const syntaxHighlighter = createLowlight(common);
+const syntaxHighlightPluginKey = new PluginKey<DecorationSet>('inkwellCodeSyntaxHighlight');
+const LOWLIGHT_LANGUAGE_ALIASES: Record<string, string> = {
+  'c++': 'cpp',
+  'c#': 'csharp',
+  'f#': 'fsharp',
+  docker: 'dockerfile',
+  html: 'xml',
+  markup: 'xml',
+  'objective-c': 'objectivec',
+  shell: 'bash',
+  'vb.net': 'vbnet',
+  'visual basic': 'vbnet',
+  webassembly: 'wasm',
+};
+
 export const CodeNotebook = CodeBlock.extend({
+  addProseMirrorPlugins() {
+    return [
+      ...(this.parent?.() ?? []),
+      new Plugin({
+        key: syntaxHighlightPluginKey,
+        state: {
+          init: (_config, state) => createSyntaxDecorations(state.doc),
+          apply: (transaction, decorations) => transaction.docChanged
+            ? createSyntaxDecorations(transaction.doc)
+            : decorations.map(transaction.mapping, transaction.doc),
+        },
+        props: {
+          decorations: (state) => syntaxHighlightPluginKey.getState(state),
+        },
+      }),
+    ];
+  },
+
   addAttributes() {
     return {
       ...this.parent?.(),
@@ -212,3 +259,86 @@ export const CodeNotebook = CodeBlock.extend({
     };
   },
 });
+
+function createSyntaxDecorations(doc: ProseMirrorNode) {
+  const decorations: Decoration[] = [];
+
+  doc.descendants((node, position) => {
+    if (node.type.name !== 'codeBlock' || !node.textContent) {
+      return;
+    }
+
+    const language = lowlightLanguage(node.attrs.language);
+    if (!language) {
+      return false;
+    }
+
+    try {
+      const tree = syntaxHighlighter.highlight(language, node.textContent);
+      appendHighlightDecorations(
+        tree.children as HighlightNode[],
+        position + 1,
+        decorations,
+      );
+    } catch {
+      // Unsupported or malformed language hints remain readable as plain code.
+    }
+
+    return false;
+  });
+
+  return DecorationSet.create(doc, decorations);
+}
+
+function appendHighlightDecorations(
+  nodes: HighlightNode[],
+  start: number,
+  decorations: Decoration[],
+  inheritedClasses: string[] = [],
+) {
+  let offset = 0;
+
+  for (const node of nodes) {
+    if (node.type === 'text') {
+      const length = node.value?.length ?? 0;
+      if (length > 0 && inheritedClasses.length > 0) {
+        decorations.push(Decoration.inline(
+          start + offset,
+          start + offset + length,
+          { class: inheritedClasses.join(' ') },
+        ));
+      }
+      offset += length;
+      continue;
+    }
+
+    const classes = highlightClasses(node.properties?.className);
+    const childLength = appendHighlightDecorations(
+      node.children ?? [],
+      start + offset,
+      decorations,
+      [...inheritedClasses, ...classes],
+    );
+    offset += childLength;
+  }
+
+  return offset;
+}
+
+function highlightClasses(value: string | string[] | undefined) {
+  if (Array.isArray(value)) {
+    return value.filter(Boolean);
+  }
+
+  return value ? value.split(/\s+/).filter(Boolean) : [];
+}
+
+function lowlightLanguage(value: unknown) {
+  const language = normalizeCodeLanguage(value);
+  if (language === 'plain text') {
+    return undefined;
+  }
+
+  const candidate = LOWLIGHT_LANGUAGE_ALIASES[language] ?? language;
+  return syntaxHighlighter.registered(candidate) ? candidate : undefined;
+}

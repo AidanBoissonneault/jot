@@ -1,4 +1,5 @@
 import { notionClient } from '@/src/services/notionClient';
+import { safeInkwellSourceUrl } from '@/src/extensions/inkwellLink';
 import type {
   CaptureSelectionMessage,
   CaptureSelectionPayload,
@@ -162,7 +163,12 @@ async function handleCaptureSelection(message: CaptureSelectionMessage) {
 }
 
 async function handleOpenSourceRequest(message: OpenSourceRequestMessage) {
-  const url = message.payload.highlightMeta.sourceLink || message.payload.sourceUrl;
+  const url = safeInkwellSourceUrl(message.payload);
+
+  if (!url) {
+    return false;
+  }
+
   const tab = await browser.tabs.create({ active: true, url });
 
   if (!tab.id) {

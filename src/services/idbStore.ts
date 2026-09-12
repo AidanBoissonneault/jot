@@ -36,7 +36,7 @@ export async function idbSet(key: string, value: unknown): Promise<void> {
   const db = await openDb();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE_NAME, 'readwrite');
-    tx.objectStore(STORE_NAME).put(value, key);
+    tx.objectStore(STORE_NAME).put(cloneableProjectState(value), key);
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
   });
@@ -69,9 +69,20 @@ export async function idbSetMany(items: Record<string, unknown>): Promise<void> 
     const tx = db.transaction(STORE_NAME, 'readwrite');
     const store = tx.objectStore(STORE_NAME);
     for (const [key, value] of entries) {
-      store.put(value, key);
+      store.put(cloneableProjectState(value), key);
     }
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
   });
+}
+
+/** Vue can proxy nested project state after it enters Pinia. IndexedDB cannot
+ * structured-clone proxies, while all values in this KV store are JSON state.
+ * A JSON round trip unwraps those proxies before they reach IDB. */
+export function cloneableProjectState<T>(value: T): T {
+  if (value === undefined) {
+    return value;
+  }
+
+  return JSON.parse(JSON.stringify(value)) as T;
 }

@@ -537,18 +537,26 @@ export default defineContentScript({
       true,
     );
 
-    function restoreHighlight(message: RestoreHighlightMessage) {
-      const range =
-        getRangeFromXPath(message.payload.highlightMeta) ??
-        getRangeFromWindowFind(message.payload.highlightMeta.text);
+    async function restoreHighlight(message: RestoreHighlightMessage) {
+      const retryDelays = [0, 250, 750, 1500];
 
-      if (!range) {
-        return false;
+      for (const delay of retryDelays) {
+        if (delay) {
+          await new Promise((resolve) => window.setTimeout(resolve, delay));
+        }
+
+        const range =
+          getRangeFromXPath(message.payload.highlightMeta) ??
+          getRangeFromWindowFind(message.payload.highlightMeta.text);
+
+        if (range) {
+          scrollRangeIntoView(range);
+          temporarilyHighlightRange(range);
+          return true;
+        }
       }
 
-      scrollRangeIntoView(range);
-      temporarilyHighlightRange(range);
-      return true;
+      return false;
     }
 
     function getRangeFromXPath(meta: RestoreHighlightMessage['payload']['highlightMeta']) {
@@ -583,10 +591,16 @@ export default defineContentScript({
         return null;
       }
 
-      const range = document.createRange();
-      range.setStart(textNode, matchingOffset);
-      range.setEnd(textNode, matchingOffset + meta.text.length);
-      return range;
+      try {
+        const range = document.createRange();
+        range.setStart(textNode, matchingOffset);
+        range.setEnd(textNode, matchingOffset + meta.text.length);
+        return range;
+      } catch {
+        // Multi-node selections cannot be restored from one text node. The
+        // browser text search fallback below can still produce a spanning range.
+        return null;
+      }
     }
 
     function getRangeFromWindowFind(text: string) {
@@ -636,6 +650,10 @@ export default defineContentScript({
       selection?.removeAllRanges();
       selection?.addRange(range.cloneRange());
 
+      if (highlightWithCssRange(range)) {
+        return;
+      }
+
       try {
         const highlightRange = range.cloneRange();
         const highlight = document.createElement('mark');
@@ -665,6 +683,42 @@ export default defineContentScript({
       } catch {
         window.setTimeout(() => selection?.removeAllRanges(), 4200);
       }
+    }
+
+    function highlightWithCssRange(range: Range) {
+      const css = globalThis.CSS as typeof CSS & {
+        highlights?: {
+          delete: (name: string) => void;
+          set: (name: string, highlight: unknown) => void;
+        };
+      };
+      const HighlightConstructor = (
+        globalThis as typeof globalThis & {
+          Highlight?: new (...ranges: Range[]) => unknown;
+        }
+      ).Highlight;
+
+      if (!css?.highlights || !HighlightConstructor) {
+        return false;
+      }
+
+      const highlightName = 'inkwell-restored';
+      let style = document.getElementById('inkwell-restored-highlight-style');
+
+      if (!style) {
+        style = document.createElement('style');
+        style.id = 'inkwell-restored-highlight-style';
+        style.textContent =
+          '::highlight(inkwell-restored) { background: #fff2a8; color: inherit; }';
+        document.documentElement.append(style);
+      }
+
+      css.highlights.set(highlightName, new HighlightConstructor(range.cloneRange()));
+      window.setTimeout(() => {
+        css.highlights?.delete(highlightName);
+        window.getSelection()?.removeAllRanges();
+      }, 4200);
+      return true;
     }
   },
 });
