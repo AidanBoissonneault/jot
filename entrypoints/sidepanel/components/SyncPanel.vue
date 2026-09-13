@@ -26,6 +26,7 @@ const emit = defineEmits<{
   createParentPage: [];
   login: [];
   logout: [];
+  openOnboarding: [];
   openLegalUrl: [url: string];
   resync: [];
   saveServerUrl: [];
@@ -38,10 +39,70 @@ const store = useInkwellStore();
 
 <template>
   <div class="settings-section-group" aria-label="Sync settings">
-    <div class="panel-section">
+    <div v-if="!store.syncConfig.connected" class="panel-section logged-out-sync">
+      <div class="local-workspace-heading">
+        <span class="local-workspace-icon" aria-hidden="true">
+          <font-awesome-icon :icon="['fas', 'floppy-disk']" fixed-width />
+        </span>
+        <div>
+          <span class="section-kicker">Local workspace</span>
+          <h2>Your notes are ready whenever you are.</h2>
+        </div>
+      </div>
+
+      <p class="logged-out-sync-copy">
+        Inkwell is saving projects and pages on this device. Connect Notion to
+        back them up to your workspace and keep changes in sync across devices.
+      </p>
+
+      <ul class="sync-benefits">
+        <li>
+          <font-awesome-icon :icon="['fas', 'check']" fixed-width />
+          <span>Your local work is uploaded when you connect</span>
+        </li>
+        <li>
+          <font-awesome-icon :icon="['fas', 'check']" fixed-width />
+          <span>Offline edits continue syncing when you reconnect</span>
+        </li>
+        <li>
+          <font-awesome-icon :icon="['fas', 'check']" fixed-width />
+          <span>You can disconnect at any time</span>
+        </li>
+      </ul>
+
+      <div class="legal-disclosure connect-consent">
+        <label class="legal-consent">
+          <input v-model="hasAcceptedLegalTerms" type="checkbox" :disabled="!isLegalAcceptanceLoaded">
+          <span>
+            I agree to the
+            <a :href="termsUrl" target="_blank" rel="noopener noreferrer" @click.prevent="emit('openLegalUrl', termsUrl)">Terms</a>
+            and
+            <a :href="privacyUrl" target="_blank" rel="noopener noreferrer" @click.prevent="emit('openLegalUrl', privacyUrl)">Privacy Policy</a>.
+          </span>
+        </label>
+      </div>
+
+      <button
+        type="button"
+        class="icon-label-button connect-notion-button"
+        :disabled="!canLogin"
+        :title="isSigningIn ? 'Connecting' : 'Connect Notion'"
+        :aria-label="isSigningIn ? 'Connecting' : 'Connect Notion'"
+        @click="emit('login')"
+      >
+        <font-awesome-icon :icon="['fas', 'cloud-arrow-up']" fixed-width />
+        <span>{{ isSigningIn ? 'Waiting for Notion...' : 'Connect Notion' }}</span>
+      </button>
+
+      <button type="button" class="text-button tour-button" @click="emit('openOnboarding')">
+        View the quick tour
+      </button>
+    </div>
+
+    <div v-else class="panel-section">
       <div class="section-heading">
         <h2>Sync</h2>
-        <button v-if="store.syncConfig.connected" type="button" class="icon-label-button secondary-button" title="Resync" aria-label="Resync" @click="emit('resync')">
+        <button type="button" class="icon-label-button secondary-button" title="Resync" aria-label="Resync" @click="emit('resync')">
           <font-awesome-icon :icon="['fas', 'rotate']" fixed-width />
           <span>Resync</span>
         </button>
@@ -54,34 +115,13 @@ const store = useInkwellStore();
         <div><dt>Status</dt><dd>{{ saveLabel }}</dd></div>
       </dl>
 
-      <div v-if="!store.syncConfig.connected" class="legal-disclosure">
-        <p>
-          Notion sync is optional. Inkwell can stay local to this device indefinitely.
-          If you connect later, your complete local workspace is uploaded first, then
-          future changes use normal online and offline syncing.
-        </p>
-        <label class="legal-consent">
-          <input v-model="hasAcceptedLegalTerms" type="checkbox" :disabled="!isLegalAcceptanceLoaded">
-          <span>
-            I have read and agree to the
-            <a :href="termsUrl" target="_blank" rel="noopener noreferrer" @click.prevent="emit('openLegalUrl', termsUrl)">Terms</a>
-            and
-            <a :href="privacyUrl" target="_blank" rel="noopener noreferrer" @click.prevent="emit('openLegalUrl', privacyUrl)">Privacy Policy</a>.
-          </span>
-        </label>
-      </div>
-
-      <button v-if="!store.syncConfig.connected" type="button" class="icon-label-button" :disabled="!canLogin" :title="isSigningIn ? 'Connecting' : 'Continue with Notion'" :aria-label="isSigningIn ? 'Connecting' : 'Continue with Notion'" @click="emit('login')">
-        <font-awesome-icon :icon="['fas', 'cloud-arrow-up']" fixed-width />
-        <span>{{ isSigningIn ? 'Connecting...' : 'Continue with Notion' }}</span>
-      </button>
-      <button v-else type="button" class="icon-label-button secondary-button" title="Logout" aria-label="Logout" @click="emit('logout')">
+      <button type="button" class="icon-label-button secondary-button" title="Logout" aria-label="Logout" @click="emit('logout')">
         <font-awesome-icon :icon="['fas', 'right-from-bracket']" fixed-width />
         <span>Logout</span>
       </button>
     </div>
 
-    <div class="panel-section">
+    <div v-if="store.syncConfig.connected" class="panel-section">
       <h2>Legal</h2>
       <p class="legal-links">
         <a :href="termsUrl" target="_blank" rel="noopener noreferrer" @click.prevent="emit('openLegalUrl', termsUrl)">Terms</a>
@@ -110,7 +150,7 @@ const store = useInkwellStore();
       </div>
     </details>
 
-    <div class="panel-section">
+    <div v-if="store.syncConfig.connected" class="panel-section">
       <h2>Notion Parent Page</h2>
       <form class="inline-form" @submit.prevent="emit('searchParentPages')">
         <input v-model="parentPageSearch" aria-label="Search Notion pages" placeholder="Search pages" :disabled="!store.syncConfig.connected">

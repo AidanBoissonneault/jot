@@ -1,6 +1,23 @@
 export type CaptureType = 'quote' | 'task' | 'idea' | 'link';
 export type OptimisticStatus = 'creating' | 'saving' | 'saved' | 'stale' | 'error';
 export type SaveStatus = 'idle' | OptimisticStatus;
+export type ProjectCategoryColor =
+  | 'default'
+  | 'gray'
+  | 'brown'
+  | 'orange'
+  | 'yellow'
+  | 'green'
+  | 'blue'
+  | 'purple'
+  | 'pink'
+  | 'red';
+
+export type ProjectCategoryPreference = {
+  name: string;
+  color: ProjectCategoryColor;
+  pinned: boolean;
+};
 
 export type HighlightMeta = {
   text: string;

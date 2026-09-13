@@ -9,6 +9,7 @@ import { EditorContent, useEditor } from '@tiptap/vue-3';
 import AudioRecorder from '@/src/components/AudioRecorder.vue';
 import ArchiveDialog from './components/ArchiveDialog.vue';
 import MediaPanel from './components/MediaPanel.vue';
+import OnboardingPanel from './components/OnboardingPanel.vue';
 import SettingsPanel from './components/SettingsPanel.vue';
 import SidePanelHeader from './components/SidePanelHeader.vue';
 import SyncPanel from './components/SyncPanel.vue';
@@ -27,6 +28,11 @@ import {
 import { PortableTextEditingKit } from '@/src/extensions/textFormatting';
 import { MediaKit } from '@/src/extensions/media';
 import { InkwellBlockIds, normalizeInkwellBlockIds } from '@/src/extensions/inkwellBlockIds';
+import {
+  type BlockMoveDirection,
+  moveSelectedTopLevelBlock,
+  selectedTopLevelBlock,
+} from '@/src/extensions/blockMovement';
 import {
   capturedBlockId,
   sourceFromProjectState,
@@ -67,6 +73,10 @@ import {
   normalizeInterfaceScale,
   saveUserPreferences,
 } from '@/src/services/preferences';
+import {
+  completeOnboarding,
+  hasCompletedOnboarding,
+} from '@/src/services/onboarding';
 import { useInkwellStore } from '@/src/stores/inkwell';
 import type { DocumentContent } from '@/src/types/capture';
 import type {
@@ -136,6 +146,13 @@ const activeTab = ref<'editor' | 'settings'>('editor');
 const interfaceScale = ref(DEFAULT_INTERFACE_SCALE);
 const editorToolbarMode = ref<'style' | 'insert' | 'controls'>('style');
 const editorContextMenuRef = ref<HTMLElement | null>(null);
+const editorWorkspaceRef = ref<HTMLElement | null>(null);
+const blockMoveControls = ref({
+  visible: false,
+  top: 0,
+  canMoveUp: false,
+  canMoveDown: false,
+});
 const editorContextMenu = ref({
   visible: false,
   left: 0,
@@ -165,6 +182,8 @@ const archiveTarget = ref<{
   title: string;
 } | null>(null);
 const isSigningIn = ref(false);
+const isOnboardingLoaded = ref(false);
+const isOnboardingOpen = ref(false);
 const editorStateVersion = ref(0);
 type RecordingPhase = 'idle' | 'requesting_permission' | 'recording' | 'processing';
 const recordingPhase = ref<RecordingPhase>('idle');
@@ -219,6 +238,26 @@ const editor = useEditor({
         showEditorContextMenu(view, event);
         return true;
       },
+    },
+    handleKeyDown: (view, event) => {
+      if (
+        !event.shiftKey ||
+        event.altKey ||
+        event.ctrlKey ||
+        event.metaKey ||
+        (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') ||
+        isEditorControlTarget(event.target)
+      ) {
+        return false;
+      }
+
+      event.preventDefault();
+      moveSelectedTopLevelBlock(
+        view.state,
+        view.dispatch,
+        event.key === 'ArrowUp' ? 'up' : 'down',
+      );
+      return true;
     },
     handleClick: (_view, _pos, event) => {
       const anchor =
@@ -392,10 +431,14 @@ const editor = useEditor({
     saveTimer.value = window.setTimeout(() => {
       void saveEditorContentOptimistically();
     }, 450);
+    queueBlockMoveControlsRefresh();
   },
   onSelectionUpdate: () => {
     editorStateVersion.value += 1;
+    queueBlockMoveControlsRefresh();
   },
+  onTransaction: queueBlockMoveControlsRefresh,
+  onCreate: queueBlockMoveControlsRefresh,
 });
 
 const isCurrentPageSyncedToNotion = computed(() =>
@@ -492,10 +535,9 @@ const syncBadgeTitle = computed(() => {
   return `${base} · ${sseNote}`;
 });
 
-const syncBadgeClass = computed(() => ({
-  'sync-badge': true,
+const notionStateOrbClass = computed(() => ({
   error: store.saveStatus === 'error',
-  stale:
+  waiting:
     store.saveStatus === 'stale' ||
     !store.syncConfig.connected ||
     !store.isOnline ||
@@ -512,7 +554,17 @@ const syncBadgeClass = computed(() => ({
     store.pendingSyncCount === 0,
 }));
 
+const notionStateCount = computed(() => {
+  if (store.pendingSyncCount <= 0) return '';
+  return store.pendingSyncCount > 99 ? '99+' : String(store.pendingSyncCount);
+});
+
+const notionStateAriaLabel = computed(() => `${saveLabel.value}. ${syncBadgeTitle.value}`);
+
 const canUseEditor = computed(() => !store.isLoading && store.projects.length > 0);
+const showOnboarding = computed(() =>
+  isOnboardingLoaded.value && isOnboardingOpen.value && !store.syncConfig.connected,
+);
 const canLoginWithNotion = computed(
   () => isLegalAcceptanceLoaded.value && hasAcceptedLegalTerms.value && !isSigningIn.value,
 );
@@ -643,10 +695,12 @@ onMounted(() => {
   window.addEventListener('online', store.handleOnline);
   window.addEventListener('offline', store.handleOffline);
   window.addEventListener('resize', hideEditorContextMenu);
+  window.addEventListener('resize', queueBlockMoveControlsRefresh);
   document.addEventListener('visibilitychange', handleVisibilityChange);
   document.addEventListener('pointerdown', handleEditorContextMenuPointerDown);
   document.addEventListener('keydown', handleEditorContextMenuKeydown);
   void loadLegalAcceptance();
+  void loadOnboarding();
   void loadPreferences();
   void initializePanel();
 });
@@ -669,6 +723,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('online', store.handleOnline);
   window.removeEventListener('offline', store.handleOffline);
   window.removeEventListener('resize', hideEditorContextMenu);
+  window.removeEventListener('resize', queueBlockMoveControlsRefresh);
   document.removeEventListener('visibilitychange', handleVisibilityChange);
   document.removeEventListener('pointerdown', handleEditorContextMenuPointerDown);
   document.removeEventListener('keydown', handleEditorContextMenuKeydown);
@@ -711,6 +766,7 @@ watch(
     isApplyingStoredContent = true;
     editor.value.commands.setContent(page.content, { emitUpdate: false });
     isApplyingStoredContent = false;
+    queueBlockMoveControlsRefresh();
   },
 );
 
@@ -749,6 +805,11 @@ watch(
 watch(
   () => store.syncConfig.connected,
   (connected) => {
+    if (connected) {
+      isOnboardingOpen.value = false;
+      void completeOnboarding();
+    }
+
     if (connected && activeTab.value === 'settings') {
       void store.loadNotionParentPages(parentPageSearchDraft.value);
     }
@@ -759,6 +820,7 @@ watch(
   activeTab,
   (tab) => {
     hideEditorContextMenu();
+    queueBlockMoveControlsRefresh();
 
     if (tab === 'settings' && store.syncConfig.connected) {
       void store.loadNotionParentPages(parentPageSearchDraft.value);
@@ -766,8 +828,26 @@ watch(
   },
 );
 
+watch(canUseEditor, queueBlockMoveControlsRefresh, { flush: 'post' });
+
 async function initializePanel() {
   await store.initialize();
+}
+
+/** Shows the tour only until the user chooses a local or synced workflow. */
+async function loadOnboarding() {
+  isOnboardingOpen.value = !await hasCompletedOnboarding();
+  isOnboardingLoaded.value = true;
+}
+
+async function finishOnboarding(destination: 'editor' | 'settings') {
+  isOnboardingOpen.value = false;
+  activeTab.value = destination;
+  await completeOnboarding();
+}
+
+function openOnboarding() {
+  isOnboardingOpen.value = true;
 }
 
 /** Loads the persisted legal-consent flag before enabling the Notion sign-in action. */
@@ -865,8 +945,8 @@ async function renameProject() {
     return;
   }
 
-  await flushEditorContent();
-  await store.renameCurrentProject(projectNameDraft.value);
+  const rename = store.renameCurrentProject(projectNameDraft.value);
+  await Promise.all([flushEditorContent(), rename]);
 }
 
 /** Saves changed project metadata only after pending editor content has been flushed. */
@@ -881,10 +961,10 @@ async function saveProjectMetadata() {
     return;
   }
 
-  await flushEditorContent();
-  await store.updateCurrentProjectMetadata({
+  const metadataUpdate = store.updateCurrentProjectMetadata({
     category: projectCategoryDraft.value,
   });
+  await Promise.all([flushEditorContent(), metadataUpdate]);
 }
 
 /** Stages the current project for confirmation rather than deleting it immediately. */
@@ -1031,6 +1111,77 @@ function toggleEditorMenu(menu: NonNullable<typeof activeEditorMenu.value>) {
 
 function closeEditorMenu() {
   activeEditorMenu.value = null;
+}
+
+/** Moves the block containing the caret and returns focus to that same content. */
+function moveActiveEditorBlock(direction: BlockMoveDirection) {
+  const view = editor.value?.view;
+
+  if (!view || !moveSelectedTopLevelBlock(view.state, view.dispatch, direction)) {
+    return;
+  }
+
+  view.focus();
+  queueBlockMoveControlsRefresh();
+}
+
+/** Keeps the active block controls aligned with the selected block after layout updates. */
+function queueBlockMoveControlsRefresh() {
+  void nextTick(refreshBlockMoveControls);
+}
+
+function refreshBlockMoveControls() {
+  const view = editor.value?.view;
+  const workspace = editorWorkspaceRef.value;
+  const block = view ? selectedTopLevelBlock(view.state) : null;
+
+  if (!view || !workspace || !block || (!block.canMoveUp && !block.canMoveDown)) {
+    blockMoveControls.value.visible = false;
+    return;
+  }
+
+  const blockDom = view.nodeDOM(block.start);
+  const blockElement = blockDom instanceof HTMLElement
+    ? blockDom
+    : blockDom?.parentElement;
+
+  if (!blockElement) {
+    blockMoveControls.value.visible = false;
+    return;
+  }
+
+  const workspaceRect = workspace.getBoundingClientRect();
+  const blockRect = blockElement.getBoundingClientRect();
+
+  if (blockRect.bottom <= workspaceRect.top || blockRect.top >= workspaceRect.bottom) {
+    blockMoveControls.value.visible = false;
+    return;
+  }
+
+  const controlsHeight = 28;
+  const centeredOffset = Math.max(0, (Math.min(blockRect.height, controlsHeight) - controlsHeight) / 2);
+  blockMoveControls.value = {
+    visible: true,
+    top: clamp(
+      blockRect.top - workspaceRect.top + centeredOffset,
+      4,
+      Math.max(4, workspace.clientHeight - controlsHeight - 4),
+    ),
+    canMoveUp: block.canMoveUp,
+    canMoveDown: block.canMoveDown,
+  };
+}
+
+function handleEditorScroll() {
+  hideEditorContextMenu();
+  refreshBlockMoveControls();
+}
+
+/** Leaves Shift+Arrow behavior intact for controls embedded inside editor node views. */
+function isEditorControlTarget(target: EventTarget | null) {
+  return target instanceof Element && Boolean(
+    target.closest('button, input, select, textarea, [contenteditable="false"]'),
+  );
 }
 
 /** Validates and saves the custom synchronization server entered in advanced settings. */
@@ -2263,15 +2414,20 @@ function kebabCase(value: string) {
 </script>
 
 <template>
-  <main class="shell">
+  <main class="shell" :class="{ 'onboarding-shell': showOnboarding }">
+    <OnboardingPanel
+      v-if="showOnboarding"
+      @finish-local="finishOnboarding('editor')"
+      @setup-sync="finishOnboarding('settings')"
+    />
+
     <SidePanelHeader
+      v-else
       v-model:project-category="projectCategoryDraft"
+      v-model:project-name="projectNameDraft"
       :account-label="accountLabel"
       :can-use-editor="canUseEditor"
-      :save-label="saveLabel"
       :settings-open="activeTab === 'settings'"
-      :sync-badge-class="syncBadgeClass"
-      :sync-badge-title="syncBadgeTitle"
       :workspace-label="workspaceLabel"
       @archive-project="archiveProject"
       @create-page="createPage"
@@ -2279,16 +2435,36 @@ function kebabCase(value: string) {
       @logout="logout"
       @open-settings="toggleSettings"
       @resync="resync"
+      @rename-project="renameProject"
       @save-project-metadata="saveProjectMetadata"
       @select-project="selectProject"
     />
 
-    <p v-if="hasInlineMessage" class="error">
+    <p v-if="!showOnboarding && hasInlineMessage" class="error">
       {{ uiMessage || store.errorMessage }}
     </p>
 
     <section
-      v-if="canUseEditor && activeTab === 'editor'"
+      v-if="!showOnboarding && !store.isLoading && !canUseEditor && activeTab === 'editor'"
+      class="workspace-empty"
+      aria-labelledby="workspace-empty-title"
+    >
+      <span class="workspace-empty-icon" aria-hidden="true">
+        <font-awesome-icon :icon="['fas', 'folder-plus']" fixed-width />
+      </span>
+      <div>
+        <span class="section-kicker">Your workspace is empty</span>
+        <h1 id="workspace-empty-title">Start with one project.</h1>
+        <p>Projects keep related pages, captures, and sources together.</p>
+      </div>
+      <button type="button" class="icon-label-button" @click="createQuickProject">
+        <font-awesome-icon :icon="['fas', 'folder-plus']" fixed-width />
+        <span>Create a project</span>
+      </button>
+    </section>
+
+    <section
+      v-if="!showOnboarding && canUseEditor && activeTab === 'editor'"
       class="editor-shell"
       aria-label="Project page"
     >
@@ -2318,6 +2494,23 @@ function kebabCase(value: string) {
         <div class="editor-title-row">
           <div class="page-title">
             <div class="editor-page-title-control">
+              <span
+                v-if="store.currentPage"
+                class="notion-state-indicator"
+                :class="notionStateOrbClass"
+                :title="syncBadgeTitle"
+                role="status"
+                tabindex="0"
+                :aria-label="notionStateAriaLabel"
+              >
+                <span class="notion-state-orb" aria-hidden="true" />
+                <span
+                  v-if="notionStateCount"
+                  class="notion-state-count"
+                  aria-hidden="true"
+                >{{ notionStateCount }}</span>
+                <span class="notion-state-tooltip" role="tooltip">{{ saveLabel }}</span>
+              </span>
               <input
                 v-model="pageTitleDraft"
                 aria-label="Page title"
@@ -2364,7 +2557,6 @@ function kebabCase(value: string) {
                 </div>
               </details>
             </div>
-            <p>{{ saveLabel }}</p>
           </div>
         </div>
 
@@ -2794,13 +2986,42 @@ function kebabCase(value: string) {
         </div>
       </header>
 
-      <editor-content
-        v-if="editor"
-        class="editor"
-        :editor="editor"
-        @click="closeEditorMenu"
-        @scroll="hideEditorContextMenu"
-      />
+      <div v-if="editor" ref="editorWorkspaceRef" class="editor-workspace">
+        <div
+          v-if="blockMoveControls.visible"
+          class="block-move-controls"
+          :style="{ top: `${blockMoveControls.top}px` }"
+          aria-label="Move current block"
+        >
+          <button
+            type="button"
+            :disabled="!blockMoveControls.canMoveUp"
+            title="Move block up (Shift + Arrow Up)"
+            aria-label="Move block up"
+            @pointerdown.stop.prevent
+            @click.stop="moveActiveEditorBlock('up')"
+          >
+            <font-awesome-icon :icon="['fas', 'arrow-up']" fixed-width />
+          </button>
+          <button
+            type="button"
+            :disabled="!blockMoveControls.canMoveDown"
+            title="Move block down (Shift + Arrow Down)"
+            aria-label="Move block down"
+            @pointerdown.stop.prevent
+            @click.stop="moveActiveEditorBlock('down')"
+          >
+            <font-awesome-icon :icon="['fas', 'arrow-down']" fixed-width />
+          </button>
+        </div>
+
+        <editor-content
+          class="editor"
+          :editor="editor"
+          @click="closeEditorMenu"
+          @scroll="handleEditorScroll"
+        />
+      </div>
 
       <div
         v-if="editorContextMenu.visible"
@@ -3060,7 +3281,7 @@ function kebabCase(value: string) {
     </section>
 
     <SettingsPanel
-      v-if="activeTab === 'settings'"
+      v-if="!showOnboarding && activeTab === 'settings'"
       v-model="interfaceScale"
       :interface-scale-label="interfaceScaleLabel"
       :maximum-scale="MAX_INTERFACE_SCALE"
@@ -3086,6 +3307,7 @@ function kebabCase(value: string) {
         @create-parent-page="createParentPage"
         @login="loginWithNotion"
         @logout="logout"
+        @open-onboarding="openOnboarding"
         @open-legal-url="openLegalUrl"
         @resync="resync"
         @save-server-url="saveServerUrl"

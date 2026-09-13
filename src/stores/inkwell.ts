@@ -9,6 +9,8 @@ import type {
   DocumentContent,
   NotionParentPage,
   Project,
+  ProjectCategoryColor,
+  ProjectCategoryPreference,
   ProjectPage,
   SaveStatus,
   SyncConfig,
@@ -29,6 +31,7 @@ type SaveOptions = {
 
 export const useInkwellStore = defineStore('inkwell', () => {
   const projects = ref<Project[]>([]);
+  const categoryPreferences = ref<ProjectCategoryPreference[]>([]);
   const pages = ref<ProjectPage[]>([]);
   const currentPage = ref<ProjectPage>();
   const currentProjectId = ref<string>('');
@@ -142,6 +145,7 @@ export const useInkwellStore = defineStore('inkwell', () => {
     workspace: Awaited<ReturnType<typeof notionClient.getLocalWorkspace>>,
   ) {
     syncConfig.value = workspace.syncConfig;
+    categoryPreferences.value = workspace.categoryPreferences;
     projects.value = workspace.projects;
     currentProjectId.value = workspace.currentProjectId;
     pages.value = workspace.pages;
@@ -217,16 +221,31 @@ export const useInkwellStore = defineStore('inkwell', () => {
       return;
     }
 
+    const projectId = currentProjectId.value;
+    const previousProject = projects.value.find((project) => project.id === projectId);
+    if (!previousProject) return;
+    const optimisticProject: Project = {
+      ...previousProject,
+      name: name.trim() || 'Untitled Project',
+      updatedAt: new Date().toISOString(),
+      syncState: 'saving',
+    };
+    projects.value = projects.value.map((project) =>
+      project.id === projectId ? optimisticProject : project,
+    );
     saveStatus.value = 'saving';
 
     try {
-      const project = await notionClient.renameProject(currentProjectId.value, name);
+      const project = await notionClient.renameProject(projectId, name);
       projects.value = projects.value.map((storedProject) =>
-        storedProject.id === project.id ? project : storedProject,
+        storedProject === optimisticProject ? project : storedProject,
       );
       saveStatus.value = 'saved';
       errorMessage.value = '';
     } catch (error) {
+      projects.value = projects.value.map((project) =>
+        project === optimisticProject ? previousProject : project,
+      );
       errorMessage.value =
         error instanceof Error ? error.message : 'Unable to rename this project.';
       saveStatus.value = 'error';
@@ -241,29 +260,85 @@ export const useInkwellStore = defineStore('inkwell', () => {
       return;
     }
 
+    const projectId = currentProjectId.value;
+    const previousProject = projects.value.find((project) => project.id === projectId);
+    if (!previousProject) return;
+    const optimisticProject: Project = {
+      ...previousProject,
+      category: metadata.category?.trim() ?? previousProject.category,
+      stateContent: metadata.stateText === undefined
+        ? previousProject.stateContent
+        : mergeVisibleProjectState(
+            documentFromPlainText(metadata.stateText),
+            previousProject.stateContent,
+          ),
+      updatedAt: new Date().toISOString(),
+      syncState: 'saving',
+    };
+    projects.value = projects.value
+      .map((project) => project.id === projectId ? optimisticProject : project)
+      .sort(sortProjectsByUpdatedDesc);
     saveStatus.value = 'saving';
 
     try {
-      const project = await notionClient.updateProjectMetadata(currentProjectId.value, {
+      const project = await notionClient.updateProjectMetadata(projectId, {
         category: metadata.category,
-        stateContent: metadata.stateText === undefined
-          ? undefined
-          : mergeVisibleProjectState(
-              documentFromPlainText(metadata.stateText),
-              currentProject.value?.stateContent,
-            ),
+        stateContent: metadata.stateText === undefined ? undefined : optimisticProject.stateContent,
       });
       projects.value = projects.value
         .map((storedProject) =>
-          storedProject.id === project.id ? project : storedProject,
+          storedProject === optimisticProject ? project : storedProject,
         )
         .sort(sortProjectsByUpdatedDesc);
       saveStatus.value = 'saved';
       errorMessage.value = '';
     } catch (error) {
+      projects.value = projects.value.map((project) =>
+        project === optimisticProject ? previousProject : project,
+      );
       errorMessage.value =
         error instanceof Error ? error.message : 'Unable to update this project.';
       saveStatus.value = 'error';
+    }
+  }
+
+  async function updateCategoryPreference(
+    categoryName: string,
+    updates: { color?: ProjectCategoryColor; pinned?: boolean },
+  ) {
+    const name = categoryName.trim();
+    if (!name) return;
+    const previousPreferences = categoryPreferences.value;
+    const key = name.toLocaleLowerCase();
+    const existing = previousPreferences.find(
+      (preference) => preference.name.toLocaleLowerCase() === key,
+    );
+    const optimisticPreference: ProjectCategoryPreference = {
+      name: existing?.name ?? name,
+      color: updates.color ?? existing?.color ?? 'default',
+      pinned: updates.pinned ?? existing?.pinned ?? false,
+    };
+    const optimisticPreferences = [
+      ...previousPreferences.filter(
+        (preference) => preference.name.toLocaleLowerCase() !== key,
+      ),
+      optimisticPreference,
+    ].sort((first, second) => first.name.localeCompare(second.name));
+    categoryPreferences.value = optimisticPreferences;
+
+    try {
+      const saved = await notionClient.updateCategoryPreference(name, updates);
+      if (categoryPreferences.value === optimisticPreferences) {
+        categoryPreferences.value = saved;
+      }
+      errorMessage.value = '';
+    } catch (error) {
+      if (categoryPreferences.value === optimisticPreferences) {
+        categoryPreferences.value = previousPreferences;
+      }
+      errorMessage.value = error instanceof Error
+        ? error.message
+        : 'Unable to update this category.';
     }
   }
 
@@ -679,6 +754,7 @@ export const useInkwellStore = defineStore('inkwell', () => {
   async function refreshSyncSession() {
     try {
       syncConfig.value = await notionClient.refreshSyncSession();
+      errorMessage.value = '';
       if (syncConfig.value.connected) {
         const preparedLocalWorkspace = await notionClient.prepareLocalWorkspaceForFirstSync();
         if (!preparedLocalWorkspace && await hydrateInitialNotionSnapshot()) {
@@ -926,6 +1002,7 @@ export const useInkwellStore = defineStore('inkwell', () => {
   function applyReloadedSnapshot(reloaded: Awaited<ReturnType<typeof notionClient.reloadFromNotion>>) {
     syncConfig.value = reloaded.syncConfig;
     projects.value = reloaded.projects;
+    categoryPreferences.value = reloaded.categoryPreferences;
     currentProjectId.value = reloaded.currentProjectId;
     pages.value = reloaded.pages.filter(
       (page) => page.projectId === currentProjectId.value && page.status !== 'archived',
@@ -1001,6 +1078,7 @@ export const useInkwellStore = defineStore('inkwell', () => {
   return {
     archiveCurrentProject,
     archiveCurrentPage,
+    categoryPreferences,
     createProject,
     createPage,
     currentPage,
@@ -1026,6 +1104,7 @@ export const useInkwellStore = defineStore('inkwell', () => {
     registerCurrentProjectSource,
     renameCurrentProject,
     updateCurrentProjectMetadata,
+    updateCategoryPreference,
     renameCurrentPage,
     reloadFromNotion,
     refreshSelectedPage,

@@ -3,6 +3,8 @@ import type {
   DocumentContent,
   NotionParentPage,
   Project,
+  ProjectCategoryColor,
+  ProjectCategoryPreference,
   ProjectPage,
   SaveStatus,
   SyncConfig,
@@ -29,6 +31,7 @@ import type {
   MediaUploadResponse,
   MediaRefreshResponse,
   SyncEnqueueResponse,
+  SyncCategoryPreferencesResponse,
   SyncEventMessage,
   SyncPageResponse,
   SyncProjectResponse,
@@ -59,6 +62,7 @@ type InkwellStorage = {
   notionHydrationSource?: string;
   pages?: ProjectPage[];
   projects?: Project[];
+  categoryPreferences?: ProjectCategoryPreference[];
   syncConfig?: SyncConfig;
 };
 
@@ -82,6 +86,7 @@ const STORAGE_KEYS: Array<keyof InkwellStorage> = [
   'notionHydrationSource',
   'pages',
   'projects',
+  'categoryPreferences',
   'syncConfig',
 ];
 
@@ -105,6 +110,7 @@ const defaultProjects: Project[] = [
 ];
 
 const waitForStub = () => new Promise((resolve) => setTimeout(resolve, 80));
+const TRANSIENT_GET_RETRY_DELAY_MS = 150;
 const LOCAL_QUEUE_DELIVERY_DELAY_MS = 10_000;
 const pendingTempPageSaves = new Map<string, ProjectPage>();
 const projectReconciliations = new Map<string, Promise<string>>();
@@ -112,6 +118,13 @@ let queueDeliveryPromise: Promise<void> | undefined;
 let queueDeliveryTimer: ReturnType<typeof setTimeout> | undefined;
 let forcedQueueDeliveryPromise: Promise<void> | undefined;
 let websiteHighlightMutationQueue = Promise.resolve();
+
+class SyncServerError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message);
+    this.name = 'SyncServerError';
+  }
+}
 
 function emptyDocument(): DocumentContent {
   return normalizeInkwellBlockIds({
@@ -347,6 +360,10 @@ async function readStorage(): Promise<Required<InkwellStorage>> {
   const notionHydrationSource = stored.notionHydrationSource ?? (
     hasRemoteBackedData(projects, pages) ? hydrationSource(syncConfig) : ''
   );
+  const categoryPreferences = normalizeCategoryPreferences(
+    stored.categoryPreferences,
+    projects,
+  );
 
   if (
     !stored.activePageIdsByProject ||
@@ -358,7 +375,8 @@ async function readStorage(): Promise<Required<InkwellStorage>> {
     !stored.syncConfig ||
     shouldCreatePages ||
     stored.hasMigratedCapturesToPages !== true ||
-    sourceMigrationChanged
+    sourceMigrationChanged ||
+    stored.categoryPreferences === undefined
   ) {
     await idbSetMany({
       activePageIdsByProject,
@@ -367,6 +385,7 @@ async function readStorage(): Promise<Required<InkwellStorage>> {
       pages,
       syncConfig,
       notionHydrationSource,
+      categoryPreferences,
       hasMigratedCapturesToPages: true,
     });
   }
@@ -380,7 +399,39 @@ async function readStorage(): Promise<Required<InkwellStorage>> {
     projects,
     syncConfig,
     notionHydrationSource,
+    categoryPreferences,
   };
+}
+
+const CATEGORY_COLORS = new Set<ProjectCategoryColor>([
+  'default', 'gray', 'brown', 'orange', 'yellow',
+  'green', 'blue', 'purple', 'pink', 'red',
+]);
+
+function normalizeCategoryPreferences(
+  preferences: ProjectCategoryPreference[] | undefined,
+  projects: Project[],
+): ProjectCategoryPreference[] {
+  const byName = new Map<string, ProjectCategoryPreference>();
+
+  for (const preference of preferences ?? []) {
+    const name = preference.name?.trim();
+    if (!name) continue;
+    byName.set(name.toLocaleLowerCase(), {
+      name,
+      color: CATEGORY_COLORS.has(preference.color) ? preference.color : 'default',
+      pinned: Boolean(preference.pinned),
+    });
+  }
+
+  for (const project of projects) {
+    const name = project.category?.trim();
+    if (name && !byName.has(name.toLocaleLowerCase())) {
+      byName.set(name.toLocaleLowerCase(), { name, color: 'default', pinned: false });
+    }
+  }
+
+  return [...byName.values()].sort((first, second) => first.name.localeCompare(second.name));
 }
 
 function hasRemoteBackedData(projects: Project[], pages: ProjectPage[]) {
@@ -595,22 +646,36 @@ async function requestServer<T>(
     ...(init?.body ? { 'Content-Type': 'application/json' } : {}),
     ...init?.headers,
   };
-  const response = await fetch(`${cleanServerUrl(syncConfig.serverUrl)}${path}`, {
-    ...init,
-    headers,
-    credentials: 'include',
-  });
+  const method = (init?.method ?? 'GET').toUpperCase();
 
-  const payload = (await response.json().catch(() => ({}))) as T & {
-    error?: string;
-    message?: string;
-  };
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const response = await fetch(`${cleanServerUrl(syncConfig.serverUrl)}${path}`, {
+      ...init,
+      headers,
+      credentials: 'include',
+    });
 
-  if (!response.ok) {
-    throw new Error(payload.message ?? payload.error ?? `Sync server returned ${response.status}.`);
+    const payload = (await response.json().catch(() => ({}))) as T & {
+      error?: string;
+      message?: string;
+    };
+
+    if (response.ok) return payload;
+
+    // A newly started/deployed worker can briefly answer its first safe route
+    // lookup with 404. Retry reads once, but never replay a mutating request.
+    if (method === 'GET' && response.status === 404 && attempt === 0) {
+      await new Promise((resolve) => globalThis.setTimeout(resolve, TRANSIENT_GET_RETRY_DELAY_MS));
+      continue;
+    }
+
+    throw new SyncServerError(
+      payload.message ?? payload.error ?? `Sync server returned ${response.status}.`,
+      response.status,
+    );
   }
 
-  return payload;
+  throw new Error('Unable to reach the sync server.');
 }
 
 async function pendingLocalWorkCount(): Promise<number> {
@@ -1356,6 +1421,7 @@ export const notionClient = {
   pendingSyncEventCount: pendingLocalWorkCount,
 
   async getLocalWorkspace(): Promise<{
+    categoryPreferences: ProjectCategoryPreference[];
     currentPage?: ProjectPage;
     currentProjectId: string;
     pages: ProjectPage[];
@@ -1384,6 +1450,7 @@ export const notionClient = {
     const currentPage = pages.find((page) => page.id === activePageId) ?? pages[0];
 
     return {
+      categoryPreferences: storage.categoryPreferences,
       currentPage,
       currentProjectId,
       pages,
@@ -1650,6 +1717,58 @@ export const notionClient = {
     return saveProjectUpdate(projects, projectId, updatedProject);
   },
 
+  async updateCategoryPreference(
+    categoryName: string,
+    updates: { color?: ProjectCategoryColor; pinned?: boolean },
+  ): Promise<ProjectCategoryPreference[]> {
+    const storage = await readStorage();
+    const name = categoryName.trim();
+    if (!name) return storage.categoryPreferences;
+
+    const key = name.toLocaleLowerCase();
+    const existing = storage.categoryPreferences.find(
+      (preference) => preference.name.toLocaleLowerCase() === key,
+    );
+    const updatedPreference: ProjectCategoryPreference = {
+      name: existing?.name ?? name,
+      color: updates.color ?? existing?.color ?? 'default',
+      pinned: updates.pinned ?? existing?.pinned ?? false,
+    };
+    const categoryPreferences = normalizeCategoryPreferences([
+      ...storage.categoryPreferences.filter(
+        (preference) => preference.name.toLocaleLowerCase() !== key,
+      ),
+      updatedPreference,
+    ], storage.projects);
+
+    await writeStorage({ categoryPreferences });
+    if (!storage.syncConfig.connected || (typeof navigator !== 'undefined' && navigator.onLine === false)) {
+      return categoryPreferences;
+    }
+
+    try {
+      const response = await requestServer<SyncCategoryPreferencesResponse>(
+        '/sync/category-preferences',
+        {
+          method: 'POST',
+          body: JSON.stringify({ categoryPreferences }),
+        },
+        storage.syncConfig,
+      );
+      const saved = normalizeCategoryPreferences(response.categoryPreferences, storage.projects);
+      await writeStorage({ categoryPreferences: saved });
+      return saved;
+    } catch (error) {
+      // Older deployed workers do not have this route yet. Keep the durable
+      // local preference and avoid turning a cosmetic setting into an error.
+      if (error instanceof SyncServerError && error.status === 404) {
+        return categoryPreferences;
+      }
+      await writeStorage({ categoryPreferences: storage.categoryPreferences });
+      throw error;
+    }
+  },
+
   async addProjectSource(
     projectId: string,
     blockId: string,
@@ -1771,12 +1890,19 @@ export const notionClient = {
     force?: boolean;
     preserveLocalWhenRemoteEmpty?: boolean;
   } = {}): Promise<{
+    categoryPreferences: ProjectCategoryPreference[];
     currentProjectId: string;
     pages: ProjectPage[];
     projects: Project[];
     syncConfig: SyncConfig;
   }> {
-    const { currentProjectId, pages: localPages, projects: localProjects, syncConfig } = await readStorage();
+    const {
+      categoryPreferences: localCategoryPreferences,
+      currentProjectId,
+      pages: localPages,
+      projects: localProjects,
+      syncConfig,
+    } = await readStorage();
 
     if (!syncConfig.connected) {
       throw new Error('Connect Notion before reloading from Notion.');
@@ -1791,6 +1917,7 @@ export const notionClient = {
       !validation.aheadPageIds.length
     ) {
       return {
+        categoryPreferences: localCategoryPreferences,
         currentProjectId,
         pages: localPages,
         projects: localProjects,
@@ -1818,6 +1945,7 @@ export const notionClient = {
         syncConfig: nextSyncConfig,
       });
       return {
+        categoryPreferences: localCategoryPreferences,
         currentProjectId,
         pages: localPages,
         projects: localProjects,
@@ -1826,6 +1954,13 @@ export const notionClient = {
     }
 
     const projects = response.projects.map(normalizeProject).sort(sortProjectsByUpdatedDesc);
+    const categoryPreferences = normalizeCategoryPreferences(
+      [
+        ...localCategoryPreferences,
+        ...(response.categoryPreferences ?? []),
+      ],
+      projects,
+    );
     const pages = response.pages.map(normalizeStoredPage);
     const activePageIdsByProject = createCompatibleActivePageIds(
       projects,
@@ -1837,6 +1972,7 @@ export const notionClient = {
       : projects[0]?.id ?? '';
     await writeStorage({
       activePageIdsByProject,
+      categoryPreferences,
       currentProjectId: nextCurrentProjectId,
       hasMigratedCapturesToPages: true,
       pages,
@@ -1846,6 +1982,7 @@ export const notionClient = {
     });
 
     return {
+      categoryPreferences,
       currentProjectId: nextCurrentProjectId,
       pages,
       projects,

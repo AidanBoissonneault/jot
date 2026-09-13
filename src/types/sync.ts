@@ -2,6 +2,7 @@ import type {
   DocumentContent,
   NotionParentPage,
   Project,
+  ProjectCategoryPreference,
   ProjectPage,
   SaveStatus,
 } from './capture.js';
@@ -110,6 +111,16 @@ export type SyncReloadResponse = {
   currentProjectId?: string;
   pages: ProjectPage[];
   projects: Project[];
+  categoryPreferences?: ProjectCategoryPreference[];
+  status: SyncStatus;
+};
+
+export type SyncCategoryPreferencesRequest = {
+  categoryPreferences?: ProjectCategoryPreference[];
+};
+
+export type SyncCategoryPreferencesResponse = {
+  categoryPreferences: ProjectCategoryPreference[];
   status: SyncStatus;
 };
 

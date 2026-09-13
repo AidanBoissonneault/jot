@@ -149,6 +149,26 @@ describe('optimistic project creation', () => {
 });
 
 describe('optimistic startup', () => {
+  test('retries a transient first session 404 without surfacing an error', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(
+        { error: 'Not found' },
+        { status: 404 },
+      ))
+      .mockResolvedValueOnce(jsonResponse({
+        authenticated: false,
+        connected: false,
+      }));
+    vi.stubGlobal('fetch', fetchMock);
+    const store = useInkwellStore();
+
+    await store.initialize();
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls.every(([url]) => String(url).endsWith('/session'))).toBe(true);
+    expect(store.errorMessage).toBe('');
+  });
+
   test('makes the local workspace usable while session refresh is still pending', async () => {
     const sessionRefresh = deferred<Response>();
     const fetchMock = vi.fn(() => sessionRefresh.promise);
@@ -225,6 +245,84 @@ describe('local-first website highlights', () => {
 });
 
 describe('project metadata', () => {
+  test('renames the project optimistically before sync settles', async () => {
+    const projectSync = deferred<Response>();
+    const fetchMock = vi.fn(() => projectSync.promise);
+    vi.stubGlobal('fetch', fetchMock);
+    const store = useInkwellStore();
+    await seedStore(store);
+
+    const renamePromise = store.renameCurrentProject('Optimistic title');
+
+    expect(store.currentProject?.name).toBe('Optimistic title');
+    expect(store.currentProject?.syncState).toBe('saving');
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    projectSync.resolve(jsonResponse({ status: 'saved' }));
+    await renamePromise;
+    expect(store.currentProject?.name).toBe('Optimistic title');
+  });
+
+  test('updates shared category color and pinning optimistically in one request', async () => {
+    const preferenceSync = deferred<Response>();
+    const fetchMock = vi.fn(() => preferenceSync.promise);
+    vi.stubGlobal('fetch', fetchMock);
+    const store = useInkwellStore();
+    await seedStore(store);
+    store.projects = [
+      baseProject,
+      { ...baseProject, id: 'project-two', name: 'Second project' },
+    ];
+
+    const updatePromise = store.updateCategoryPreference('General', {
+      color: 'blue',
+      pinned: true,
+    });
+
+    expect(store.categoryPreferences).toEqual([
+      { name: 'General', color: 'blue', pinned: true },
+    ]);
+    const requestBody = await waitForFirstRequest(fetchMock);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [requestUrl] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(requestUrl).toBe(
+      'http://localhost:8787/sync/category-preferences',
+    );
+    expect(requestBody.categoryPreferences).toEqual([
+      { name: 'General', color: 'blue', pinned: true },
+    ]);
+
+    preferenceSync.resolve(jsonResponse({
+      status: 'saved',
+      categoryPreferences: [{ name: 'General', color: 'blue', pinned: true }],
+    }));
+    await updatePromise;
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  test('keeps category preferences locally when an older server returns 404', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(
+      { error: 'Not found' },
+      { status: 404 },
+    ));
+    vi.stubGlobal('fetch', fetchMock);
+    const store = useInkwellStore();
+    await seedStore(store);
+
+    await store.updateCategoryPreference('General', {
+      color: 'green',
+      pinned: true,
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(store.errorMessage).toBe('');
+    expect(store.categoryPreferences).toEqual([
+      { name: 'General', color: 'green', pinned: true },
+    ]);
+    expect(readBrowserStorage().categoryPreferences).toEqual([
+      { name: 'General', color: 'green', pinned: true },
+    ]);
+  });
+
   test('validateNotionCache uncaches missing Notion project and page metadata', async () => {
     const fetchMock = vi.fn(async () =>
       jsonResponse({
@@ -333,6 +431,37 @@ describe('project metadata', () => {
     expect((storage.pages as ProjectPage[]).map((page) => page.id)).toEqual(['page-remote']);
     expect((storage.projects as Project[]).map((project) => project.id)).toEqual(['project-remote']);
     expect((storage.syncConfig as SyncConfig).selectedParentPageId).toBe('parent-page');
+  });
+
+  test('reloadFromNotion preserves local category colors missing from the server snapshot', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(jsonResponse({
+      activePageIdsByProject: { 'project-inkwell': 'page-inkwell' },
+      categoryPreferences: [],
+      currentProjectId: 'project-inkwell',
+      pages: [basePage],
+      projects: [baseProject],
+      status: 'saved',
+    })));
+    resetBrowserStorage({
+      activePageIdsByProject: { 'project-inkwell': 'page-inkwell' },
+      categoryPreferences: [
+        { name: 'General', color: 'purple', pinned: true },
+      ],
+      currentProjectId: 'project-inkwell',
+      hasMigratedCapturesToPages: true,
+      pages: [basePage],
+      projects: [baseProject],
+      syncConfig: connectedConfig,
+    });
+
+    const reloaded = await notionClient.reloadFromNotion({ force: true });
+
+    expect(reloaded.categoryPreferences).toEqual([
+      { name: 'General', color: 'purple', pinned: true },
+    ]);
+    expect(readBrowserStorage().categoryPreferences).toEqual([
+      { name: 'General', color: 'purple', pinned: true },
+    ]);
   });
 
   test('reloadFromNotion clears selected parent when server reports it invalid', async () => {
@@ -508,6 +637,8 @@ describe('project metadata', () => {
       category: 'Research',
       stateText: 'Todo\nShip database sync',
     });
+    expect(store.currentProject?.category).toBe('Research');
+    expect(store.currentProject?.syncState).toBe('saving');
     const requestBody = await waitForFirstRequest(fetchMock);
 
     expect(requestBody.project.category).toBe('Research');
@@ -1557,10 +1688,11 @@ function deferred<T>(): Deferred<T> {
   return { promise, reject, resolve };
 }
 
-function jsonResponse(payload: unknown): Response {
+function jsonResponse(payload: unknown, init: { status?: number } = {}): Response {
+  const status = init.status ?? 200;
   return {
-    ok: true,
-    status: 200,
+    ok: status >= 200 && status < 300,
+    status,
     json: async () => payload,
   } as Response;
 }

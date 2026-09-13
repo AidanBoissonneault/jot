@@ -4,6 +4,8 @@ import { library } from '@fortawesome/fontawesome-svg-core';
 import { FontAwesomeIcon } from '@fortawesome/vue-fontawesome';
 import { faPenToSquare } from '@fortawesome/free-regular-svg-icons';
 import {
+  faArrowDown,
+  faArrowUp,
   faBold,
   faCheck,
   faCloudArrowUp,
@@ -37,6 +39,7 @@ import {
   faStop,
   faStrikethrough,
   faTable,
+  faThumbtack,
   faTrashCan,
   faUnderline,
   faVideo,
@@ -47,6 +50,8 @@ import App from './App.vue';
 import '@/src/styles/global.css';
 
 library.add(
+  faArrowDown,
+  faArrowUp,
   faBold,
   faCheck,
   faCloudArrowUp,
@@ -81,6 +86,7 @@ library.add(
   faStop,
   faStrikethrough,
   faTable,
+  faThumbtack,
   faTrashCan,
   faUnderline,
   faVideo,

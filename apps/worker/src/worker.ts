@@ -29,6 +29,7 @@ import type {
   MediaRefreshRequest,
   MediaUploadRequest,
   SyncPageRequest,
+  SyncCategoryPreferencesRequest,
   SyncProjectRequest,
   SyncReloadRequest,
   SyncValidationRequest,
@@ -348,6 +349,20 @@ app.post('/sync/project', async (c) => {
   }
 });
 
+app.post('/sync/category-preferences', async (c) => {
+  const body = await c.req.json<SyncCategoryPreferencesRequest>().catch(() => ({}));
+  const store = await requireConnectedStore(c);
+  const categoryPreferences = normalizeCategoryPreferences(body?.categoryPreferences);
+
+  const saved = await withFreshInstallationStore(store, async (freshStore) => {
+    freshStore.categoryPreferences = categoryPreferences;
+    await writeStore(freshStore);
+    return freshStore.categoryPreferences;
+  });
+
+  return c.json({ status: 'saved', categoryPreferences: saved });
+});
+
 app.get('/sync/status', async (c) => {
   const pageId = c.req.query('pageId');
 
@@ -438,7 +453,10 @@ app.post('/sync/reload', async (c) => {
     const reloaded = await reloadProjectDatabaseFromNotion(freshStore, { selectedParentPageId });
     appendLog(freshStore, 'sync_reload', `${reloaded.projects.length} projects, ${reloaded.pages.length} pages`);
     await writeStore(freshStore);
-    return reloaded;
+    return {
+      ...reloaded,
+      categoryPreferences: freshStore.categoryPreferences ?? [],
+    };
   });
 
   return c.json({ status: 'saved', ...result });
@@ -943,6 +961,7 @@ async function writeStore(store) {
 
 function normalizeStore(store) {
   return {
+    categoryPreferences: normalizeCategoryPreferences(store.categoryPreferences),
     parentPages: store.parentPages ?? {},
     projectPages: store.projectPages ?? {},
     projectBlocks: store.projectBlocks ?? {},
@@ -953,6 +972,25 @@ function normalizeStore(store) {
     blockMappings: store.blockMappings ?? {},
     logs: store.logs ?? [],
   };
+}
+
+const CATEGORY_COLORS = new Set([
+  'default', 'gray', 'brown', 'orange', 'yellow',
+  'green', 'blue', 'purple', 'pink', 'red',
+]);
+
+function normalizeCategoryPreferences(preferences) {
+  const byName = new Map();
+  for (const preference of Array.isArray(preferences) ? preferences : []) {
+    const name = typeof preference?.name === 'string' ? preference.name.trim() : '';
+    if (!name) continue;
+    byName.set(name.toLocaleLowerCase(), {
+      name,
+      color: CATEGORY_COLORS.has(preference.color) ? preference.color : 'default',
+      pinned: Boolean(preference.pinned),
+    });
+  }
+  return [...byName.values()].sort((first, second) => first.name.localeCompare(second.name));
 }
 
 function appendLog(store, event, message) {
@@ -1077,6 +1115,7 @@ async function readInkwellSyncState(installationId) {
     projectPages: row.project_pages_json ?? {},
     projectBlocks: row.project_blocks_json ?? {},
     threadBlocks: row.thread_blocks_json ?? {},
+    categoryPreferences: row.category_preferences_json ?? [],
   };
 }
 
@@ -1093,6 +1132,7 @@ async function writeInkwellSyncState(installationId, store) {
     project_pages_json: store.projectPages ?? {},
     project_blocks_json: store.projectBlocks ?? {},
     thread_blocks_json: store.threadBlocks ?? {},
+    category_preferences_json: store.categoryPreferences ?? [],
     updated_at: new Date().toISOString(),
   }).eq('installation_id', installationId);
 }
@@ -1768,7 +1808,48 @@ function privacyBody() {
 }
 
 function closePage(message) {
-  return `<!doctype html><html><body><p>${escapeHtml(message)}</p><script>setTimeout(() => window.close(), 900)</script></body></html>`;
+  const isSuccess = /logged in|connected|complete/i.test(message) && !/did not|failed|could not|not configured/i.test(message);
+  const title = isSuccess ? 'You’re connected' : 'Connection paused';
+  const detail = isSuccess
+    ? 'Inkwell is syncing your workspace now. You can safely close this tab and return to the side panel.'
+    : message;
+
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>${escapeHtml(title)} - Inkwell</title>
+  <style>
+    :root { color-scheme: light; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    * { box-sizing: border-box; }
+    body { min-height: 100vh; margin: 0; display: grid; place-items: center; background: #fafafa; color: #111113; }
+    main { width: min(100%, 430px); min-height: 100vh; padding: 10px; }
+    .brand { display: grid; gap: 1px; padding: 4px 2px 10px; border-bottom: 1px solid #e4e4e7; }
+    .brand strong { font-size: 14px; }
+    .brand small { color: #6b6f76; font-size: 11px; }
+    .result-card { display: grid; justify-items: start; gap: 12px; margin-top: 12px; padding: 18px; border: 1px solid #e4e4e7; border-radius: 8px; background: #fff; box-shadow: 0 8px 28px rgba(17,17,19,.08); }
+    .status { width: 14px; height: 14px; border: 2px solid ${isSuccess ? '#166534' : '#92400e'}; border-radius: 50%; background: ${isSuccess ? '#22c55e' : '#f59e0b'}; }
+    h1 { margin: 0; font-size: 1.05rem; font-weight: 800; }
+    p { margin: 0 0 6px; color: #6b6f76; line-height: 1.5; }
+    button { width: 100%; min-height: 38px; padding: 0 14px; border: 1px solid #173494; border-radius: 8px; background: #173494; color: white; cursor: pointer; font: 750 14px/1 inherit; }
+    .result-card small { display: block; justify-self: center; color: #8a8a91; }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="brand"><strong>Inkwell</strong><small>Notion connection</small></div>
+    <section class="result-card">
+      <div class="status" aria-hidden="true"></div>
+      <h1>${escapeHtml(title)}</h1>
+      <p>${escapeHtml(detail)}</p>
+      <button type="button" onclick="window.close()">Close this tab</button>
+      ${isSuccess ? '<small>This tab will close automatically.</small>' : '<small>Return to Inkwell to try again.</small>'}
+    </section>
+  </main>
+  ${isSuccess ? '<script>setTimeout(() => window.close(), 1800)</script>' : ''}
+</body>
+</html>`;
 }
 
 function escapeHtml(value) {

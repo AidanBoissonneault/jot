@@ -64,9 +64,13 @@ CREATE TABLE IF NOT EXISTS inkwell_sync_state (
   project_pages_json JSONB NOT NULL DEFAULT '{}',
   project_blocks_json JSONB NOT NULL DEFAULT '{}',
   thread_blocks_json JSONB NOT NULL DEFAULT '{}',
+  category_preferences_json JSONB NOT NULL DEFAULT '[]',
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE inkwell_sync_state
+  ADD COLUMN IF NOT EXISTS category_preferences_json JSONB NOT NULL DEFAULT '[]';
 
 CREATE TABLE IF NOT EXISTS notion_block_sync (
   installation_id BIGINT NOT NULL REFERENCES notion_installations(id) ON DELETE CASCADE,
