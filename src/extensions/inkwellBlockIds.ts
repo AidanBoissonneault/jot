@@ -22,6 +22,7 @@ const TOP_LEVEL_BLOCK_TYPES = [
   'bulletList',
   'orderedList',
   'taskList',
+  'table',
 ];
 
 export const InkwellBlockIds = Extension.create({

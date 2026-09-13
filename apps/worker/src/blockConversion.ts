@@ -51,6 +51,10 @@ function tiptapNodeToNotionBlock(node) {
     };
   }
 
+  if (node.type === 'table') {
+    return tiptapTableToNotionBlock(node);
+  }
+
   if (node.type === 'bulletList' || node.type === 'orderedList') {
     const listItems = node.content ?? [];
     return {
@@ -153,6 +157,67 @@ function paragraphFallback(richText) {
   };
 }
 
+function tiptapTableToNotionBlock(node) {
+  const rows = node.content ?? [];
+  const tableWidth = Math.max(
+    1,
+    ...rows.map((row) => (row.content ?? []).reduce(
+      (width, cell) => width + Math.max(1, Number(cell.attrs?.colspan ?? 1)),
+      0,
+    )),
+  );
+  const hasColumnHeader = Boolean(
+    rows[0]?.content?.length &&
+    rows[0].content.every((cell) => cell.type === 'tableHeader'),
+  );
+  const hasRowHeader = Boolean(
+    rows.length &&
+    rows.every((row) => row.content?.[0]?.type === 'tableHeader'),
+  );
+
+  return {
+    object: 'block',
+    type: 'table',
+    table: {
+      table_width: tableWidth,
+      has_column_header: hasColumnHeader,
+      has_row_header: hasRowHeader,
+      children: rows.map((row) => ({
+        object: 'block',
+        type: 'table_row',
+        table_row: {
+          cells: normalizedTableCells(row, tableWidth),
+        },
+      })),
+    },
+  };
+}
+
+function normalizedTableCells(row, tableWidth) {
+  const cells = [];
+
+  for (const cell of row.content ?? []) {
+    const richText = tableCellContentToRichText(cell.content);
+    const colspan = Math.max(1, Number(cell.attrs?.colspan ?? 1));
+    cells.push(richText);
+    for (let index = 1; index < colspan; index += 1) cells.push([]);
+  }
+
+  while (cells.length < tableWidth) cells.push([]);
+  return cells.slice(0, tableWidth);
+}
+
+function tableCellContentToRichText(content = []) {
+  const richText = [];
+
+  content.forEach((block, index) => {
+    if (index > 0) richText.push(...plainRichText('\n'));
+    richText.push(...inlineContentToRichText(block.content ?? []));
+  });
+
+  return richText;
+}
+
 function inlineContentToRichText(content = []) {
   const richText = [];
 
@@ -192,14 +257,25 @@ function textNodeToRichText(node) {
 }
 
 function plainRichText(text) {
-  return [
-    {
+  const chunks = splitTextForNotion(text);
+  return chunks.map((content) => ({
       type: 'text',
       text: {
-        content: text,
+        content,
       },
-    },
-  ];
+    }));
+}
+
+function splitTextForNotion(text, maxLength = 2000) {
+  if (!text) return [''];
+  const chunks = [];
+  for (let index = 0; index < text.length;) {
+    let end = Math.min(index + maxLength, text.length);
+    if (end < text.length && /[\uD800-\uDBFF]/.test(text[end - 1])) end -= 1;
+    chunks.push(text.slice(index, end));
+    index = end;
+  }
+  return chunks;
 }
 
 export function notionBlocksToTiptapDocument(blocks) {
@@ -259,6 +335,10 @@ function notionBlockToTiptapNode(block) {
       },
       content: plainTiptapText(block.code.rich_text.map((text) => text.plain_text).join('')),
     };
+  }
+
+  if (block.type === 'table') {
+    return notionTableToTiptapNode(block);
   }
 
   if (block.type === 'divider') {
@@ -327,6 +407,32 @@ function youtubeUrlFromLinkedParagraph(richText = []) {
   }
 
   return normalizeYoutubeVideoUrl(href);
+}
+
+function notionTableToTiptapNode(block) {
+  const table = block.table ?? {};
+  const width = Math.max(1, Number(table.table_width ?? 1));
+  const rows = (table.children ?? block.children ?? [])
+    .filter((row) => row.type === 'table_row')
+    .map((row, rowIndex) => {
+      const cells = row.table_row?.cells ?? [];
+      return {
+        type: 'tableRow',
+        content: Array.from({ length: width }, (_, columnIndex) => ({
+          type: (
+            (table.has_column_header && rowIndex === 0) ||
+            (table.has_row_header && columnIndex === 0)
+          ) ? 'tableHeader' : 'tableCell',
+          content: [{
+            type: 'paragraph',
+            content: richTextToTiptapInline(cells[columnIndex] ?? []),
+          }],
+        })),
+      };
+    });
+
+  if (!rows.length) return null;
+  return { type: 'table', content: rows };
 }
 
 function richTextToTiptapInline(richText = []) {
@@ -448,6 +554,7 @@ function youtubeWatchUrl(id, sourceParams) {
 export function kindFromNotionBlock(block) {
   if (block.type?.startsWith('heading_')) return 'heading';
   if (block.type === 'quote') return 'quote';
+  if (block.type === 'table') return 'table';
   if (['image', 'video', 'audio', 'embed', 'file'].includes(block.type)) return 'media';
   return block.type === 'paragraph' ? 'paragraph' : 'source';
 }

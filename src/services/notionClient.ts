@@ -10,13 +10,17 @@ import type {
 import { idbGet, idbGetMany, idbSet, idbSetMany } from '@/src/services/idbStore';
 import { createInkwellBlockId, normalizeInkwellBlockIds } from '@/src/extensions/inkwellBlockIds';
 import {
+  addWebsiteHighlightToProjectState,
   addSourceToProjectState,
   capturedBlockId,
   migratePageSourcesToProjectState,
+  removeWebsiteHighlightsFromProjectState,
+  websiteHighlightsFromProjectState,
 } from '@/src/extensions/sourceRegistry';
 import type {
   CaptureSelectionPayload,
   SourceOpenPayload,
+  WebsiteHighlight,
 } from '@/src/types/messages';
 import { normalizeCodeLanguage } from '@/src/lib/codeLanguages';
 import type {
@@ -30,6 +34,7 @@ import type {
   SyncProjectResponse,
   SyncReloadResponse,
   SyncSessionResponse,
+  SyncStatusResponse,
   SyncValidationResponse,
 } from '@/src/types/sync';
 import { markUnrecoverableTransientMedia, sanitizeMediaForSync } from '@/src/extensions/mediaContent';
@@ -106,6 +111,7 @@ const projectReconciliations = new Map<string, Promise<string>>();
 let queueDeliveryPromise: Promise<void> | undefined;
 let queueDeliveryTimer: ReturnType<typeof setTimeout> | undefined;
 let forcedQueueDeliveryPromise: Promise<void> | undefined;
+let websiteHighlightMutationQueue = Promise.resolve();
 
 function emptyDocument(): DocumentContent {
   return normalizeInkwellBlockIds({
@@ -769,12 +775,14 @@ async function enqueuePageSync(
     project,
     selectedParentPageId: syncConfig.selectedParentPageId,
   }));
-  if (pendingOps.length || countPendingLocalMedia(normalizedPage.content) > 0) {
+  const hasPendingLocalWork = pendingOps.length > 0 ||
+    countPendingLocalMedia(normalizedPage.content) > 0;
+  if (hasPendingLocalWork) {
     triggerQueueDelivery();
   }
 
   return syncConfig.connected && !isBrowserOffline()
-    ? withSyncStatus(normalizedPage, 'saved')
+    ? withSyncStatus(normalizedPage, hasPendingLocalWork ? 'saving' : 'saved')
     : withSyncStatus(
         normalizedPage,
         'stale',
@@ -980,6 +988,55 @@ async function saveProjectUpdate(projects: Project[], projectId: string, updated
       .sort(sortProjectsByUpdatedDesc),
   });
   return savedProject;
+}
+
+async function saveProjectUpdateLocally(
+  projects: Project[],
+  projectId: string,
+  updatedProject: Project,
+): Promise<Project> {
+  const { syncConfig } = await readStorage();
+  const locallySavedProject = syncConfig.connected && !isBrowserOffline()
+    ? {
+        ...updatedProject,
+        syncMessage: undefined,
+        syncState: 'saving' as const,
+      }
+    : withProjectSyncStatus(
+        updatedProject,
+        'stale',
+        syncConfig.connected
+          ? 'Saved locally. Will sync when a connection is available.'
+          : 'Saved locally. Connect Notion to sync this project.',
+      );
+
+  await writeStorage({
+    projects: projects
+      .map((project) => (project.id === projectId ? locallySavedProject : project))
+      .sort(sortProjectsByUpdatedDesc),
+  });
+  await addPendingProjectSyncEvent(updatedProject, syncConfig.selectedParentPageId);
+  triggerQueueDelivery();
+  return locallySavedProject;
+}
+
+function mutateCurrentProjectWebsiteHighlights(
+  mutation: (project: Project) => Project | null,
+): Promise<Project | null> {
+  const result = websiteHighlightMutationQueue.then(async () => {
+    const { currentProjectId, projects } = await readStorage();
+    const project = projects.find(
+      (candidate) => candidate.id === currentProjectId && candidate.status !== 'archived',
+    );
+    if (!project) return null;
+
+    const updatedProject = mutation(project);
+    return updatedProject
+      ? saveProjectUpdateLocally(projects, project.id, updatedProject)
+      : null;
+  });
+  websiteHighlightMutationQueue = result.then(() => undefined, () => undefined);
+  return result;
 }
 
 async function requirePageWithProject(pageId: string) {
@@ -1298,6 +1355,43 @@ export const notionClient = {
   flushPendingSyncOps,
   pendingSyncEventCount: pendingLocalWorkCount,
 
+  async getLocalWorkspace(): Promise<{
+    currentPage?: ProjectPage;
+    currentProjectId: string;
+    pages: ProjectPage[];
+    projects: Project[];
+    syncConfig: SyncConfig;
+  }> {
+    const storage = await readStorage();
+    const projects = storage.projects
+      .filter((project) => project.status !== 'archived')
+      .sort(sortProjectsByUpdatedDesc);
+    const currentProjectId = projects.some(
+      (project) => project.id === storage.currentProjectId,
+    )
+      ? storage.currentProjectId
+      : projects[0]?.id ?? '';
+    const pages = storage.pages
+      .filter(
+        (page) =>
+          page.projectId === currentProjectId && page.status !== 'archived',
+      )
+      .sort(
+        (first, second) =>
+          new Date(first.createdAt).getTime() - new Date(second.createdAt).getTime(),
+      );
+    const activePageId = storage.activePageIdsByProject[currentProjectId];
+    const currentPage = pages.find((page) => page.id === activePageId) ?? pages[0];
+
+    return {
+      currentPage,
+      currentProjectId,
+      pages,
+      projects,
+      syncConfig: { ...storage.syncConfig },
+    };
+  },
+
   async prepareLocalWorkspaceForFirstSync(): Promise<boolean> {
     const storage = await readStorage();
     const { syncConfig } = storage;
@@ -1360,6 +1454,42 @@ export const notionClient = {
   async getCurrentProjectId(): Promise<string> {
     const { currentProjectId } = await readStorage();
     return currentProjectId;
+  },
+
+  async getCurrentProjectWebsiteHighlights(url: string): Promise<WebsiteHighlight[]> {
+    const { currentProjectId, projects } = await readStorage();
+    const project = projects.find(
+      (candidate) => candidate.id === currentProjectId && candidate.status !== 'archived',
+    );
+    return project ? websiteHighlightsFromProjectState(project.stateContent, url) : [];
+  },
+
+  async createWebsiteHighlight(highlight: WebsiteHighlight): Promise<Project | null> {
+    return mutateCurrentProjectWebsiteHighlights((project) =>
+      touchProject(project, {
+        stateContent: addWebsiteHighlightToProjectState(project.stateContent, highlight),
+      }),
+    );
+  },
+
+  async removeWebsiteHighlights(ids: string[], url: string): Promise<Project | null> {
+    if (!ids.length) return null;
+    return mutateCurrentProjectWebsiteHighlights((project) => {
+      const removableIds = websiteHighlightsFromProjectState(project.stateContent, url)
+        .filter((highlight) => ids.includes(highlight.id))
+        .map((highlight) => highlight.id);
+      // Deletes are idempotent. A rapid add/remove or repeated click can reach
+      // here after the desired local state is already in place; treating that
+      // as a failure would make the optimistic UI redraw the highlight.
+      if (!removableIds.length) return project;
+
+      return touchProject(project, {
+        stateContent: removeWebsiteHighlightsFromProjectState(
+          project.stateContent,
+          removableIds,
+        ),
+      });
+    });
   },
 
   async setCurrentProjectId(projectId: string): Promise<void> {
@@ -1798,6 +1928,45 @@ export const notionClient = {
     }
 
     return syncAndPersistPage(page);
+  },
+
+  async waitForProjectPageSync(
+    pageId: string,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<ProjectPage | undefined> {
+    const retryDelays = [0, 250, 500, 1_000, 2_000, 4_000];
+
+    for (const delay of retryDelays) {
+      if (options.signal?.aborted) return undefined;
+      if (delay) {
+        await new Promise((resolve) => globalThis.setTimeout(resolve, delay));
+      }
+      if (options.signal?.aborted) return undefined;
+
+      const { pages, syncConfig } = await readStorage();
+      const page = pages.find((storedPage) => storedPage.id === pageId);
+      if (!page || !syncConfig.connected || isBrowserOffline()) return page;
+
+      const response = await requestServer<SyncStatusResponse>(
+        `/sync/status?pageId=${encodeURIComponent(pageId)}`,
+        undefined,
+        syncConfig,
+      ).catch(() => undefined);
+      if (!response) continue;
+      if (response.status === 'synced') {
+        return applySyncResult({
+          status: 'synced',
+          pageId,
+          notionBlockId: response.notionBlockId,
+          version: response.syncedVersion,
+        });
+      }
+      if (response.status === 'failed') {
+        return applySyncResult({ status: 'failed', pageId });
+      }
+    }
+
+    return undefined;
   },
 
   async prefetchProjectPages(projectId: string, excludePageId?: string): Promise<void> {

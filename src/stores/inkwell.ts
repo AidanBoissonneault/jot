@@ -1,4 +1,4 @@
-import { computed, ref } from 'vue';
+import { computed, onScopeDispose, ref } from 'vue';
 import { defineStore } from 'pinia';
 import { mergeSyncedMediaContent } from '@/src/extensions/mediaContent';
 import { mergeVisibleProjectState } from '@/src/extensions/sourceRegistry';
@@ -17,6 +17,8 @@ import type {
   CaptureSelectionPayload,
   InkwellRuntimeMessage,
   ProjectPageUpdatedMessage,
+  ProjectStateUpdatedMessage,
+  RefreshWebsiteHighlightsMessage,
 } from '@/src/types/messages';
 
 type CaptureInsertHandler = (payload: CaptureSelectionPayload) => Promise<boolean>;
@@ -39,6 +41,8 @@ export const useInkwellStore = defineStore('inkwell', () => {
   const notionParentPages = ref<NotionParentPage[]>([]);
   const pullMessage = ref('');
   const pendingSyncCount = ref(0);
+  const localSavesInFlight = ref(0);
+  const isSavingLocally = computed(() => localSavesInFlight.value > 0);
   const isOnline = ref(typeof navigator === 'undefined' || navigator.onLine !== false);
   let pullMessageTimer: number | undefined;
   const syncConfig = ref<SyncConfig>({
@@ -50,6 +54,14 @@ export const useInkwellStore = defineStore('inkwell', () => {
   let isListeningForRuntimeMessages = false;
   let syncEventsSource: EventSource | undefined;
   let stopQueueListener: (() => void) | undefined;
+  let syncReconciliationPromise: Promise<void> | undefined;
+  let syncReconciliationController: AbortController | undefined;
+
+  onScopeDispose(() => {
+    stopQueueListener?.();
+    syncEventsSource?.close();
+    syncReconciliationController?.abort();
+  });
 
   const currentProject = computed(() =>
     projects.value.find((project) => project.id === currentProjectId.value),
@@ -58,10 +70,27 @@ export const useInkwellStore = defineStore('inkwell', () => {
   async function initialize() {
     isLoading.value = true;
     errorMessage.value = '';
+    let localWorkspaceLoaded = false;
 
     try {
-      syncConfig.value = await notionClient.getSyncConfig();
+      applyLocalWorkspace(await notionClient.getLocalWorkspace());
       isOnline.value = typeof navigator === 'undefined' || navigator.onLine !== false;
+      localWorkspaceLoaded = true;
+    } catch (error) {
+      errorMessage.value =
+        error instanceof Error ? error.message : 'Unable to load Inkwell data.';
+      saveStatus.value = 'error';
+    } finally {
+      // The editor only depends on the local snapshot. Network reconciliation
+      // continues below without holding the first usable render hostage.
+      isLoading.value = false;
+    }
+
+    if (!localWorkspaceLoaded) {
+      return;
+    }
+
+    try {
       stopQueueListener ??= onSyncQueueChange(() => {
         void refreshPendingSyncCount();
       });
@@ -97,6 +126,7 @@ export const useInkwellStore = defineStore('inkwell', () => {
       }
 
       await loadCurrentPage();
+      void reconcileCurrentPageSyncState();
       openSyncEvents();
       if (isOnline.value && syncConfig.value.connected && pendingSyncCount.value) {
         void syncPendingChanges().catch(() => undefined);
@@ -105,8 +135,22 @@ export const useInkwellStore = defineStore('inkwell', () => {
       errorMessage.value =
         error instanceof Error ? error.message : 'Unable to load Inkwell data.';
       saveStatus.value = 'error';
-    } finally {
-      isLoading.value = false;
+    }
+  }
+
+  function applyLocalWorkspace(
+    workspace: Awaited<ReturnType<typeof notionClient.getLocalWorkspace>>,
+  ) {
+    syncConfig.value = workspace.syncConfig;
+    projects.value = workspace.projects;
+    currentProjectId.value = workspace.currentProjectId;
+    pages.value = workspace.pages;
+    currentPage.value = workspace.currentPage;
+
+    if (currentPage.value) {
+      applyPageSyncState(currentPage.value);
+    } else {
+      saveStatus.value = 'idle';
     }
   }
 
@@ -118,6 +162,7 @@ export const useInkwellStore = defineStore('inkwell', () => {
     currentProjectId.value = projectId;
     await notionClient.setCurrentProjectId(projectId);
     await loadCurrentPage();
+    requestWebsiteHighlightRefresh();
   }
 
   async function createProject(name: string) {
@@ -130,6 +175,7 @@ export const useInkwellStore = defineStore('inkwell', () => {
       currentProjectId.value = creation.project.id;
       currentPage.value = creation.page;
       applyProjectOrPageSyncState(creation.project, creation.page);
+      requestWebsiteHighlightRefresh();
 
       void creation.settled.then(async ({ page, project }) => {
         const wasViewingProject = currentProjectId.value === creation.project.id;
@@ -155,6 +201,7 @@ export const useInkwellStore = defineStore('inkwell', () => {
         const storedProjectId = await notionClient.getCurrentProjectId();
         currentProjectId.value = storedProjectId;
         await loadCurrentPage();
+        requestWebsiteHighlightRefresh();
         errorMessage.value = message;
         saveStatus.value = 'error';
       });
@@ -252,6 +299,7 @@ export const useInkwellStore = defineStore('inkwell', () => {
       projects.value = await notionClient.listProjects();
       currentProjectId.value = result.currentProjectId;
       await loadCurrentPage();
+      requestWebsiteHighlightRefresh();
     } catch (error) {
       errorMessage.value =
         error instanceof Error ? error.message : 'Unable to archive this project.';
@@ -309,6 +357,7 @@ export const useInkwellStore = defineStore('inkwell', () => {
       return;
     }
 
+    localSavesInFlight.value += 1;
     saveStatus.value = 'saving';
     const activePageId = currentPage.value.id;
     const optimisticPage = {
@@ -347,6 +396,8 @@ export const useInkwellStore = defineStore('inkwell', () => {
       errorMessage.value =
         error instanceof Error ? error.message : 'Unable to save this page.';
       saveStatus.value = 'error';
+    } finally {
+      localSavesInFlight.value = Math.max(0, localSavesInFlight.value - 1);
     }
   }
 
@@ -355,6 +406,7 @@ export const useInkwellStore = defineStore('inkwell', () => {
     content: DocumentContent,
     options: SaveOptions = {},
   ) {
+    localSavesInFlight.value += 1;
     const activePageId = page.id;
     const optimisticPage = {
       ...page,
@@ -401,6 +453,8 @@ export const useInkwellStore = defineStore('inkwell', () => {
       errorMessage.value =
         error instanceof Error ? error.message : 'Unable to save this page.';
       saveStatus.value = 'error';
+    } finally {
+      localSavesInFlight.value = Math.max(0, localSavesInFlight.value - 1);
     }
   }
 
@@ -499,6 +553,10 @@ export const useInkwellStore = defineStore('inkwell', () => {
         handleProjectPageUpdated(message);
       }
 
+      if (message?.type === 'inkwell.projectStateUpdated') {
+        handleProjectStateUpdated(message);
+      }
+
       return false;
     });
 
@@ -528,6 +586,19 @@ export const useInkwellStore = defineStore('inkwell', () => {
 
     void loadProjectPages();
     applyPageSyncState(currentPage.value?.id === updatedPage.id ? currentPage.value : nextPage);
+  }
+
+  function handleProjectStateUpdated(message: ProjectStateUpdatedMessage) {
+    const updatedProject = message.payload.project;
+    projects.value = projects.value
+      .map((project) => project.id === updatedProject.id ? updatedProject : project)
+      .sort(sortProjectsByUpdatedDesc);
+  }
+
+  function requestWebsiteHighlightRefresh() {
+    void browser.runtime.sendMessage({
+      type: 'inkwell.refreshWebsiteHighlights',
+    } satisfies RefreshWebsiteHighlightsMessage).catch(() => undefined);
   }
 
   function openSyncEvents() {
@@ -626,6 +697,42 @@ export const useInkwellStore = defineStore('inkwell', () => {
 
   async function refreshPendingSyncCount() {
     pendingSyncCount.value = await notionClient.pendingSyncEventCount();
+    if (pendingSyncCount.value === 0) {
+      void reconcileCurrentPageSyncState();
+    }
+  }
+
+  async function reconcileCurrentPageSyncState() {
+    if (
+      syncReconciliationPromise ||
+      !isOnline.value ||
+      !syncConfig.value.connected ||
+      currentPage.value?.syncState !== 'saving'
+    ) {
+      return syncReconciliationPromise;
+    }
+
+    const pageId = currentPage.value.id;
+    syncReconciliationController = new AbortController();
+    syncReconciliationPromise = (async () => {
+      const page = await notionClient.waitForProjectPageSync(pageId, {
+        signal: syncReconciliationController?.signal,
+      });
+      if (!page || currentPage.value?.id !== pageId) return;
+
+      currentPage.value = mergePageSyncMetadata(currentPage.value, page);
+      pages.value = pages.value.map((storedPage) =>
+        storedPage.id === pageId ? currentPage.value ?? storedPage : storedPage,
+      );
+      applyPageSyncState(currentPage.value);
+    })()
+      .catch(() => undefined)
+      .finally(() => {
+        syncReconciliationPromise = undefined;
+        syncReconciliationController = undefined;
+      });
+
+    return syncReconciliationPromise;
   }
 
   async function syncPendingChanges() {
@@ -823,6 +930,7 @@ export const useInkwellStore = defineStore('inkwell', () => {
     pages.value = reloaded.pages.filter(
       (page) => page.projectId === currentProjectId.value && page.status !== 'archived',
     );
+    requestWebsiteHighlightRefresh();
   }
 
   function mergeSavedPage(
@@ -904,6 +1012,7 @@ export const useInkwellStore = defineStore('inkwell', () => {
     handleOffline,
     handleOnline,
     isOnline,
+    isSavingLocally,
     isLoading,
     loadCurrentPage,
     loadProjectPages,

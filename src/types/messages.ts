@@ -1,4 +1,4 @@
-import type { ProjectPage } from '@/src/types/capture';
+import type { Project, ProjectPage } from '@/src/types/capture';
 
 export type SourceHighlightMeta = {
   text: string;
@@ -13,6 +13,44 @@ export type SourceOpenPayload = {
   sourceUrl: string;
   pageTitle?: string;
   highlightMeta: SourceHighlightMeta;
+};
+
+export type WebsiteHighlightColor = 'yellow' | 'green' | 'blue' | 'pink' | 'gray';
+
+export type WebsiteHighlight = {
+  id: string;
+  url: string;
+  text: string;
+  color: WebsiteHighlightColor;
+  note?: string;
+  createdAt: string;
+  anchor: {
+    startXPath: string;
+    startOffset: number;
+    endXPath: string;
+    endOffset: number;
+    blockXPath: string;
+    blockText: string;
+  };
+};
+
+export type GetWebsiteHighlightsMessage = {
+  type: 'inkwell.getWebsiteHighlights';
+  payload: { url: string };
+};
+
+export type CreateWebsiteHighlightMessage = {
+  type: 'inkwell.createWebsiteHighlight';
+  payload: { highlight: WebsiteHighlight };
+};
+
+export type RemoveWebsiteHighlightsMessage = {
+  type: 'inkwell.removeWebsiteHighlights';
+  payload: { ids: string[]; url: string };
+};
+
+export type RefreshWebsiteHighlightsMessage = {
+  type: 'inkwell.refreshWebsiteHighlights';
 };
 
 export type CaptureSelectionPayload = {
@@ -68,6 +106,11 @@ export type ProjectPageUpdatedMessage = {
   };
 };
 
+export type ProjectStateUpdatedMessage = {
+  type: 'inkwell.projectStateUpdated';
+  payload: { project: Project };
+};
+
 export type OpenSourceRequestMessage = {
   type: 'inkwell.openSourceRequest';
   payload: SourceOpenPayload;
@@ -80,11 +123,16 @@ export type RestoreHighlightMessage = {
 
 export type InkwellRuntimeMessage =
   | CaptureSelectionMessage
+  | CreateWebsiteHighlightMessage
   | ConsumeHeadingDragMessage
   | ConsumeTextDragMessage
+  | GetWebsiteHighlightsMessage
   | HeadingDragStartedMessage
   | InsertCaptureRequestMessage
   | ProjectPageUpdatedMessage
+  | ProjectStateUpdatedMessage
+  | RefreshWebsiteHighlightsMessage
+  | RemoveWebsiteHighlightsMessage
   | OpenSourceRequestMessage
   | RestoreHighlightMessage
   | TextDragStartedMessage;

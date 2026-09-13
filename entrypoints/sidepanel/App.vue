@@ -1,10 +1,21 @@
+<!--
+  Created: September 12, 2026
+  Author: Aidan
+  Description: Coordinates side-panel state, editor behavior, persistence, media capture, and extracted presentation components.
+-->
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { EditorContent, useEditor } from '@tiptap/vue-3';
 import AudioRecorder from '@/src/components/AudioRecorder.vue';
+import ArchiveDialog from './components/ArchiveDialog.vue';
+import MediaPanel from './components/MediaPanel.vue';
+import SettingsPanel from './components/SettingsPanel.vue';
+import SidePanelHeader from './components/SidePanelHeader.vue';
+import SyncPanel from './components/SyncPanel.vue';
 import { NodeSelection, TextSelection } from '@tiptap/pm/state';
 import type { EditorView } from '@tiptap/pm/view';
 import StarterKit from '@tiptap/starter-kit';
+import { TableKit } from '@tiptap/extension-table';
 import { CodeNotebook } from '@/src/extensions/codeNotebook';
 import {
   decodeInkwellSource,
@@ -19,7 +30,6 @@ import { InkwellBlockIds, normalizeInkwellBlockIds } from '@/src/extensions/inkw
 import {
   capturedBlockId,
   sourceFromProjectState,
-  visibleProjectStateContent,
 } from '@/src/extensions/sourceRegistry';
 import {
   AUDIO_UPLOAD_MAX_BYTES,
@@ -112,19 +122,17 @@ const saveTimer = ref<number>();
 const pageTitleDraft = ref('');
 const projectNameDraft = ref('');
 const projectCategoryDraft = ref('');
-const projectStateDraft = ref('');
 const newProjectNameDraft = ref('');
 const linkUrlDraft = ref('');
-const imageUrlDraft = ref('');
-const videoUrlDraft = ref('');
-const audioUrlDraft = ref('');
+const mediaUrlDraft = ref('');
+const mediaKind = ref<'image' | 'video' | 'audio'>('image');
 const serverUrlDraft = ref('');
 const parentPageSearchDraft = ref('');
 const parentPageTitleDraft = ref('');
 const uiMessage = ref('');
 const hasAcceptedLegalTerms = ref(false);
 const isLegalAcceptanceLoaded = ref(false);
-const activeTab = ref<'editor' | 'projects' | 'media' | 'sync' | 'settings'>('editor');
+const activeTab = ref<'editor' | 'settings'>('editor');
 const interfaceScale = ref(DEFAULT_INTERFACE_SCALE);
 const editorToolbarMode = ref<'style' | 'insert' | 'controls'>('style');
 const editorContextMenuRef = ref<HTMLElement | null>(null);
@@ -145,7 +153,9 @@ const activeEditorMenu = ref<
   | 'link'
   | 'lists'
   | 'blocks'
+  | 'table'
   | 'history'
+  | 'media'
   | 'record'
   | null
 >(null);
@@ -185,6 +195,11 @@ const editor = useEditor({
     InkwellLink,
     InkwellBlockIds,
     PortableTextEditingKit,
+    TableKit.configure({
+      table: {
+        resizable: true,
+      },
+    }),
     MediaKit,
   ],
   content: {
@@ -383,19 +398,9 @@ const editor = useEditor({
   },
 });
 
-const currentPageModel = computed({
-  get: () => store.currentPage?.id ?? '',
-  set: (pageId: string) => {
-    void selectPage(pageId);
-  },
-});
-
-const currentProjectModel = computed({
-  get: () => store.currentProjectId,
-  set: (projectId: string) => {
-    void selectProject(projectId);
-  },
-});
+const isCurrentPageSyncedToNotion = computed(() =>
+  store.saveStatus === 'saved' && Boolean(store.currentPage?.notionPageId),
+);
 
 const saveLabel = computed(() => {
   if (store.pullMessage) {
@@ -406,8 +411,8 @@ const saveLabel = computed(() => {
     return 'Loading';
   }
 
-  if (store.saveStatus === 'saving') {
-    return 'Saving';
+  if (store.isSavingLocally) {
+    return 'Saving locally';
   }
 
   if (store.saveStatus === 'creating') {
@@ -418,24 +423,36 @@ const saveLabel = computed(() => {
     return 'Save failed';
   }
 
-  if (store.pendingSyncCount > 0) {
-    return `${store.pendingSyncCount} ${store.pendingSyncCount === 1 ? 'change' : 'changes'} queued`;
-  }
-
   if (!store.isOnline) {
     return 'Offline · saved locally';
   }
 
-  if (store.saveStatus === 'stale') {
-    return 'Stale';
+  if (!store.syncConfig.connected) {
+    return 'Saved locally only';
   }
 
-  return 'Saved locally';
+  if (store.pendingSyncCount > 0) {
+    return `Saved locally · ${store.pendingSyncCount} ${store.pendingSyncCount === 1 ? 'change' : 'changes'} queued`;
+  }
+
+  if (store.saveStatus === 'saving') {
+    return 'Syncing to Notion';
+  }
+
+  if (store.saveStatus === 'stale') {
+    return 'Notion has newer changes';
+  }
+
+  return isCurrentPageSyncedToNotion.value ? 'Synced to Notion' : 'Saved locally';
 });
 
 const syncBadgeTitle = computed(() => {
   if (store.errorMessage) {
     return store.errorMessage;
+  }
+
+  if (store.isSavingLocally) {
+    return 'Saving changes on this device.';
   }
 
   if (!store.isOnline) {
@@ -447,7 +464,15 @@ const syncBadgeTitle = computed(() => {
   }
 
   if (store.pendingSyncCount > 0) {
-    return `${store.pendingSyncCount} queued ${store.pendingSyncCount === 1 ? 'change is' : 'changes are'} waiting to sync with Notion.`;
+    return `${store.pendingSyncCount} ${store.pendingSyncCount === 1 ? 'change is' : 'changes are'} saved on this device and waiting to sync with Notion.`;
+  }
+
+  if (store.saveStatus === 'saving') {
+    return 'Changes are saved on this device and are syncing to Notion.';
+  }
+
+  if (!isCurrentPageSyncedToNotion.value) {
+    return 'Changes are saved on this device. This page has not been linked to Notion yet.';
   }
 
   const sseNote = store.sseStatus === 'connected'
@@ -457,11 +482,11 @@ const syncBadgeTitle = computed(() => {
       : 'Live updates disconnected';
 
   if (!store.syncConfig.selectedParentPageId) {
-    return `Inkwell will create a root Notion page with project folders on first sync. · ${sseNote}`;
+    return `Synced to Notion · ${sseNote}`;
   }
 
   const base = store.syncConfig.selectedParentPageTitle
-    ? `Synced inside ${store.syncConfig.selectedParentPageTitle}`
+    ? `Synced to Notion inside ${store.syncConfig.selectedParentPageTitle}`
     : saveLabel.value;
 
   return `${base} · ${sseNote}`;
@@ -476,11 +501,12 @@ const syncBadgeClass = computed(() => ({
     !store.isOnline ||
     store.pendingSyncCount > 0,
   saving:
-    store.saveStatus === 'saving' ||
+    store.isSavingLocally ||
+    (store.saveStatus === 'saving' && store.pendingSyncCount === 0) ||
     store.saveStatus === 'creating' ||
     store.isLoading,
   saved:
-    store.saveStatus === 'saved' &&
+    isCurrentPageSyncedToNotion.value &&
     store.syncConfig.connected &&
     store.isOnline &&
     store.pendingSyncCount === 0,
@@ -490,14 +516,6 @@ const canUseEditor = computed(() => !store.isLoading && store.projects.length > 
 const canLoginWithNotion = computed(
   () => isLegalAcceptanceLoaded.value && hasAcceptedLegalTerms.value && !isSigningIn.value,
 );
-
-const tabs = [
-  { id: 'editor', label: 'Editor', icon: ['far', 'pen-to-square'] },
-  { id: 'projects', label: 'Projects', icon: ['fas', 'folder-tree'] },
-  { id: 'media', label: 'Media', icon: ['fas', 'photo-film'] },
-  { id: 'sync', label: 'Sync', icon: ['fas', 'cloud-arrow-up'] },
-  { id: 'settings', label: 'Settings', icon: ['fas', 'gear'] },
-] as const;
 
 const interfaceScaleLabel = computed(() => {
   if (interfaceScale.value < 100) {
@@ -527,6 +545,7 @@ const activeToolbarItems = computed(() => {
       { id: 'link', label: 'Link', icon: ['fas', 'link'], title: 'Link' },
       { id: 'lists', label: 'Lists', icon: ['fas', 'list-ul'], title: 'Lists' },
       { id: 'blocks', label: 'Blocks', icon: ['fas', 'quote-left'], title: 'Blocks and divider' },
+      { id: 'table', label: 'Table', icon: ['fas', 'table'], title: 'Insert or edit table' },
       { id: 'record', label: 'Record', icon: ['fas', 'microphone'], title: 'Record audio note' },
     ] as const;
   }
@@ -555,12 +574,6 @@ const workspaceLabel = computed(() =>
     ? `Workspace: ${store.syncConfig.workspaceName}`
     : 'No workspace selected',
 );
-
-const contextLabel = computed(() => {
-  const project = store.currentProject?.name ?? 'No project';
-  const page = store.currentPage?.title ?? 'No page';
-  return `${project} / ${page}`;
-});
 
 const parentPageLabel = computed(() =>
   store.syncConfig.selectedParentPageTitle ||
@@ -617,6 +630,10 @@ const activeTextColor = computed(() => {
 const activeHighlightColor = computed(() => {
   editorStateVersion.value;
   return String(editor.value?.getAttributes('textStyle').backgroundColor ?? '');
+});
+const isTableActive = computed(() => {
+  editorStateVersion.value;
+  return editor.value?.isActive('table') ?? false;
 });
 
 onMounted(() => {
@@ -717,9 +734,6 @@ watch(
   (project) => {
     projectNameDraft.value = project?.name ?? '';
     projectCategoryDraft.value = project?.category ?? '';
-    projectStateDraft.value = plainTextFromDocument(
-      visibleProjectStateContent(project?.stateContent),
-    );
   },
   { immediate: true },
 );
@@ -735,8 +749,8 @@ watch(
 watch(
   () => store.syncConfig.connected,
   (connected) => {
-    if (connected && activeTab.value === 'sync') {
-      activeTab.value = 'editor';
+    if (connected && activeTab.value === 'settings') {
+      void store.loadNotionParentPages(parentPageSearchDraft.value);
     }
   },
 );
@@ -746,7 +760,7 @@ watch(
   (tab) => {
     hideEditorContextMenu();
 
-    if (tab === 'sync' && store.syncConfig.connected) {
+    if (tab === 'settings' && store.syncConfig.connected) {
       void store.loadNotionParentPages(parentPageSearchDraft.value);
     }
   },
@@ -756,22 +770,26 @@ async function initializePanel() {
   await store.initialize();
 }
 
+/** Loads the persisted legal-consent flag before enabling the Notion sign-in action. */
 async function loadLegalAcceptance() {
   hasAcceptedLegalTerms.value = await hasAcceptedCurrentLegalTerms();
   isLegalAcceptanceLoaded.value = true;
 }
 
+/** Restores user preferences that affect the side panel's initial presentation. */
 async function loadPreferences() {
   const preferences = await loadUserPreferences();
   interfaceScale.value = preferences.interfaceScale;
 }
 
+/** Normalizes a slider value so interface-scale previews always remain within supported bounds. */
 function previewInterfaceScale(event: Event) {
   interfaceScale.value = normalizeInterfaceScale(
     Number((event.target as HTMLInputElement).value),
   );
 }
 
+/** Persists the selected interface scale and applies the normalized value returned by storage. */
 async function persistInterfaceScale() {
   const preferences = await saveUserPreferences({
     interfaceScale: interfaceScale.value,
@@ -784,6 +802,7 @@ function setInterfaceScale(scale: number) {
   void persistInterfaceScale();
 }
 
+/** Inserts captured browser content at the current cursor, then saves its document content and source metadata together. */
 async function insertCaptureAtCursor(payload: CaptureSelectionPayload) {
   if (!editor.value || !store.currentPage) {
     return false;
@@ -802,6 +821,7 @@ async function insertCaptureAtCursor(payload: CaptureSelectionPayload) {
   return true;
 }
 
+/** Saves the current editor snapshot and starts flushing remote work before changing pages. */
 async function selectPage(pageId: string) {
   if (!pageId || pageId === store.currentPage?.id) {
     return;
@@ -812,6 +832,7 @@ async function selectPage(pageId: string) {
   await store.selectPage(pageId);
 }
 
+/** Saves the current editor snapshot and starts flushing remote work before changing projects. */
 async function selectProject(projectId: string) {
   if (!projectId || projectId === store.currentProjectId) {
     return;
@@ -822,6 +843,7 @@ async function selectProject(projectId: string) {
   await store.selectProject(projectId);
 }
 
+/** Flushes the open page before creating a named project from the projects-panel draft. */
 async function createProject() {
   await flushEditorContent();
   const name = newProjectNameDraft.value.trim() || 'Untitled Project';
@@ -830,6 +852,14 @@ async function createProject() {
   activeTab.value = 'editor';
 }
 
+/** Creates an untitled project from the header after ensuring the open page has been saved. */
+async function createQuickProject() {
+  await flushEditorContent();
+  await store.createProject('Untitled Project');
+  activeTab.value = 'editor';
+}
+
+/** Persists a changed project name without issuing a redundant store update. */
 async function renameProject() {
   if (!store.currentProject || projectNameDraft.value === store.currentProject.name) {
     return;
@@ -839,6 +869,7 @@ async function renameProject() {
   await store.renameCurrentProject(projectNameDraft.value);
 }
 
+/** Saves changed project metadata only after pending editor content has been flushed. */
 async function saveProjectMetadata() {
   const project = store.currentProject;
 
@@ -846,24 +877,17 @@ async function saveProjectMetadata() {
     return;
   }
 
-  const stateText = projectStateDraft.value;
-
-  if (
-    projectCategoryDraft.value === (project.category ?? '') &&
-    stateText === plainTextFromDocument(
-      visibleProjectStateContent(project.stateContent),
-    )
-  ) {
+  if (projectCategoryDraft.value === (project.category ?? '')) {
     return;
   }
 
   await flushEditorContent();
   await store.updateCurrentProjectMetadata({
     category: projectCategoryDraft.value,
-    stateText,
   });
 }
 
+/** Stages the current project for confirmation rather than deleting it immediately. */
 async function archiveProject() {
   if (!store.currentProject) {
     return;
@@ -881,6 +905,7 @@ async function createPage() {
   await store.createPage();
 }
 
+/** Flushes page content before committing a title change against the still-active page. */
 async function renamePage() {
   if (!store.currentPage) {
     return;
@@ -897,6 +922,7 @@ async function renamePage() {
   await store.renameCurrentPage(title);
 }
 
+/** Stages the current page for confirmation rather than deleting it immediately. */
 async function archivePage() {
   if (!store.currentPage) {
     return;
@@ -909,6 +935,7 @@ async function archivePage() {
   };
 }
 
+/** Executes the staged archive only when its target is still the active project or page. */
 async function confirmArchive() {
   if (!archiveTarget.value) {
     return;
@@ -932,6 +959,7 @@ function cancelArchive() {
   archiveTarget.value = null;
 }
 
+/** Pushes pending local changes when present; otherwise reloads the workspace from Notion. */
 async function resync() {
   await flushEditorContent();
   const hadPendingLocalChanges = await notionClient.pendingSyncEventCount() > 0;
@@ -946,6 +974,7 @@ async function resync() {
   uiMessage.value = 'Up to date with Notion.';
 }
 
+/** Records legal acceptance, opens the Notion authorization flow, and begins polling for its session. */
 async function loginWithNotion() {
   if (!hasAcceptedLegalTerms.value) {
     uiMessage.value = 'Review and accept the Terms and Privacy Policy before connecting Notion.';
@@ -962,11 +991,12 @@ function openLegalUrl(url: string) {
   void browser.tabs.create({ active: true, url });
 }
 
+/** Stops authorization polling, clears the sync session, and returns the user to sync settings. */
 async function logout() {
   window.clearInterval(sessionPollTimer);
   isSigningIn.value = false;
   await store.logout();
-  activeTab.value = 'sync';
+  activeTab.value = 'settings';
 }
 
 function openLinkTools() {
@@ -974,11 +1004,18 @@ function openLinkTools() {
 }
 
 function setEditorToolbarMode(mode: typeof editorToolbarModes[number]['id']) {
+  if (mode === 'insert') {
+    editorToolbarMode.value = mode;
+    activeEditorMenu.value = activeEditorMenu.value === 'media' ? null : 'media';
+    return;
+  }
+
   editorToolbarMode.value = mode;
   activeEditorMenu.value =
-    mode === 'insert' ? 'link' : mode === 'controls' ? 'history' : 'type';
+    mode === 'controls' ? 'history' : 'type';
 }
 
+/** Opens or closes a toolbar panel while keeping link and recording state consistent. */
 function toggleEditorMenu(menu: NonNullable<typeof activeEditorMenu.value>) {
   const closing = activeEditorMenu.value === menu;
   activeEditorMenu.value = closing ? null : menu;
@@ -996,6 +1033,7 @@ function closeEditorMenu() {
   activeEditorMenu.value = null;
 }
 
+/** Validates and saves the custom synchronization server entered in advanced settings. */
 async function saveServerUrl() {
   const serverUrl = serverUrlDraft.value.trim();
 
@@ -1012,6 +1050,7 @@ async function searchParentPages() {
   await store.loadNotionParentPages(parentPageSearchDraft.value);
 }
 
+/** Creates a Notion destination page from the draft and clears the draft after success. */
 async function createParentPage() {
   const title = parentPageTitleDraft.value.trim() || 'Inkwell';
   await store.createNotionParentPage(title);
@@ -1022,6 +1061,7 @@ async function selectParentPage(pageId: string) {
   await store.selectNotionParentPage(pageId);
 }
 
+/** Polls the extension session until Notion connects or the authorization attempt times out. */
 function startSessionPolling() {
   window.clearInterval(sessionPollTimer);
   let attempts = 0;
@@ -1041,6 +1081,10 @@ function blurTitleInput(event: Event) {
   (event.target as HTMLInputElement).blur();
 }
 
+function closeSwitcher(event: Event) {
+  (event.currentTarget as HTMLElement).closest('details')?.removeAttribute('open');
+}
+
 function setBlockType(event: Event) {
   applyBlockType((event.target as HTMLSelectElement).value);
 }
@@ -1050,6 +1094,7 @@ function setContextBlockType(event: Event) {
   applyBlockType((event.target as HTMLSelectElement).value);
 }
 
+/** Runs a TipTap formatting command and immediately persists successful document changes. */
 function runEditorFormattingCommand(command: () => boolean | undefined) {
   const didRun = command() ?? false;
 
@@ -1061,6 +1106,7 @@ function runEditorFormattingCommand(command: () => boolean | undefined) {
   void saveEditorContentOptimistically();
 }
 
+/** Maps the toolbar's block identifier to the corresponding TipTap block command. */
 function applyBlockType(value: string) {
   if (value === 'paragraph') {
     runEditorFormattingCommand(() => editor.value?.chain().focus().setParagraph().run());
@@ -1097,6 +1143,7 @@ function setContextFontSize(event: Event) {
   applyFontSize((event.target as HTMLSelectElement).value);
 }
 
+/** Applies a font-size mark, or removes the mark when the default option is selected. */
 function applyFontSize(value: string) {
   if (value) {
     runEditorFormattingCommand(() => editor.value?.chain().focus().setFontSize(value).run());
@@ -1114,6 +1161,7 @@ function applyContextTextColor(value: string) {
   applyTextColor(value);
 }
 
+/** Applies a text-color mark, or removes it when the default option is selected. */
 function applyTextColor(value: string) {
   if (value) {
     runEditorFormattingCommand(() => editor.value?.chain().focus().setTextColor(value).run());
@@ -1131,6 +1179,7 @@ function applyContextHighlightColor(value: string) {
   applyHighlightColor(value);
 }
 
+/** Applies a highlight mark, or removes it when the none option is selected. */
 function applyHighlightColor(value: string) {
   if (value) {
     runEditorFormattingCommand(() => editor.value?.chain().focus().setHighlightColor(value).run());
@@ -1158,6 +1207,7 @@ function removeContextLink() {
   hideEditorContextMenu();
 }
 
+/** Validates, applies, or removes a link while preserving source-link metadata rules. */
 function applyLink(href: string) {
   if (!editor.value) {
     return;
@@ -1182,6 +1232,7 @@ function applyLink(href: string) {
   );
 }
 
+/** Captures the clicked editor selection and source context before opening the custom context menu. */
 function showEditorContextMenu(view: EditorView, event: MouseEvent) {
   event.preventDefault();
   event.stopPropagation();
@@ -1225,6 +1276,7 @@ function showEditorContextMenu(view: EditorView, event: MouseEvent) {
   });
 }
 
+/** Positions the context menu inside the viewport after its rendered dimensions are known. */
 function placeEditorContextMenu(clientX: number, clientY: number) {
   const menu = editorContextMenuRef.value;
 
@@ -1240,6 +1292,7 @@ function placeEditorContextMenu(clientX: number, clientY: number) {
   };
 }
 
+/** Restores the selection captured when the context menu opened so commands target the intended text. */
 function restoreEditorContextSelection() {
   if (!editor.value || !editorContextSelection) {
     return;
@@ -1257,6 +1310,7 @@ function hideEditorContextMenu() {
   editorContextMenuPanel.value = 'main';
 }
 
+/** Finds the most relevant captured-source payload for the selected or clicked editor content. */
 function sourceForEditorContext(view: EditorView, clickedPosition?: number) {
   const sources = new Map<string, SourceOpenPayload>();
   const blockIds = new Set<string>();
@@ -1294,6 +1348,7 @@ function sourceForEditorContext(view: EditorView, clickedPosition?: number) {
   return sources.size === 1 ? sources.values().next().value ?? null : null;
 }
 
+/** Recursively collects source payloads and block IDs from a document node tree. */
 function collectNodeSources(
   node: { attrs?: Record<string, unknown>; marks?: readonly { attrs?: Record<string, unknown> }[] } | null,
   sources: Map<string, SourceOpenPayload>,
@@ -1314,6 +1369,7 @@ function collectNodeSources(
   }
 }
 
+/** Resolves source payloads for collected block IDs from the current project's registry. */
 function collectProjectStateSources(
   blockIds: Set<string>,
   sources: Map<string, SourceOpenPayload>,
@@ -1326,6 +1382,7 @@ function collectProjectStateSources(
   }
 }
 
+/** Adds an accessible source payload once, using its serialized value for deduplication. */
 function collectSource(
   value: unknown,
   sources: Map<string, SourceOpenPayload>,
@@ -1345,6 +1402,7 @@ function collectSource(
   sources.set(key, payload);
 }
 
+/** Requests that the browser open the original location represented by the context-menu source. */
 async function openEditorContextSource() {
   const payload = editorContextMenuSource.value;
 
@@ -1365,6 +1423,7 @@ async function openEditorContextSource() {
   });
 }
 
+/** Dismisses the custom editor menu when a pointer interaction occurs outside it. */
 function handleEditorContextMenuPointerDown(event: PointerEvent) {
   if (!editorContextMenu.value.visible) {
     return;
@@ -1379,6 +1438,7 @@ function handleEditorContextMenuPointerDown(event: PointerEvent) {
   hideEditorContextMenu();
 }
 
+/** Dismisses the custom editor menu when the user presses Escape. */
 function handleEditorContextMenuKeydown(event: KeyboardEvent) {
   if (event.key === 'Escape' && editorContextMenu.value.visible) {
     event.preventDefault();
@@ -1386,6 +1446,7 @@ function handleEditorContextMenuKeydown(event: KeyboardEvent) {
   }
 }
 
+/** Copies the current editor selection and optionally closes the context menu after success. */
 async function copyEditorSelectionToClipboard(closeAfterCopy = true) {
   const selectedText = getEditorSelectedText();
 
@@ -1404,6 +1465,7 @@ async function copyEditorSelectionFromContextMenu() {
   await copyEditorSelectionToClipboard();
 }
 
+/** Copies selected text, deletes it from the editor, and persists the resulting document. */
 async function cutEditorSelectionToClipboard() {
   if (!editor.value) {
     return;
@@ -1420,6 +1482,7 @@ async function cutEditorSelectionToClipboard() {
   hideEditorContextMenu();
 }
 
+/** Reads plain text from the clipboard, replaces the current selection, and persists the result. */
 async function pasteClipboardTextIntoEditor() {
   if (!editor.value) {
     return;
@@ -1436,6 +1499,7 @@ async function pasteClipboardTextIntoEditor() {
   hideEditorContextMenu();
 }
 
+/** Extracts selected plain text while preserving block separators for clipboard operations. */
 function getEditorSelectedText() {
   if (!editor.value) {
     return '';
@@ -1456,6 +1520,7 @@ function runContextMarkCommand(command: 'bold' | 'italic' | 'underline' | 'strik
   runEditorMarkCommand(command);
 }
 
+/** Maps a toolbar mark identifier to its TipTap toggle command. */
 function runEditorMarkCommand(command: 'bold' | 'italic' | 'underline' | 'strike' | 'code' | 'superscript' | 'subscript') {
   const commands = {
     bold: () => editor.value?.chain().focus().toggleBold().run(),
@@ -1470,6 +1535,7 @@ function runEditorMarkCommand(command: 'bold' | 'italic' | 'underline' | 'strike
   runEditorFormattingCommand(commands[command]);
 }
 
+/** Maps a toolbar list identifier to its TipTap list command. */
 function runEditorListCommand(command: 'bullet' | 'ordered' | 'task') {
   const commands = {
     bullet: () => editor.value?.chain().focus().toggleBulletList().run(),
@@ -1480,10 +1546,41 @@ function runEditorListCommand(command: 'bullet' | 'ordered' | 'task') {
   runEditorFormattingCommand(commands[command]);
 }
 
+/** Maps a toolbar block identifier to its TipTap block toggle. */
 function runEditorBlockCommand(command: 'blockquote' | 'codeBlock') {
   const commands = {
     blockquote: () => editor.value?.chain().focus().toggleBlockquote().run(),
     codeBlock: () => editor.value?.chain().focus().toggleCodeBlock().run(),
+  };
+
+  runEditorFormattingCommand(commands[command]);
+}
+
+/** Inserts a table or changes its rows, columns, and headers. */
+function runEditorTableCommand(
+  command:
+    | 'insert'
+    | 'addRow'
+    | 'deleteRow'
+    | 'addColumn'
+    | 'deleteColumn'
+    | 'toggleHeaderRow'
+    | 'toggleHeaderColumn'
+    | 'deleteTable',
+) {
+  const commands = {
+    insert: () => editor.value?.chain().focus().insertTable({
+      rows: 3,
+      cols: 3,
+      withHeaderRow: true,
+    }).run(),
+    addRow: () => editor.value?.chain().focus().addRowAfter().run(),
+    deleteRow: () => editor.value?.chain().focus().deleteRow().run(),
+    addColumn: () => editor.value?.chain().focus().addColumnAfter().run(),
+    deleteColumn: () => editor.value?.chain().focus().deleteColumn().run(),
+    toggleHeaderRow: () => editor.value?.chain().focus().toggleHeaderRow().run(),
+    toggleHeaderColumn: () => editor.value?.chain().focus().toggleHeaderColumn().run(),
+    deleteTable: () => editor.value?.chain().focus().deleteTable().run(),
   };
 
   runEditorFormattingCommand(commands[command]);
@@ -1499,56 +1596,42 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
 }
 
-function insertImage() {
-  const src = imageUrlDraft.value.trim();
+/** Validates and inserts the selected remote media type, then persists the editor change. */
+function insertMedia() {
+  const src = mediaUrlDraft.value.trim();
   if (!src) {
     return;
   }
 
-  editor.value?.chain().focus().setImage({ src }).run();
-  imageUrlDraft.value = '';
-  activeTab.value = 'editor';
-  void saveEditorContentOptimistically();
-}
+  if (mediaKind.value === 'video') {
+    const inserted = editor.value?.chain().focus().setYoutubeVideo({ src }).run();
 
-function insertVideo() {
-  const src = videoUrlDraft.value.trim();
-  if (!src) {
-    return;
-  }
+    if (!inserted) {
+      uiMessage.value = 'Paste a YouTube video URL.';
+      return;
+    }
+  } else if (mediaKind.value === 'audio') {
+    if (!isHttpAudioUrl(src)) {
+      uiMessage.value = 'Paste a public http(s) URL to an MP3 or audio file.';
+      return;
+    }
 
-  const inserted = editor.value?.chain().focus().setYoutubeVideo({ src }).run();
-
-  if (!inserted) {
-    uiMessage.value = 'Paste a YouTube video URL.';
-    return;
+    editor.value?.chain().focus().setAudio({ src }).run();
+  } else {
+    editor.value?.chain().focus().setImage({ src }).run();
   }
 
   uiMessage.value = '';
-  videoUrlDraft.value = '';
-  activeTab.value = 'editor';
+  mediaUrlDraft.value = '';
+  activeEditorMenu.value = null;
   void saveEditorContentOptimistically();
 }
 
-function insertAudio() {
-  const src = audioUrlDraft.value.trim();
-
-  if (!src) {
-    return;
-  }
-
-  if (!isHttpAudioUrl(src)) {
-    uiMessage.value = 'Paste a public http(s) URL to an MP3 or audio file.';
-    return;
-  }
-
-  editor.value?.chain().focus().setAudio({ src }).run();
-  audioUrlDraft.value = '';
-  uiMessage.value = '';
-  activeTab.value = 'editor';
-  void saveEditorContentOptimistically();
+function toggleSettings() {
+  activeTab.value = activeTab.value === 'settings' ? 'editor' : 'settings';
 }
 
+/** Starts an idle recording or stops the currently active MediaRecorder. */
 function toggleAudioRecording() {
   if (recordingPhase.value === 'recording') {
     audioRecorder?.stop();
@@ -1559,6 +1642,7 @@ function toggleAudioRecording() {
   }
 }
 
+/** Requests microphone access, records supported audio, and inserts the completed recording into the page. */
 async function startAudioRecording() {
   if (!editor.value || recordingPhase.value !== 'idle') return;
 
@@ -1631,6 +1715,7 @@ async function startAudioRecording() {
   }
 }
 
+/** Moves the editor selection to the document position nearest a drag-and-drop coordinate. */
 function moveEditorSelectionToDrop(view: EditorView, event: DragEvent) {
   const dropPos = view.posAtCoords({ left: event.clientX, top: event.clientY });
 
@@ -1643,6 +1728,7 @@ function moveEditorSelectionToDrop(view: EditorView, event: DragEvent) {
   }
 }
 
+/** Moves an existing image node to a block boundary while preserving its attributes and selection. */
 function moveImageNodeAtDrop(
   view: EditorView,
   event: DragEvent,
@@ -1684,6 +1770,7 @@ function moveImageNodeAtDrop(
   return true;
 }
 
+/** Chooses the nearest edge of the surrounding top-level block for an image insertion. */
 function imageBlockInsertPos(doc: EditorView['state']['doc'], pos: number) {
   const safePos = clampDocumentPosition(pos, doc.content.size);
   const $pos = doc.resolve(safePos);
@@ -1703,6 +1790,7 @@ function clampDocumentPosition(pos: number, max: number) {
   return Math.min(Math.max(pos, 0), Math.max(max, 0));
 }
 
+/** Recovers a move payload when Chromium exposes a selected extension image as a blob drag. */
 function readSelectedImageMovePayload(
   view: EditorView,
   event: DragEvent,
@@ -1724,6 +1812,7 @@ function readSelectedImageMovePayload(
   };
 }
 
+/** Detects Chromium's blob-based drag representation for extension-owned images. */
 function isChromeExtensionBlobImageDrop(event: DragEvent) {
   const plainText = event.dataTransfer?.getData('text/plain') ?? '';
   const html = event.dataTransfer?.getData('text/html') ?? '';
@@ -1736,6 +1825,7 @@ function isChromeExtensionBlobImageDrop(event: DragEvent) {
   );
 }
 
+/** Locates a dragged image by position, stable block ID, or source URL. */
 function findImageMoveSource(view: EditorView, payload: InkwellImageMovePayload) {
   const imageType = view.state.schema.nodes.image;
   const nodeAtPayloadPos = view.state.doc.nodeAt(payload.pos);
@@ -1773,12 +1863,14 @@ function clearFormatting() {
   runEditorFormattingCommand(() => editor.value?.chain().focus().unsetAllMarks().clearNodes().run());
 }
 
+/** Cancels the debounce timer and waits for the latest editor content to be saved. */
 async function flushEditorContent() {
   window.clearTimeout(saveTimer.value);
 
   await saveEditorContentOptimistically();
 }
 
+/** Stores a best-effort page snapshot without replacing newer local state during panel transitions. */
 async function saveEditorContentInBackground() {
   window.clearTimeout(saveTimer.value);
 
@@ -1810,6 +1902,7 @@ function handleVisibilityChange() {
   }
 }
 
+/** Starts a final local save and forced remote flush when the panel is hidden or unloaded. */
 function handlePanelExit() {
   void saveEditorContentInBackground()
     .catch(() => undefined)
@@ -1818,6 +1911,7 @@ function handlePanelExit() {
     });
 }
 
+/** Serializes overlapping save requests so edits made during an active save trigger another pass. */
 async function saveEditorContentOptimistically() {
   if (!editor.value || !store.currentPage) {
     return;
@@ -1835,6 +1929,7 @@ async function saveEditorContentOptimistically() {
   await editorSavePromise;
 }
 
+/** Persists editor snapshots until no newer change arrived during the preceding save. */
 async function runEditorSaveLoop() {
   const saveVersion = ++pendingSaveVersion;
 
@@ -1878,6 +1973,7 @@ async function runEditorSaveLoop() {
   }
 }
 
+/** Uploads media when sync is available and returns the Notion upload identifier for the editor node. */
 async function uploadMediaFile(file: File, label: string): Promise<string> {
   queueMicrotask(() => {
     shouldSkipNextUpdateSave = false;
@@ -1899,6 +1995,7 @@ async function uploadMediaFile(file: File, label: string): Promise<string> {
   return fileUploadId;
 }
 
+/** Rewrites a matching media node with its completed upload ID or local-only status. */
 function updateMediaNodeUploadState(
   editorInstance: typeof editor.value,
   nodeTypeName: string,
@@ -1926,6 +2023,7 @@ function updateMediaNodeUploadState(
   });
 }
 
+/** Validates a dropped image, inserts a local preview, uploads it, and updates the node's sync state. */
 async function handleUploadableImageDrop(info: { kind: 'file'; file: File }): Promise<void> {
   const { file } = info;
 
@@ -1953,6 +2051,7 @@ async function handleUploadableAudioDrop(info: { kind: 'file'; file: File }): Pr
   await handleUploadableAudioFile(info.file);
 }
 
+/** Validates audio, inserts a local playable copy, uploads it, and updates the node's sync state. */
 async function handleUploadableAudioFile(file: File): Promise<void> {
   if (!isUploadableAudioFile(file)) {
     uiMessage.value = `Audio files must be ${Math.floor(AUDIO_UPLOAD_MAX_BYTES / 1024 / 1024)} MB or smaller.`;
@@ -1979,6 +2078,7 @@ async function handleUploadableAudioFile(file: File): Promise<void> {
   if (fileUploadId) void saveEditorContentOptimistically();
 }
 
+/** Converts a local file into a data URL suitable for immediate offline editor playback or display. */
 async function fileToDataUrl(file: File): Promise<string> {
   const bytes = new Uint8Array(await file.arrayBuffer());
   let binary = '';
@@ -1994,6 +2094,7 @@ function stopAudioStream() {
   audioStream.value = null;
 }
 
+/** Selects the first audio recording format supported by the current browser. */
 function preferredAudioRecordingMimeType() {
   const supportedTypes = [
     'audio/mpeg',
@@ -2007,6 +2108,7 @@ function preferredAudioRecordingMimeType() {
   return supportedTypes.find((type) => MediaRecorder.isTypeSupported(type)) ?? '';
 }
 
+/** Maps a recorder MIME type to a suitable filename extension. */
 function audioExtensionFromMimeType(mimeType: string) {
   const normalized = mimeType.toLowerCase();
 
@@ -2021,6 +2123,7 @@ function isHttpAudioUrl(value: string) {
   return /^https?:\/\/.+\.(mp3|mpeg|m4a|aac|wav|ogg|oga|opus|webm)(\?[^#]*)?(#.*)?$/i.test(value);
 }
 
+/** Parses an internal text-capture drag payload without allowing malformed data to escape. */
 function readInkwellDropPayload(event: DragEvent): CaptureSelectionPayload | null {
   const rawPayload = event.dataTransfer?.getData(INKWELL_DRAG_MIME);
 
@@ -2035,6 +2138,7 @@ function readInkwellDropPayload(event: DragEvent): CaptureSelectionPayload | nul
   }
 }
 
+/** Inserts captured text at a drop location and persists both content and source metadata. */
 function insertCapturedTextAtDrop(
   view: EditorView,
   event: DragEvent,
@@ -2065,6 +2169,7 @@ function isLikelyTextCaptureDrop(event: DragEvent) {
   return types.includes(INKWELL_DRAG_MIME) && !types.includes(INKWELL_HEADING_DRAG_MIME);
 }
 
+/** Consumes the background script's pending text drag when it matches the dropped plain text. */
 async function consumeTextDragPayload(text: string) {
 
   return browser.runtime
@@ -2080,6 +2185,7 @@ async function consumeTextDragPayload(text: string) {
     .catch(() => null);
 }
 
+/** Consumes and validates a pending heading drag from the background script. */
 async function consumeHeadingDropPayload(event: DragEvent) {
   const text = event.dataTransfer?.getData('text/plain')?.replace(/\s+/g, ' ').trim();
 
@@ -2098,6 +2204,7 @@ async function consumeHeadingDropPayload(event: DragEvent) {
     .catch(() => null);
 }
 
+/** Inserts a source-linked heading at the resolved drop position and registers its provenance. */
 function insertLinkedHeadingAtDrop(
   view: EditorView,
   event: DragEvent,
@@ -2139,6 +2246,7 @@ function insertLinkedHeadingAtDrop(
   }
 }
 
+/** Registers the capture payload against the stable block ID created for inserted content. */
 async function registerCapturedSource(
   content: DocumentContent[],
   payload: CaptureSelectionPayload,
@@ -2152,144 +2260,28 @@ async function registerCapturedSource(
 function kebabCase(value: string) {
   return value.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`);
 }
-
-function plainTextFromDocument(document: DocumentContent | undefined) {
-  return (document?.content ?? [])
-    .map((node) => textFromNode(node))
-    .join('\n')
-    .trim();
-}
-
-function textFromNode(node: DocumentContent): string {
-  if (node.text) {
-    return node.text;
-  }
-
-  if (node.type === 'hardBreak') {
-    return '\n';
-  }
-
-  return (node.content ?? []).map((child) => textFromNode(child)).join('');
-}
 </script>
 
 <template>
   <main class="shell">
-    <header class="topbar">
-      <div class="topbar-status">
-        <div
-          :class="syncBadgeClass"
-          :title="syncBadgeTitle"
-          role="status"
-          tabindex="0"
-          :aria-label="`${saveLabel}: ${syncBadgeTitle}`"
-        >
-          <span class="sync-dot" aria-hidden="true" />
-          <span class="sync-label">{{ saveLabel }}</span>
-        </div>
-        <div class="topbar-meta">
-          <strong>{{ contextLabel }}</strong>
-          <small>{{ accountLabel }} / {{ workspaceLabel }}</small>
-        </div>
-      </div>
-
-      <div class="topbar-switchers">
-        <select
-          v-if="canUseEditor"
-          v-model="currentProjectModel"
-          aria-label="Quick project"
-          :disabled="store.isLoading || store.projects.length === 0"
-        >
-          <option
-            v-for="project in store.projects"
-            :key="project.id"
-            :value="project.id"
-          >
-            {{ project.name }}
-          </option>
-        </select>
-
-        <select
-          v-if="canUseEditor"
-          v-model="currentPageModel"
-          aria-label="Quick page"
-          :disabled="store.isLoading || store.pages.length === 0"
-        >
-          <option
-            v-for="page in store.pages"
-            :key="page.id"
-            :value="page.id"
-          >
-            {{ page.title }}
-          </option>
-        </select>
-      </div>
-
-      <div v-if="canUseEditor" class="topbar-actions">
-        <button
-          type="button"
-          class="icon-label-button secondary-button"
-          :disabled="store.isLoading"
-          title="New project"
-          aria-label="New project"
-          @click="activeTab = 'projects'"
-        >
-          <font-awesome-icon :icon="['fas', 'folder-plus']" fixed-width />
-          <span>New project</span>
-        </button>
-
-        <button
-          type="button"
-          class="icon-label-button"
-          :disabled="store.isLoading || !store.currentProjectId"
-          title="New page"
-          aria-label="New page"
-          @click="createPage"
-        >
-          <font-awesome-icon :icon="['fas', 'file-circle-plus']" fixed-width />
-          <span>New page</span>
-        </button>
-        <button
-          type="button"
-          class="icon-label-button secondary-button"
-          :disabled="store.isLoading || !store.syncConfig.connected || !store.isOnline"
-          title="Resync with Notion"
-          aria-label="Resync with Notion"
-          @click="resync"
-        >
-          <font-awesome-icon :icon="['fas', 'rotate']" fixed-width />
-          <span>Sync</span>
-        </button>
-        <button
-          v-if="store.syncConfig.connected"
-          type="button"
-          class="icon-label-button secondary-button"
-          title="Logout"
-          aria-label="Logout"
-          @click="logout"
-        >
-          <font-awesome-icon :icon="['fas', 'right-from-bracket']" fixed-width />
-          <span>Logout</span>
-        </button>
-      </div>
-    </header>
-
-    <nav class="tabs" aria-label="Side panel sections">
-      <button
-        v-for="tab in tabs"
-        :key="tab.id"
-        type="button"
-        class="icon-label-button tab-button"
-        :class="{ active: activeTab === tab.id }"
-        :aria-current="activeTab === tab.id ? 'page' : undefined"
-        :title="tab.label"
-        :aria-label="tab.label"
-        @click="activeTab = tab.id"
-      >
-        <font-awesome-icon :icon="tab.icon" fixed-width />
-        <span>{{ tab.label }}</span>
-      </button>
-    </nav>
+    <SidePanelHeader
+      v-model:project-category="projectCategoryDraft"
+      :account-label="accountLabel"
+      :can-use-editor="canUseEditor"
+      :save-label="saveLabel"
+      :settings-open="activeTab === 'settings'"
+      :sync-badge-class="syncBadgeClass"
+      :sync-badge-title="syncBadgeTitle"
+      :workspace-label="workspaceLabel"
+      @archive-project="archiveProject"
+      @create-page="createPage"
+      @create-quick-project="createQuickProject"
+      @logout="logout"
+      @open-settings="toggleSettings"
+      @resync="resync"
+      @save-project-metadata="saveProjectMetadata"
+      @select-project="selectProject"
+    />
 
     <p v-if="hasInlineMessage" class="error">
       {{ uiMessage || store.errorMessage }}
@@ -2325,26 +2317,55 @@ function textFromNode(node: DocumentContent): string {
         </div>
         <div class="editor-title-row">
           <div class="page-title">
-            <input
-              v-model="pageTitleDraft"
-              aria-label="Page title"
-              :disabled="store.isLoading || !store.currentPage"
-              @blur="renamePage"
-              @keydown.enter="blurTitleInput"
-            >
-            <p>{{ store.currentProject?.name || 'Project' }} / {{ saveLabel }}</p>
+            <div class="editor-page-title-control">
+              <input
+                v-model="pageTitleDraft"
+                aria-label="Page title"
+                :disabled="store.isLoading || !store.currentPage"
+                @blur="renamePage"
+                @keydown.enter="blurTitleInput"
+              >
+              <details class="page-switcher" name="workspace-switcher">
+                <summary title="Switch page" aria-label="Switch page">
+                  <span class="switcher-chevron" aria-hidden="true" />
+                </summary>
+                <div class="switcher-popover item-list">
+                  <button
+                    v-for="page in store.pages"
+                    :key="page.id"
+                    type="button"
+                    class="item-row"
+                    :class="{ active: page.id === store.currentPage?.id }"
+                    @click="selectPage(page.id); closeSwitcher($event)"
+                  >
+                    <span>{{ page.title }}</span>
+                  </button>
+                  <hr class="switcher-divider">
+                  <div class="switcher-menu-actions">
+                    <button
+                      type="button"
+                      class="switcher-action"
+                      :disabled="store.isLoading || !store.currentProjectId"
+                      @click="createPage(); closeSwitcher($event)"
+                    >
+                      <font-awesome-icon :icon="['fas', 'file-circle-plus']" fixed-width />
+                      <span>New page</span>
+                    </button>
+                    <button
+                      type="button"
+                      class="switcher-action danger-button"
+                      :disabled="store.isLoading || !store.currentPage"
+                      @click="archivePage(); closeSwitcher($event)"
+                    >
+                      <font-awesome-icon :icon="['fas', 'trash-can']" fixed-width />
+                      <span>Delete page</span>
+                    </button>
+                  </div>
+                </div>
+              </details>
+            </div>
+            <p>{{ saveLabel }}</p>
           </div>
-          <button
-            type="button"
-            class="icon-label-button secondary-button"
-            :disabled="store.isLoading || !store.currentPage"
-            title="Manage projects and pages"
-            aria-label="Manage projects and pages"
-            @click="activeTab = 'projects'"
-          >
-            <font-awesome-icon :icon="['fas', 'folder-tree']" fixed-width />
-            <span>Manage</span>
-          </button>
         </div>
 
         <div
@@ -2360,12 +2381,12 @@ function textFromNode(node: DocumentContent): string {
               class="icon-label-button"
               :aria-selected="editorToolbarMode === mode.id"
               :class="{ active: editorToolbarMode === mode.id }"
-              :title="mode.label"
-              :aria-label="mode.label"
+              :title="mode.id === 'insert' ? 'Media' : mode.label"
+              :aria-label="mode.id === 'insert' ? 'Media' : mode.label"
               @click="setEditorToolbarMode(mode.id)"
             >
               <font-awesome-icon :icon="mode.icon" fixed-width />
-              <span>{{ mode.label }}</span>
+              <span>{{ mode.id === 'insert' ? 'Media' : mode.label }}</span>
             </button>
           </div>
 
@@ -2387,7 +2408,17 @@ function textFromNode(node: DocumentContent): string {
           </div>
 
           <div v-if="activeEditorMenu" class="tool-popover">
-            <div v-if="activeEditorMenu === 'type'" class="tool-panel">
+            <MediaPanel
+              v-if="activeEditorMenu === 'media'"
+              v-model:media-kind="mediaKind"
+              v-model:media-url="mediaUrlDraft"
+              compact
+              :editor-available="Boolean(editor)"
+              @insert="insertMedia"
+              @open-editor="closeEditorMenu"
+            />
+
+            <div v-else-if="activeEditorMenu === 'type'" class="tool-panel">
               <label class="field-label">
                 Block
                 <select
@@ -2666,6 +2697,51 @@ function textFromNode(node: DocumentContent): string {
                 <font-awesome-icon :icon="['fas', 'grip-lines']" fixed-width />
                 <span>Divider</span>
               </button>
+            </div>
+
+            <div v-else-if="activeEditorMenu === 'table'" class="tool-panel button-grid table-tools">
+              <button
+                v-if="!isTableActive"
+                type="button"
+                class="icon-label-button"
+                :disabled="!editor"
+                title="Insert a 3 by 3 table"
+                aria-label="Insert a 3 by 3 table"
+                @click="runEditorTableCommand('insert')"
+              >
+                <font-awesome-icon :icon="['fas', 'table']" fixed-width />
+                <span>Insert 3 x 3</span>
+              </button>
+              <template v-else>
+                <button type="button" class="icon-label-button" title="Add row below" @click="runEditorTableCommand('addRow')">
+                  <span aria-hidden="true" class="text-icon">+R</span>
+                  <span>Add row</span>
+                </button>
+                <button type="button" class="icon-label-button" title="Delete row" @click="runEditorTableCommand('deleteRow')">
+                  <span aria-hidden="true" class="text-icon">-R</span>
+                  <span>Delete row</span>
+                </button>
+                <button type="button" class="icon-label-button" title="Add column to the right" @click="runEditorTableCommand('addColumn')">
+                  <span aria-hidden="true" class="text-icon">+C</span>
+                  <span>Add column</span>
+                </button>
+                <button type="button" class="icon-label-button" title="Delete column" @click="runEditorTableCommand('deleteColumn')">
+                  <span aria-hidden="true" class="text-icon">-C</span>
+                  <span>Delete column</span>
+                </button>
+                <button type="button" class="icon-label-button" title="Toggle header row" @click="runEditorTableCommand('toggleHeaderRow')">
+                  <span aria-hidden="true" class="text-icon">HR</span>
+                  <span>Header row</span>
+                </button>
+                <button type="button" class="icon-label-button" title="Toggle header column" @click="runEditorTableCommand('toggleHeaderColumn')">
+                  <span aria-hidden="true" class="text-icon">HC</span>
+                  <span>Header column</span>
+                </button>
+                <button type="button" class="icon-label-button danger-button" title="Delete table" @click="runEditorTableCommand('deleteTable')">
+                  <font-awesome-icon :icon="['fas', 'trash-can']" fixed-width />
+                  <span>Delete table</span>
+                </button>
+              </template>
             </div>
 
             <div v-else-if="activeEditorMenu === 'record'" class="tool-panel record-panel">
@@ -2983,2028 +3059,48 @@ function textFromNode(node: DocumentContent): string {
       </div>
     </section>
 
-    <section
-      v-if="canUseEditor && activeTab === 'projects'"
-      class="tab-panel"
-      aria-label="Projects and pages"
-    >
-      <div class="panel-section">
-        <div class="section-heading">
-          <h2>Projects</h2>
-          <button
-            type="button"
-            class="icon-label-button secondary-button"
-            title="Editor"
-            aria-label="Editor"
-            @click="activeTab = 'editor'"
-          >
-            <font-awesome-icon :icon="['far', 'pen-to-square']" fixed-width />
-            <span>Editor</span>
-          </button>
-        </div>
-
-        <form class="inline-form" @submit.prevent="createProject">
-          <input
-            v-model="newProjectNameDraft"
-            aria-label="New project name"
-            placeholder="New project name"
-            :disabled="store.isLoading"
-          >
-          <button
-            type="submit"
-            class="icon-label-button"
-            :disabled="store.isLoading"
-            title="Create project"
-            aria-label="Create project"
-          >
-            <font-awesome-icon :icon="['fas', 'folder-plus']" fixed-width />
-            <span>Create</span>
-          </button>
-        </form>
-
-        <div class="manage-row">
-          <select
-            v-model="currentProjectModel"
-            aria-label="Project"
-            :disabled="store.isLoading || store.projects.length === 0"
-          >
-            <option
-              v-for="project in store.projects"
-              :key="project.id"
-              :value="project.id"
-            >
-              {{ project.name }}
-            </option>
-          </select>
-          <button
-            type="button"
-            class="icon-label-button secondary-button danger-button"
-            :disabled="store.isLoading || !store.currentProject"
-            title="Archive project"
-            aria-label="Archive project"
-            @click="archiveProject"
-          >
-            <font-awesome-icon :icon="['fas', 'trash-can']" fixed-width />
-            <span>Archive</span>
-          </button>
-        </div>
-
-        <label class="field-label">
-          Project name
-          <input
-            v-model="projectNameDraft"
-            aria-label="Project name"
-            :disabled="store.isLoading || !store.currentProject"
-            @blur="renameProject"
-            @keydown.enter="blurTitleInput"
-          >
-        </label>
-
-        <label class="field-label">
-          Category
-          <input
-            v-model="projectCategoryDraft"
-            aria-label="Project category"
-            :disabled="store.isLoading || !store.currentProject"
-            @blur="saveProjectMetadata"
-            @keydown.enter="blurTitleInput"
-          >
-        </label>
-
-        <label class="field-label">
-          Project state
-          <textarea
-            v-model="projectStateDraft"
-            aria-label="Project state"
-            rows="5"
-            :disabled="store.isLoading || !store.currentProject"
-            @blur="saveProjectMetadata"
-          />
-        </label>
-
-        <div class="item-list">
-          <button
-            v-for="project in store.projects"
-            :key="project.id"
-            type="button"
-            class="item-row"
-            :class="{ active: project.id === store.currentProjectId }"
-            @click="selectProject(project.id)"
-          >
-            <span>{{ project.name }}</span>
-            <small>{{ project.syncState || 'saved' }}</small>
-          </button>
-        </div>
-      </div>
-
-      <div class="panel-section">
-        <div class="section-heading">
-          <h2>Pages</h2>
-          <button
-            type="button"
-            class="icon-label-button"
-            :disabled="store.isLoading || !store.currentProjectId"
-            title="New page"
-            aria-label="New page"
-            @click="createPage"
-          >
-            <font-awesome-icon :icon="['fas', 'file-circle-plus']" fixed-width />
-            <span>New page</span>
-          </button>
-        </div>
-
-        <div class="manage-row">
-          <select
-            v-model="currentPageModel"
-            aria-label="Page"
-            :disabled="store.isLoading || store.pages.length === 0"
-          >
-            <option
-              v-for="page in store.pages"
-              :key="page.id"
-              :value="page.id"
-            >
-              {{ page.title }}
-            </option>
-          </select>
-          <button
-            type="button"
-            class="icon-label-button secondary-button danger-button"
-            :disabled="store.isLoading || !store.currentPage"
-            title="Archive page"
-            aria-label="Archive page"
-            @click="archivePage"
-          >
-            <font-awesome-icon :icon="['fas', 'trash-can']" fixed-width />
-            <span>Archive</span>
-          </button>
-        </div>
-
-        <label class="field-label">
-          Page title
-          <input
-            v-model="pageTitleDraft"
-            aria-label="Page title"
-            :disabled="store.isLoading || !store.currentPage"
-            @blur="renamePage"
-            @keydown.enter="blurTitleInput"
-          >
-        </label>
-
-        <div class="item-list">
-          <button
-            v-for="page in store.pages"
-            :key="page.id"
-            type="button"
-            class="item-row"
-            :class="{ active: page.id === store.currentPage?.id }"
-            @click="selectPage(page.id)"
-          >
-            <span>{{ page.title }}</span>
-            <small>{{ page.syncState || 'saved' }}</small>
-          </button>
-        </div>
-      </div>
-    </section>
-
-    <section
-      v-if="canUseEditor && activeTab === 'media'"
-      class="tab-panel"
-      aria-label="Media"
-    >
-      <div class="panel-section">
-        <div class="section-heading">
-          <h2>Media</h2>
-          <button
-            type="button"
-            class="icon-label-button secondary-button"
-            title="Editor"
-            aria-label="Editor"
-            @click="activeTab = 'editor'"
-          >
-            <font-awesome-icon :icon="['far', 'pen-to-square']" fixed-width />
-            <span>Editor</span>
-          </button>
-        </div>
-
-        <form class="stack-form" @submit.prevent="insertImage">
-          <label class="field-label">
-            Image URL
-            <input
-              v-model="imageUrlDraft"
-              type="url"
-              aria-label="Image URL"
-              placeholder="https://..."
-              :disabled="!editor"
-            >
-          </label>
-          <button
-            type="submit"
-            class="icon-label-button"
-            :disabled="!editor"
-            title="Insert image"
-            aria-label="Insert image"
-          >
-            <font-awesome-icon :icon="['fas', 'image']" fixed-width />
-            <span>Insert image</span>
-          </button>
-        </form>
-
-        <form class="stack-form" @submit.prevent="insertVideo">
-          <label class="field-label">
-            Video or YouTube URL
-            <input
-              v-model="videoUrlDraft"
-              type="url"
-              aria-label="Video or YouTube URL"
-              placeholder="https://..."
-              :disabled="!editor"
-            >
-          </label>
-          <button
-            type="submit"
-            class="icon-label-button"
-            :disabled="!editor"
-            title="Insert video"
-            aria-label="Insert video"
-          >
-            <font-awesome-icon :icon="['fas', 'video']" fixed-width />
-            <span>Insert video</span>
-          </button>
-        </form>
-
-        <form class="stack-form" @submit.prevent="insertAudio">
-          <label class="field-label">
-            Audio URL
-            <input
-              v-model="audioUrlDraft"
-              type="url"
-              aria-label="Audio URL"
-              placeholder="https://..."
-              :disabled="!editor"
-            >
-          </label>
-          <button
-            type="submit"
-            class="icon-label-button"
-            :disabled="!editor"
-            title="Insert audio"
-            aria-label="Insert audio"
-          >
-            <font-awesome-icon :icon="['fas', 'microphone']" fixed-width />
-            <span>Insert audio</span>
-          </button>
-        </form>
-
-        <small>Drop images, audio, or YouTube links into the editor.</small>
-      </div>
-    </section>
-
-    <section
-      v-if="activeTab === 'sync'"
-      class="tab-panel"
-      aria-label="Sync"
-    >
-      <div class="panel-section">
-        <div class="section-heading">
-          <h2>Sync</h2>
-          <button
-            v-if="store.syncConfig.connected"
-            type="button"
-            class="icon-label-button secondary-button"
-            title="Resync"
-            aria-label="Resync"
-            @click="resync"
-          >
-            <font-awesome-icon :icon="['fas', 'rotate']" fixed-width />
-            <span>Resync</span>
-          </button>
-        </div>
-
-        <dl class="status-list">
-          <div>
-            <dt>Account</dt>
-            <dd>{{ accountLabel }}</dd>
-          </div>
-          <div>
-            <dt>Workspace</dt>
-            <dd>{{ store.syncConfig.workspaceName || 'Not connected' }}</dd>
-          </div>
-          <div>
-            <dt>Parent page</dt>
-            <dd>{{ parentPageLabel }}</dd>
-          </div>
-          <div>
-            <dt>Status</dt>
-            <dd>{{ saveLabel }}</dd>
-          </div>
-          <div>
-            <dt>Connection</dt>
-            <dd>{{ store.isOnline ? 'Online' : 'Offline' }}</dd>
-          </div>
-          <div>
-            <dt>Local queue</dt>
-            <dd>{{ store.pendingSyncCount }} {{ store.pendingSyncCount === 1 ? 'change' : 'changes' }}</dd>
-          </div>
-        </dl>
-
-        <div
-          v-if="!store.syncConfig.connected"
-          class="legal-disclosure"
-        >
-          <p>
-            Notion sync is optional. Inkwell can stay local to this device indefinitely.
-            If you connect later, your complete local workspace is uploaded first, then
-            future changes use normal online and offline syncing.
-          </p>
-          <label class="legal-consent">
-            <input
-              v-model="hasAcceptedLegalTerms"
-              type="checkbox"
-              :disabled="!isLegalAcceptanceLoaded"
-            >
-            <span>
-              I have read and agree to the
-              <a
-                :href="LEGAL_TERMS_URL"
-                target="_blank"
-                rel="noopener noreferrer"
-                @click.prevent="openLegalUrl(LEGAL_TERMS_URL)"
-              >Terms</a>
-              and
-              <a
-                :href="LEGAL_PRIVACY_URL"
-                target="_blank"
-                rel="noopener noreferrer"
-                @click.prevent="openLegalUrl(LEGAL_PRIVACY_URL)"
-              >Privacy Policy</a>.
-            </span>
-          </label>
-        </div>
-
-        <button
-          v-if="!store.syncConfig.connected"
-          type="button"
-          class="icon-label-button"
-          :disabled="!canLoginWithNotion"
-          :title="isSigningIn ? 'Connecting' : 'Continue with Notion'"
-          :aria-label="isSigningIn ? 'Connecting' : 'Continue with Notion'"
-          @click="loginWithNotion"
-        >
-          <font-awesome-icon :icon="['fas', 'cloud-arrow-up']" fixed-width />
-          <span>{{ isSigningIn ? 'Connecting...' : 'Continue with Notion' }}</span>
-        </button>
-        <button
-          v-else
-          type="button"
-          class="icon-label-button secondary-button"
-          title="Logout"
-          aria-label="Logout"
-          @click="logout"
-        >
-          <font-awesome-icon :icon="['fas', 'right-from-bracket']" fixed-width />
-          <span>Logout</span>
-        </button>
-      </div>
-
-      <div class="panel-section">
-        <h2>Legal</h2>
-        <p class="legal-links">
-          <a
-            :href="LEGAL_TERMS_URL"
-            target="_blank"
-            rel="noopener noreferrer"
-            @click.prevent="openLegalUrl(LEGAL_TERMS_URL)"
-          >Terms</a>
-          <a
-            :href="LEGAL_PRIVACY_URL"
-            target="_blank"
-            rel="noopener noreferrer"
-            @click.prevent="openLegalUrl(LEGAL_PRIVACY_URL)"
-          >Privacy Policy</a>
-        </p>
-      </div>
-
-      <div class="panel-section">
-        <h2>Server</h2>
-        <form class="inline-form" @submit.prevent="saveServerUrl">
-          <input
-            v-model="serverUrlDraft"
-            type="url"
-            aria-label="Sync server URL"
-            placeholder="http://localhost:8787"
-          >
-          <button
-            type="submit"
-            class="icon-label-button"
-            title="Save server URL"
-            aria-label="Save server URL"
-          >
-            <font-awesome-icon :icon="['fas', 'floppy-disk']" fixed-width />
-            <span>Save</span>
-          </button>
-        </form>
-      </div>
-
-      <div class="panel-section">
-        <h2>Notion Parent Page</h2>
-        <form class="inline-form" @submit.prevent="searchParentPages">
-          <input
-            v-model="parentPageSearchDraft"
-            aria-label="Search Notion pages"
-            placeholder="Search pages"
-            :disabled="!store.syncConfig.connected"
-          >
-          <button
-            type="submit"
-            class="icon-label-button"
-            :disabled="!store.syncConfig.connected"
-            title="Search Notion pages"
-            aria-label="Search Notion pages"
-          >
-            <font-awesome-icon :icon="['fas', 'magnifying-glass']" fixed-width />
-            <span>Search</span>
-          </button>
-        </form>
-
-        <form class="inline-form" @submit.prevent="createParentPage">
-          <input
-            v-model="parentPageTitleDraft"
-            aria-label="New Notion parent page"
-            placeholder="New parent page title"
-            :disabled="!store.syncConfig.connected"
-          >
-          <button
-            type="submit"
-            class="icon-label-button"
-            :disabled="!store.syncConfig.connected"
-            title="Create Notion parent page"
-            aria-label="Create Notion parent page"
-          >
-            <font-awesome-icon :icon="['fas', 'folder-plus']" fixed-width />
-            <span>Create</span>
-          </button>
-        </form>
-
-        <div class="item-list">
-          <button
-            v-for="page in store.notionParentPages"
-            :key="page.id"
-            type="button"
-            class="item-row"
-            :class="{ active: page.id === store.syncConfig.selectedParentPageId }"
-            :disabled="!store.syncConfig.connected"
-            @click="selectParentPage(page.id)"
-          >
-            <span>{{ page.title }}</span>
-            <small>{{ page.parentPageId ? 'Child page' : 'Page' }}</small>
-          </button>
-        </div>
-      </div>
-    </section>
-
-    <section
+    <SettingsPanel
       v-if="activeTab === 'settings'"
-      class="tab-panel settings-panel"
-      aria-labelledby="settings-heading"
+      v-model="interfaceScale"
+      :interface-scale-label="interfaceScaleLabel"
+      :maximum-scale="MAX_INTERFACE_SCALE"
+      :minimum-scale="MIN_INTERFACE_SCALE"
+      :scale-step="INTERFACE_SCALE_STEP"
+      @persist="persistInterfaceScale"
+      @preview="previewInterfaceScale"
+      @select-preset="setInterfaceScale"
     >
-      <div class="panel-section">
-        <div class="settings-heading">
-          <div>
-            <h2 id="settings-heading">Settings</h2>
-            <p>Make Inkwell comfortable to read and use.</p>
-          </div>
-          <span class="setting-value" aria-live="polite">
-            {{ interfaceScaleLabel }} · {{ interfaceScale }}%
-          </span>
-        </div>
+      <SyncPanel
+        v-model:has-accepted-legal-terms="hasAcceptedLegalTerms"
+        v-model:parent-page-search="parentPageSearchDraft"
+        v-model:parent-page-title="parentPageTitleDraft"
+        v-model:server-url="serverUrlDraft"
+        :account-label="accountLabel"
+        :can-login="canLoginWithNotion"
+        :is-legal-acceptance-loaded="isLegalAcceptanceLoaded"
+        :is-signing-in="isSigningIn"
+        :parent-page-label="parentPageLabel"
+        :privacy-url="LEGAL_PRIVACY_URL"
+        :save-label="saveLabel"
+        :terms-url="LEGAL_TERMS_URL"
+        @create-parent-page="createParentPage"
+        @login="loginWithNotion"
+        @logout="logout"
+        @open-legal-url="openLegalUrl"
+        @resync="resync"
+        @save-server-url="saveServerUrl"
+        @search-parent-pages="searchParentPages"
+        @select-parent-page="selectParentPage"
+      />
+    </SettingsPanel>
 
-        <div class="setting-card">
-          <div class="setting-copy">
-            <label for="interface-scale">Interface size</label>
-            <p id="interface-scale-help">
-              Enlarges text throughout the sidebar. Changes appear immediately
-              and are saved on this browser.
-            </p>
-          </div>
-
-          <input
-            id="interface-scale"
-            class="scale-slider"
-            type="range"
-            :min="MIN_INTERFACE_SCALE"
-            :max="MAX_INTERFACE_SCALE"
-            :step="INTERFACE_SCALE_STEP"
-            :value="interfaceScale"
-            aria-describedby="interface-scale-help interface-scale-bounds"
-            :aria-valuetext="`${interfaceScaleLabel}, ${interfaceScale}%`"
-            @input="previewInterfaceScale"
-            @change="persistInterfaceScale"
-          >
-          <div id="interface-scale-bounds" class="scale-bounds" aria-hidden="true">
-            <span>Smaller</span>
-            <span>Larger</span>
-          </div>
-
-          <div class="scale-presets" aria-label="Interface size presets">
-            <button
-              v-for="preset in [90, 100, 120, 140]"
-              :key="preset"
-              type="button"
-              class="secondary-button"
-              :class="{ active: interfaceScale === preset }"
-              :aria-pressed="interfaceScale === preset"
-              @click="setInterfaceScale(preset)"
-            >
-              {{ preset === 100 ? 'Default' : `${preset}%` }}
-            </button>
-          </div>
-
-          <div class="scale-preview" aria-hidden="true">
-            <small>Preview</small>
-            <strong>Inkwell should feel easy to read.</strong>
-            <span>Adjust the slider until this text is comfortable.</span>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <div
+    <ArchiveDialog
       v-if="archiveTarget"
-      class="modal-backdrop"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="archive-title"
-    >
-      <section class="modal">
-        <h2 id="archive-title">Archive {{ archiveTarget.kind }}</h2>
-        <p>{{ archiveTarget.title }}</p>
-        <div class="modal-actions">
-          <button
-            type="button"
-            class="icon-label-button secondary-button"
-            title="Cancel"
-            aria-label="Cancel"
-            @click="cancelArchive"
-          >
-            <font-awesome-icon :icon="['fas', 'xmark']" fixed-width />
-            <span>Cancel</span>
-          </button>
-          <button
-            type="button"
-            class="icon-label-button danger-primary"
-            title="Archive"
-            aria-label="Archive"
-            @click="confirmArchive"
-          >
-            <font-awesome-icon :icon="['fas', 'trash-can']" fixed-width />
-            <span>Archive</span>
-          </button>
-        </div>
-      </section>
-    </div>
+      :target="archiveTarget"
+      @cancel="cancelArchive"
+      @confirm="confirmArchive"
+    />
   </main>
 </template>
 
-<style scoped>
-.shell {
-  display: grid;
-  grid-template-rows: auto auto auto 1fr;
-  min-height: 100vh;
-  padding: 10px;
-}
-
-.topbar {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 8px;
-  align-items: center;
-  padding-bottom: 10px;
-  border-bottom: 1px solid var(--inkwell-border);
-}
-
-.topbar-status {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: 10px;
-  align-items: center;
-  min-width: 0;
-}
-
-.topbar-meta {
-  display: grid;
-  min-width: 0;
-  gap: 1px;
-}
-
-.topbar-meta strong,
-.topbar-meta small {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.topbar-meta small {
-  color: var(--inkwell-muted);
-  font-size: 0.78rem;
-}
-
-.sync-badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  justify-self: start;
-  gap: 0;
-  min-height: 28px;
-  width: 28px;
-  padding: 0;
-  border: 1px solid var(--inkwell-border);
-  border-radius: 999px;
-  background: var(--inkwell-surface-muted);
-  color: var(--inkwell-text);
-  font-size: 0.82rem;
-  font-weight: 750;
-}
-
-.sync-badge:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--inkwell-accent) 34%, transparent);
-  outline-offset: 2px;
-}
-
-.sync-dot {
-  flex: 0 0 auto;
-  width: 8px;
-  height: 8px;
-  border-radius: 999px;
-  background: var(--inkwell-muted);
-}
-
-.sync-label {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
-}
-
-.sync-badge.error {
-  border-color: #dc2626;
-  background: #fef2f2;
-  color: #991b1b;
-}
-
-.sync-badge.error .sync-dot {
-  background: #dc2626;
-}
-
-.sync-badge.stale {
-  border-color: #f59e0b;
-  background: #fffbeb;
-  color: #92400e;
-}
-
-.sync-badge.stale .sync-dot {
-  background: #f59e0b;
-}
-
-.sync-change-banner {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 7px 12px;
-  background: #fffbeb;
-  border-bottom: 1px solid #f59e0b;
-  font-size: 0.86rem;
-  color: #92400e;
-  flex-shrink: 0;
-}
-
-.sync-change-banner-actions {
-  display: flex;
-  gap: 6px;
-  flex-shrink: 0;
-}
-
-.sync-change-banner-btn {
-  padding: 3px 10px;
-  border-radius: 5px;
-  border: 1px solid #d97706;
-  background: transparent;
-  color: #92400e;
-  font-size: 0.86rem;
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.sync-change-banner-btn:hover {
-  background: #fef3c7;
-}
-
-.sync-change-banner-btn.primary {
-  background: #f59e0b;
-  color: #fff;
-  border-color: #d97706;
-}
-
-.sync-change-banner-btn.primary:hover {
-  background: #d97706;
-}
-
-.sync-badge.saving {
-  border-color: #2563eb;
-  background: #eff6ff;
-  color: #1d4ed8;
-}
-
-.sync-badge.saving .sync-dot {
-  background: #2563eb;
-}
-
-.sync-badge.saved {
-  border-color: #16a34a;
-  background: #f0fdf4;
-  color: #166534;
-}
-
-.sync-badge.saved .sync-dot {
-  background: #16a34a;
-}
-
-.topbar-switchers {
-  display: grid;
-  grid-column: 1 / -1;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 6px;
-}
-
-.topbar-switchers select {
-  min-width: 0;
-}
-
-.topbar-actions {
-  display: flex;
-  gap: 3px;
-}
-
-.topbar-actions button {
-  flex: 0 0 30px;
-  width: 30px;
-  min-height: 30px;
-  padding: 0;
-  font-weight: 750;
-}
-
-.topbar-actions .icon-label-button {
-  min-width: 0;
-  max-width: 100%;
-}
-
-.tabs {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 2px;
-  margin-top: 8px;
-  padding: 3px;
-  border: 1px solid var(--inkwell-border);
-  border-radius: var(--inkwell-radius);
-  background: var(--inkwell-surface-muted);
-}
-
-.tabs button {
-  min-width: 0;
-  min-height: 34px;
-  border-color: transparent;
-  background: transparent;
-  color: var(--inkwell-muted);
-  font-size: 0.82rem;
-  font-weight: 800;
-}
-
-.tabs .icon-label-button {
-  justify-self: stretch;
-}
-
-.tabs button.active {
-  border-color: var(--inkwell-border);
-  background: var(--inkwell-surface);
-  color: var(--inkwell-text);
-}
-
-.secondary-button {
-  border-color: var(--inkwell-border);
-  background: var(--inkwell-surface-muted);
-  color: var(--inkwell-text);
-}
-
-.icon-label-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  min-width: 32px;
-  max-width: 100%;
-  white-space: nowrap;
-}
-
-.icon-label-button > svg,
-.icon-label-button > .text-icon {
-  flex: 0 0 auto;
-  width: 18px;
-}
-
-.icon-label-button > span:not(.text-icon) {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
-}
-
-.auth-gate > .icon-label-button,
-.stack-form > .icon-label-button,
-.modal-actions .icon-label-button {
-  width: auto;
-  padding-inline: 12px;
-}
-
-.auth-gate > .icon-label-button > span:not(.text-icon),
-.stack-form > .icon-label-button > span:not(.text-icon),
-.modal-actions .icon-label-button > span:not(.text-icon) {
-  position: static;
-  width: auto;
-  height: auto;
-  padding: initial;
-  margin: 0;
-  overflow: visible;
-  clip: auto;
-  white-space: nowrap;
-}
-
-.text-icon {
-  display: inline-flex;
-  justify-content: center;
-  font-size: 0.76rem;
-  font-weight: 850;
-  letter-spacing: 0;
-}
-
-.page-title input,
-.editor-header p {
-  margin: 0;
-}
-
-.editor-header p {
-  color: var(--inkwell-muted);
-}
-
-.error {
-  margin: 10px 0 0;
-  color: var(--inkwell-warning);
-}
-
-.auth-gate {
-  display: grid;
-  gap: 10px;
-  align-content: start;
-  margin-top: 12px;
-  padding: 14px;
-  border: 1px solid var(--inkwell-border);
-  border-radius: var(--inkwell-radius);
-  background: var(--inkwell-surface);
-  box-shadow: var(--inkwell-shadow);
-}
-
-.auth-gate h2,
-.auth-gate p {
-  margin: 0;
-}
-
-.auth-gate h2 {
-  font-size: 1rem;
-}
-
-.auth-gate p {
-  color: var(--inkwell-muted);
-}
-
-.legal-disclosure {
-  display: grid;
-  gap: 10px;
-}
-
-.legal-disclosure p {
-  margin: 0;
-  color: var(--inkwell-muted);
-}
-
-.legal-consent {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: 8px;
-  align-items: start;
-  color: var(--inkwell-muted);
-  font-size: 0.8rem;
-  line-height: 1.4;
-}
-
-.legal-consent input {
-  width: 16px;
-  height: 16px;
-  margin: 1px 0 0;
-  accent-color: var(--inkwell-accent);
-}
-
-.legal-consent a,
-.legal-links a {
-  color: var(--inkwell-accent);
-  font-weight: 750;
-  text-decoration: none;
-}
-
-.legal-consent a:hover,
-.legal-links a:hover {
-  text-decoration: underline;
-}
-
-.legal-links {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  margin: 0;
-}
-
-.editor-shell {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  min-height: 0;
-  margin-top: 12px;
-  border: 1px solid var(--inkwell-border);
-  border-radius: var(--inkwell-radius);
-  background: var(--inkwell-surface);
-  box-shadow: var(--inkwell-shadow);
-}
-
-.record-panel {
-  display: flex;
-  align-items: center;
-  padding: 4px 2px;
-}
-
-.tab-panel {
-  display: grid;
-  align-content: start;
-  gap: 12px;
-  min-height: 0;
-  margin-top: 12px;
-  overflow: auto;
-}
-
-.editor-header {
-  display: grid;
-  gap: 8px;
-  padding: 8px;
-  border-bottom: 1px solid var(--inkwell-border);
-}
-
-.editor-title-row,
-.section-heading,
-.manage-row,
-.inline-form,
-.recording-row,
-.modal-actions {
-  display: grid;
-  gap: 8px;
-  align-items: center;
-}
-
-.editor-title-row {
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: start;
-}
-
-.editor-title-row .page-title {
-  min-width: 0;
-}
-
-.section-heading {
-  grid-template-columns: minmax(0, 1fr) auto;
-}
-
-.manage-row {
-  grid-template-columns: minmax(0, 1fr) auto;
-}
-
-.modal-actions {
-  grid-template-columns: repeat(2, minmax(96px, 1fr));
-}
-
-.recording-row {
-  grid-template-columns: auto minmax(0, 1fr);
-}
-
-.inline-form {
-  grid-template-columns: minmax(0, 1fr) auto;
-}
-
-.inline-form input,
-.manage-row select {
-  min-width: 0;
-}
-
-.inline-form button,
-.manage-row button,
-.section-heading button,
-.recording-row button {
-  min-height: 32px;
-  padding: 0 10px;
-  font-weight: 750;
-}
-
-.panel-section {
-  display: grid;
-  gap: 10px;
-  padding: 12px 0;
-  border-bottom: 1px solid var(--inkwell-border);
-}
-
-.panel-section:first-child {
-  padding-top: 0;
-}
-
-.panel-section:last-child {
-  border-bottom: 0;
-}
-
-.panel-section h2,
-.section-heading h2 {
-  margin: 0;
-  font-size: 0.95rem;
-}
-
-.settings-panel {
-  overflow: visible;
-}
-
-.settings-heading {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.settings-heading h2,
-.settings-heading p,
-.setting-copy p {
-  margin: 0;
-}
-
-.settings-heading p,
-.setting-copy p {
-  margin-top: 3px;
-  color: var(--inkwell-muted);
-}
-
-.setting-value {
-  flex: 0 0 auto;
-  padding: 4px 8px;
-  border-radius: 999px;
-  background: var(--inkwell-accent-soft);
-  color: var(--inkwell-accent-strong);
-  font-size: 0.78rem;
-  font-weight: 800;
-}
-
-.setting-card {
-  display: grid;
-  gap: 12px;
-  padding: 14px;
-  border: 1px solid var(--inkwell-border);
-  border-radius: var(--inkwell-radius);
-  background: var(--inkwell-surface);
-  box-shadow: var(--inkwell-shadow);
-}
-
-.setting-copy label {
-  font-size: 0.95rem;
-  font-weight: 800;
-}
-
-.scale-slider {
-  min-height: 24px;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  accent-color: var(--inkwell-accent);
-  cursor: pointer;
-}
-
-.scale-bounds {
-  display: flex;
-  justify-content: space-between;
-  margin-top: -10px;
-  color: var(--inkwell-muted);
-  font-size: 0.76rem;
-  font-weight: 700;
-}
-
-.scale-presets {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 6px;
-}
-
-.scale-presets button {
-  min-width: 0;
-  min-height: 34px;
-  padding: 0 6px;
-  font-weight: 750;
-}
-
-.scale-presets button.active {
-  border-color: var(--inkwell-accent);
-  background: var(--inkwell-accent);
-  color: white;
-}
-
-.scale-preview {
-  display: grid;
-  gap: 3px;
-  padding: 12px;
-  border-radius: var(--inkwell-radius);
-  background: var(--inkwell-surface-muted);
-}
-
-.scale-preview small,
-.scale-preview span {
-  color: var(--inkwell-muted);
-}
-
-.field-label,
-.stack-form {
-  display: grid;
-  gap: 6px;
-}
-
-.field-label {
-  color: var(--inkwell-muted);
-  font-size: 0.78rem;
-  font-weight: 750;
-}
-
-.field-label input {
-  color: var(--inkwell-text);
-  font-size: 1rem;
-  font-weight: 500;
-}
-
-.field-label textarea {
-  min-width: 0;
-  resize: vertical;
-  color: var(--inkwell-text);
-  font: inherit;
-}
-
-.stack-form {
-  padding-bottom: 10px;
-  border-bottom: 1px solid var(--inkwell-border);
-}
-
-.stack-form:last-of-type {
-  border-bottom: 0;
-}
-
-.item-list {
-  display: grid;
-  gap: 6px;
-}
-
-.item-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 8px;
-  align-items: center;
-  width: 100%;
-  min-height: 38px;
-  padding: 7px 9px;
-  border-color: var(--inkwell-border);
-  background: var(--inkwell-surface);
-  color: var(--inkwell-text);
-  text-align: left;
-}
-
-.item-row span,
-.item-row small {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.item-row small {
-  color: var(--inkwell-muted);
-  font-size: 0.76rem;
-}
-
-.item-row.active {
-  border-color: var(--inkwell-accent);
-  background: var(--inkwell-accent-soft);
-}
-
-.status-list {
-  display: grid;
-  gap: 8px;
-  margin: 0;
-}
-
-.status-list div {
-  display: grid;
-  grid-template-columns: 86px minmax(0, 1fr);
-  gap: 8px;
-}
-
-.status-list dt {
-  color: var(--inkwell-muted);
-  font-weight: 750;
-}
-
-.status-list dd {
-  min-width: 0;
-  margin: 0;
-  overflow-wrap: anywhere;
-}
-
-.recording-row {
-  align-items: start;
-}
-
-.recording-row small {
-  color: var(--inkwell-muted);
-}
-
-.danger-button {
-  color: #991b1b;
-}
-
-.danger-primary {
-  border-color: #dc2626;
-  background: #dc2626;
-  color: white;
-}
-
-.modal-backdrop {
-  position: fixed;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  padding: 18px;
-  background: rgb(17 17 19 / 36%);
-}
-
-.modal {
-  display: grid;
-  width: min(100%, 320px);
-  gap: 10px;
-  padding: 14px;
-  border: 1px solid var(--inkwell-border);
-  border-radius: var(--inkwell-radius);
-  background: var(--inkwell-surface);
-  box-shadow: var(--inkwell-shadow);
-}
-
-.modal h2,
-.modal p {
-  margin: 0;
-}
-
-.modal p {
-  overflow-wrap: anywhere;
-}
-
-.page-title {
-  display: grid;
-  gap: 3px;
-}
-
-.page-title input {
-  width: 100%;
-  min-width: 0;
-  border: 0;
-  background: transparent;
-  color: var(--inkwell-text);
-}
-
-.page-title input {
-  font-size: 1rem;
-  font-weight: 700;
-}
-
-.page-title input:focus {
-  outline: 2px solid color-mix(in srgb, var(--inkwell-accent) 34%, transparent);
-  outline-offset: 2px;
-}
-
-.editor-tools {
-  position: relative;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 6px;
-  align-items: center;
-}
-
-.editor-tool-tabs {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 2px;
-  width: 100%;
-  padding: 3px;
-  border: 1px solid var(--inkwell-border);
-  border-radius: var(--inkwell-radius);
-  background: var(--inkwell-surface-muted);
-}
-
-.editor-tool-tabs button {
-  min-width: 0;
-  min-height: 32px;
-  padding: 0 5px;
-  border-color: transparent;
-  background: transparent;
-  color: var(--inkwell-muted);
-  font-size: 0.8rem;
-  font-weight: 800;
-}
-
-.editor-tool-tabs .icon-label-button {
-  justify-self: stretch;
-}
-
-.editor-tool-tabs button.active {
-  border-color: var(--inkwell-border);
-  background: var(--inkwell-surface);
-  color: var(--inkwell-text);
-}
-
-.editor-quickbar {
-  display: flex;
-  gap: 2px;
-  align-items: center;
-  padding: 3px;
-  border: 1px solid var(--inkwell-border);
-  border-radius: var(--inkwell-radius);
-  background: var(--inkwell-surface-muted);
-}
-
-.tool-icon-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 32px;
-  width: 32px;
-  min-width: 32px;
-  min-height: 32px;
-  padding: 0;
-  border-color: transparent;
-  background: transparent;
-  color: var(--inkwell-text);
-  font-weight: 800;
-}
-
-.tool-icon-button > span {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
-}
-
-.tool-icon-button.active {
-  border-color: var(--inkwell-accent);
-  background: var(--inkwell-accent-soft);
-  color: var(--inkwell-accent-strong);
-}
-
-.tool-popover {
-  position: absolute;
-  z-index: 20;
-  top: calc(100% + 6px);
-  right: 0;
-  left: 0;
-  display: grid;
-  max-height: min(280px, calc(100vh - 190px));
-  overflow: auto;
-  padding: 10px;
-  border: 1px solid var(--inkwell-border);
-  border-radius: var(--inkwell-radius);
-  background: var(--inkwell-surface);
-  box-shadow: var(--inkwell-shadow);
-}
-
-.tool-panel {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(124px, 1fr));
-  gap: 8px;
-  align-items: end;
-}
-
-.tool-panel .field-label {
-  min-width: 0;
-}
-
-.tool-panel input,
-.toolbar-select {
-  width: 100%;
-  min-width: 0;
-}
-
-.tool-panel button {
-  min-height: 32px;
-  padding: 0 10px;
-  border-color: var(--inkwell-border);
-  background: var(--inkwell-surface-muted);
-  color: var(--inkwell-text);
-  font-weight: 750;
-}
-
-.button-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(36px, 1fr));
-  width: 100%;
-}
-
-.button-grid button.active,
-.tool-panel button.active {
-  border-color: var(--inkwell-accent);
-  background: var(--inkwell-accent);
-  color: white;
-}
-
-.link-form input {
-  min-width: 0;
-}
-
-.editor-context-menu {
-  position: fixed;
-  z-index: 50;
-  width: max-content;
-  max-width: min(352px, calc(100vw - 16px));
-  padding: 6px;
-  border: 1px solid rgb(55 53 47 / 12%);
-  border-radius: 7px;
-  background: var(--inkwell-surface);
-  box-shadow:
-    0 8px 24px rgb(15 23 42 / 12%),
-    0 1px 4px rgb(15 23 42 / 8%);
-  color: var(--inkwell-text);
-}
-
-.context-menu-stack {
-  display: grid;
-  gap: 6px;
-}
-
-.context-menu-row {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.context-menu-divider {
-  height: 1px;
-  margin: 1px 0;
-  background: var(--inkwell-border);
-}
-
-.context-menu-button {
-  display: inline-grid;
-  place-items: center;
-  min-width: 28px;
-  width: 28px;
-  height: 28px;
-  min-height: 28px;
-  padding: 0;
-  border: 0;
-  border-radius: 5px;
-  background: transparent;
-  color: var(--inkwell-text);
-  font-size: 0.82rem;
-  font-weight: 750;
-}
-
-.context-menu-button:hover,
-.context-menu-button:focus-visible,
-.context-menu-button.active {
-  background: var(--inkwell-surface-muted);
-  color: var(--inkwell-text);
-}
-
-.context-menu-button:disabled {
-  background: transparent;
-  color: var(--inkwell-muted);
-  opacity: 0.45;
-}
-
-.context-menu-button.text-action {
-  width: auto;
-  min-width: 48px;
-  padding: 0 8px;
-}
-
-.context-menu-button.source-action {
-  display: flex;
-  justify-content: space-between;
-  width: 100%;
-  min-width: 220px;
-  padding: 0 8px;
-  text-align: left;
-}
-
-.source-action-host {
-  max-width: 150px;
-  margin-left: 16px;
-  overflow: hidden;
-  color: var(--inkwell-muted);
-  font-size: 0.75rem;
-  font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.context-color-icon {
-  display: inline-grid;
-  place-items: center;
-  width: 18px;
-  height: 18px;
-  border-bottom: 2px solid var(--inkwell-accent);
-  font-weight: 850;
-  line-height: 1;
-}
-
-.context-menu-select,
-.context-menu-input {
-  height: 28px;
-  min-height: 28px;
-  padding: 0 7px;
-  border-color: transparent;
-  border-radius: 5px;
-  background: transparent;
-  color: var(--inkwell-text);
-  font-size: 0.82rem;
-}
-
-.context-menu-select {
-  width: 88px;
-}
-
-.context-menu-select.wide {
-  width: 132px;
-}
-
-.context-menu-input {
-  width: min(290px, calc(100vw - 42px));
-  border-color: var(--inkwell-border);
-  background: var(--inkwell-surface);
-}
-
-.context-menu-select:hover,
-.context-menu-select:focus {
-  background: var(--inkwell-surface-muted);
-  outline: none;
-}
-
-.context-menu-section-label {
-  padding: 2px 4px 0;
-  color: var(--inkwell-muted);
-  font-size: 0.72rem;
-  font-weight: 800;
-  text-transform: uppercase;
-}
-
-.context-color-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 2px;
-  min-width: 230px;
-}
-
-.context-swatch {
-  display: grid;
-  grid-template-columns: 18px minmax(0, 1fr);
-  gap: 7px;
-  align-items: center;
-  min-height: 28px;
-  padding: 0 7px;
-  border: 0;
-  border-radius: 5px;
-  background: transparent;
-  color: var(--inkwell-text);
-  font-size: 0.82rem;
-  font-weight: 650;
-  text-align: left;
-}
-
-.context-swatch:hover,
-.context-swatch:focus-visible,
-.context-swatch.active {
-  background: var(--inkwell-surface-muted);
-}
-
-.context-swatch-chip {
-  display: block;
-  width: 14px;
-  height: 14px;
-  border: 1px solid var(--inkwell-border-strong);
-  border-radius: 4px;
-}
-
-.editor {
-  min-height: 0;
-  overflow: auto;
-}
-
-.editor :deep(.tiptap) {
-  min-height: calc(100vh - 190px);
-  padding: 16px;
-}
-
-.editor :deep(.tiptap:focus) {
-  outline: none;
-}
-
-.editor :deep(.tiptap > *:first-child) {
-  margin-top: 0;
-}
-
-.editor :deep(.tiptap p),
-.editor :deep(.tiptap blockquote),
-.editor :deep(.tiptap ul),
-.editor :deep(.tiptap ol),
-.editor :deep(.tiptap pre) {
-  margin: 0 0 0.85rem;
-}
-
-.editor :deep(.tiptap h1),
-.editor :deep(.tiptap h2),
-.editor :deep(.tiptap h3),
-.editor :deep(.tiptap h4),
-.editor :deep(.tiptap h5),
-.editor :deep(.tiptap h6) {
-  margin: 0 0 0.75rem;
-  line-height: 1.22;
-}
-
-.editor :deep(.tiptap h1) {
-  font-size: 1.8rem;
-}
-
-.editor :deep(.tiptap h2) {
-  font-size: 1.55rem;
-}
-
-.editor :deep(.tiptap h3) {
-  font-size: 1.32rem;
-}
-
-.editor :deep(.tiptap h4) {
-  font-size: 1.14rem;
-}
-
-.editor :deep(.tiptap h5) {
-  font-size: 1rem;
-}
-
-.editor :deep(.tiptap h6) {
-  color: var(--inkwell-muted);
-  font-size: 0.9rem;
-  text-transform: uppercase;
-}
-
-.editor :deep(.tiptap ul),
-.editor :deep(.tiptap ol) {
-  padding-left: 1.35rem;
-}
-
-.editor :deep(.tiptap ul[data-type="taskList"]) {
-  padding-left: 0;
-  list-style: none;
-}
-
-.editor :deep(.tiptap li[data-type="taskItem"]) {
-  display: grid;
-  grid-template-columns: 22px minmax(0, 1fr);
-  gap: 4px;
-  align-items: start;
-}
-
-.editor :deep(.tiptap li[data-type="taskItem"] > label) {
-  display: grid;
-  place-items: center;
-  min-height: 1.45em;
-}
-
-.editor :deep(.tiptap li[data-type="taskItem"] input) {
-  margin: 0;
-}
-
-.editor :deep(.tiptap code) {
-  border-radius: 4px;
-  background: var(--inkwell-surface-muted);
-  padding: 0.1em 0.28em;
-  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-  font-size: 0.9em;
-}
-
-.editor :deep(.tiptap pre) {
-  overflow: auto;
-  border-radius: 6px;
-  background: #111113;
-  color: #f4f4f5;
-  padding: 12px;
-}
-
-.editor :deep(.tiptap pre code) {
-  background: transparent;
-  color: inherit;
-  padding: 0;
-}
-
-.editor :deep(.inkwell-code-cell) {
-  overflow: hidden;
-  margin: 0 0 0.85rem;
-  border: 1px solid var(--inkwell-border-strong);
-  border-radius: 8px;
-  background: #111113;
-}
-
-.editor :deep(.inkwell-code-toolbar) {
-  display: flex;
-  min-height: 36px;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  border-bottom: 1px solid rgb(255 255 255 / 12%);
-  background: #202024;
-  padding: 5px 7px 5px 10px;
-}
-
-.editor :deep(.inkwell-code-language) {
-  min-width: 0;
-  max-width: 170px;
-  border: 0;
-  background: transparent;
-  color: #e4e4e7;
-  font: 600 0.78rem/1.2 inherit;
-  outline: none;
-}
-
-.editor :deep(.inkwell-code-language option) {
-  background: #ffffff;
-  color: #18181b;
-}
-
-.editor :deep(.inkwell-code-actions) {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-}
-
-.editor :deep(.inkwell-code-run),
-.editor :deep(.inkwell-code-clear) {
-  min-height: 25px;
-  border: 1px solid rgb(255 255 255 / 18%);
-  border-radius: 5px;
-  background: rgb(255 255 255 / 8%);
-  color: #f4f4f5;
-  padding: 0 8px;
-  font: 600 0.72rem/1 inherit;
-  cursor: pointer;
-}
-
-.editor :deep(.inkwell-code-run::before) {
-  content: '▶';
-  margin-right: 5px;
-  font-size: 0.65em;
-}
-
-.editor :deep(.inkwell-code-run:disabled) {
-  cursor: wait;
-  opacity: 0.65;
-}
-
-.editor :deep(.inkwell-code-cell pre) {
-  margin: 0;
-  border-radius: 0;
-  padding: 12px;
-}
-
-.editor :deep(.inkwell-code-cell .hljs-comment),
-.editor :deep(.inkwell-code-cell .hljs-quote) {
-  color: #8b949e;
-  font-style: italic;
-}
-
-.editor :deep(.inkwell-code-cell .hljs-keyword),
-.editor :deep(.inkwell-code-cell .hljs-selector-tag),
-.editor :deep(.inkwell-code-cell .hljs-doctag) {
-  color: #ff7b72;
-}
-
-.editor :deep(.inkwell-code-cell .hljs-title),
-.editor :deep(.inkwell-code-cell .hljs-title.function_),
-.editor :deep(.inkwell-code-cell .hljs-section),
-.editor :deep(.inkwell-code-cell .hljs-type),
-.editor :deep(.inkwell-code-cell .hljs-built_in) {
-  color: #d2a8ff;
-}
-
-.editor :deep(.inkwell-code-cell .hljs-string),
-.editor :deep(.inkwell-code-cell .hljs-regexp),
-.editor :deep(.inkwell-code-cell .hljs-addition),
-.editor :deep(.inkwell-code-cell .hljs-attribute) {
-  color: #a5d6ff;
-}
-
-.editor :deep(.inkwell-code-cell .hljs-number),
-.editor :deep(.inkwell-code-cell .hljs-literal),
-.editor :deep(.inkwell-code-cell .hljs-symbol),
-.editor :deep(.inkwell-code-cell .hljs-bullet) {
-  color: #79c0ff;
-}
-
-.editor :deep(.inkwell-code-cell .hljs-variable),
-.editor :deep(.inkwell-code-cell .hljs-template-variable),
-.editor :deep(.inkwell-code-cell .hljs-params),
-.editor :deep(.inkwell-code-cell .hljs-meta) {
-  color: #ffa657;
-}
-
-.editor :deep(.inkwell-code-cell .hljs-attr),
-.editor :deep(.inkwell-code-cell .hljs-property),
-.editor :deep(.inkwell-code-cell .hljs-selector-class),
-.editor :deep(.inkwell-code-cell .hljs-selector-id) {
-  color: #7ee787;
-}
-
-.editor :deep(.inkwell-code-cell .hljs-deletion) {
-  color: #ffa198;
-  background: rgb(248 81 73 / 15%);
-}
-
-.editor :deep(.inkwell-code-cell .hljs-emphasis) {
-  font-style: italic;
-}
-
-.editor :deep(.inkwell-code-cell .hljs-strong) {
-  font-weight: 700;
-}
-
-.editor :deep(.inkwell-code-output) {
-  border-top: 1px solid var(--inkwell-border-strong);
-  background: #fafafa;
-}
-
-.editor :deep(.inkwell-code-runner) {
-  display: block;
-  width: 100%;
-  height: 72px;
-  border: 0;
-  background: transparent;
-}
-
-.editor :deep(.tiptap hr) {
-  margin: 1.1rem 0;
-  border: 0;
-  border-top: 1px solid var(--inkwell-border-strong);
-}
-
-.editor :deep(.tiptap blockquote) {
-  padding-left: 12px;
-  border-left: 3px solid var(--inkwell-accent);
-  color: var(--inkwell-text);
-}
-
-.editor :deep(.tiptap a) {
-  color: var(--inkwell-accent-strong);
-  overflow-wrap: anywhere;
-}
-
-.editor :deep(.tiptap img) {
-  max-width: 100%;
-  height: auto;
-  display: block;
-  border-radius: 4px;
-}
-
-.editor :deep(.tiptap .inkwell-image-wrapper) {
-  margin: 0 0 0.85rem;
-  max-width: 100%;
-  position: relative;
-  width: fit-content;
-}
-
-.editor :deep(.tiptap .inkwell-image-wrapper.is-selected) {
-  outline: 2px solid var(--inkwell-accent);
-  outline-offset: 3px;
-}
-
-.editor :deep(.tiptap .inkwell-image-wrapper.is-selected[data-inkwell-block-id]::before) {
-  background: var(--inkwell-accent);
-  border-radius: 4px;
-  color: var(--inkwell-surface);
-  content: attr(data-inkwell-block-id);
-  font-size: 0.68rem;
-  left: 0;
-  line-height: 1.25;
-  max-width: min(100%, 28ch);
-  overflow: hidden;
-  padding: 2px 5px;
-  position: absolute;
-  text-overflow: ellipsis;
-  top: -1.45rem;
-  white-space: nowrap;
-}
-
-.editor :deep(.tiptap .inkwell-image-wrapper .inkwell-image-resize-handle) {
-  background: var(--inkwell-accent);
-  border: 2px solid var(--inkwell-surface);
-  border-radius: 999px;
-  bottom: -7px;
-  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.22);
-  cursor: nwse-resize;
-  display: none;
-  height: 12px;
-  position: absolute;
-  right: -7px;
-  width: 12px;
-}
-
-.editor :deep(.tiptap .inkwell-image-wrapper.is-selected .inkwell-image-resize-handle) {
-  display: block;
-}
-
-.editor :deep(.tiptap .inkwell-image-wrapper.is-error),
-.editor :deep(.tiptap .inkwell-image-wrapper.is-uploading) {
-  border: 1px solid var(--inkwell-border);
-  border-radius: 4px;
-  background: var(--inkwell-surface-muted);
-  color: var(--inkwell-muted);
-  padding: 10px;
-  font-size: 0.86rem;
-}
-
-.editor :deep(.tiptap .inkwell-image-wrapper a) {
-  word-break: break-all;
-}
-
-.editor :deep(.tiptap .inkwell-audio-wrapper) {
-  max-width: 640px;
-  margin: 0 0 0.85rem;
-}
-
-.editor :deep(.tiptap .inkwell-audio-wrapper audio) {
-  display: block;
-  width: 100%;
-}
-
-.editor :deep(.tiptap .inkwell-audio-wrapper.is-error),
-.editor :deep(.tiptap .inkwell-audio-wrapper.is-uploading) {
-  border: 1px solid var(--inkwell-border);
-  border-radius: 4px;
-  background: var(--inkwell-surface-muted);
-  color: var(--inkwell-muted);
-  padding: 10px;
-  font-size: 0.86rem;
-}
-
-.editor :deep(.tiptap .inkwell-audio-wrapper a) {
-  word-break: break-all;
-}
-
-.editor :deep(.tiptap div[data-youtube-video]) {
-  width: 100%;
-  max-width: 640px;
-  aspect-ratio: 16 / 9;
-  margin: 0 0 0.85rem;
-  overflow: hidden;
-  border-radius: 4px;
-  background: #111113;
-}
-
-.editor :deep(.tiptap div[data-youtube-video] iframe) {
-  display: block;
-  width: 100% !important;
-  height: 100% !important;
-  border: 0;
-}
-
-</style>
+<style src="./sidepanel.css"></style>

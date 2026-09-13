@@ -82,6 +82,25 @@ describe('notionBlockToTiptapNode', () => {
     });
   });
 
+  it('splits long code text into Notion-safe rich-text chunks', () => {
+    const text = `${'a'.repeat(1_999)}😀${'b'.repeat(2_100)}`;
+    const [block] = tiptapDocumentToNotionBlocks({
+      type: 'doc',
+      content: [{
+        type: 'codeBlock',
+        attrs: { language: 'json' },
+        content: [{ type: 'text', text }],
+      }],
+    });
+    const chunks = block.code.rich_text.map((item: { text: { content: string } }) =>
+      item.text.content,
+    );
+
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((chunk: string) => chunk.length <= 2_000)).toBe(true);
+    expect(chunks.join('')).toBe(text);
+  });
+
   it('converts divider block to horizontalRule node', () => {
     const doc = notionBlocksToTiptapDocument([{ type: 'divider' }]);
     expect(doc.content[0]).toMatchObject({ type: 'horizontalRule' });
@@ -168,8 +187,88 @@ describe('notionBlockToTiptapNode', () => {
     expect(doc.content[0]).toMatchObject({ type: 'paragraph' });
   });
 
+  it('converts a table and its headers to TipTap table nodes', () => {
+    const result = notionBlocksToTiptapDocumentStrict([{
+      id: 'table-1',
+      type: 'table',
+      table: {
+        table_width: 2,
+        has_column_header: true,
+        has_row_header: false,
+        children: [
+          {
+            type: 'table_row',
+            table_row: { cells: [richText('Name'), richText('Status')] },
+          },
+          {
+            type: 'table_row',
+            table_row: { cells: [richText('Launch'), richText('Ready')] },
+          },
+        ],
+      },
+    }]);
+
+    expect(result?.content[0]).toMatchObject({
+      type: 'table',
+      content: [
+        {
+          type: 'tableRow',
+          content: [
+            { type: 'tableHeader', content: [{ type: 'paragraph' }] },
+            { type: 'tableHeader', content: [{ type: 'paragraph' }] },
+          ],
+        },
+        {
+          type: 'tableRow',
+          content: [
+            { type: 'tableCell', content: [{ type: 'paragraph' }] },
+            { type: 'tableCell', content: [{ type: 'paragraph' }] },
+          ],
+        },
+      ],
+    });
+  });
+
+  it('serializes a TipTap table as a native Notion table with rows', () => {
+    const [block] = tiptapDocumentToNotionBlocks({
+      type: 'doc',
+      content: [{
+        type: 'table',
+        content: [
+          {
+            type: 'tableRow',
+            content: [
+              { type: 'tableHeader', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Name' }] }] },
+              { type: 'tableHeader', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Status' }] }] },
+            ],
+          },
+          {
+            type: 'tableRow',
+            content: [
+              { type: 'tableCell', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Launch' }] }] },
+              { type: 'tableCell', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Ready', marks: [{ type: 'bold' }] }] }] },
+            ],
+          },
+        ],
+      }],
+    });
+
+    expect(block).toMatchObject({
+      type: 'table',
+      table: {
+        table_width: 2,
+        has_column_header: true,
+        has_row_header: false,
+        children: [
+          { type: 'table_row', table_row: { cells: [[{ text: { content: 'Name' } }], [{ text: { content: 'Status' } }]] } },
+          { type: 'table_row', table_row: { cells: [[{ text: { content: 'Launch' } }], [{ text: { content: 'Ready' }, annotations: { bold: true } }]] } },
+        ],
+      },
+    });
+  });
+
   it('returns null for unknown block types (strict mode)', () => {
-    const result = notionBlocksToTiptapDocumentStrict([{ type: 'table' }]);
+    const result = notionBlocksToTiptapDocumentStrict([{ type: 'bookmark' }]);
     expect(result).toBeNull();
   });
 });

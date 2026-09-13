@@ -25,6 +25,22 @@ export function createProjectDatabaseHelpers({
   replaceManagedBlocks,
   tiptapDocumentToNotionBlocks,
 }) {
+  async function loadContentBlocks(store, parentBlockId) {
+    const blocks = await listAllBlockChildren(store, parentBlockId);
+
+    return Promise.all(blocks.map(async (block) => {
+      if (block.type !== 'table' || !block.id) return block;
+      const rows = await listAllBlockChildren(store, block.id);
+      return {
+        ...block,
+        table: {
+          ...(block.table ?? {}),
+          children: rows,
+        },
+      };
+    }));
+  }
+
   async function ensureProjectDatabase(store, { selectedParentPageId } = {}) {
     store.projectPages ??= {};
     store.projectBlocks ??= {};
@@ -628,7 +644,7 @@ export function createProjectDatabaseHelpers({
   }
 
   async function importProjectState(store, projectPage, project, stateBlock) {
-    const blocks = await listAllBlockChildren(store, stateBlock.id).catch(() => []);
+    const blocks = await loadContentBlocks(store, stateBlock.id).catch(() => []);
     const content = blocks.length ? notionBlocksToTiptapDocument(blocks) : emptyDocument();
     store.projectBlocks[projectStateKey(project.id)] = {
       blockId: stateBlock.id,
@@ -647,7 +663,7 @@ export function createProjectDatabaseHelpers({
   async function pageFromThreadBlock(store, project, projectPage, threadBlock) {
     const id = `page-${project.id}-${threadBlock.id}`;
     const title = toggleTitle(threadBlock) || 'Untitled Page';
-    const contentBlocks = await listAllBlockChildren(store, threadBlock.id).catch(() => []);
+    const contentBlocks = await loadContentBlocks(store, threadBlock.id).catch(() => []);
     const content = contentBlocks.length ? notionBlocksToTiptapDocument(contentBlocks) : emptyDocument();
     const timestamp = threadBlock.last_edited_time ?? project.updatedAt;
 
@@ -740,7 +756,7 @@ export function createProjectDatabaseHelpers({
       container.last_edited_time !== previous.lastEditedTime;
 
     if (hasRemoteEdit) {
-      const blocks = await listAllBlockChildren(store, container.id);
+      const blocks = await loadContentBlocks(store, container.id);
       const content = blocks.length ? notionBlocksToTiptapDocument(blocks) : emptyDocument();
       store.projectBlocks[key] = {
         ...store.projectBlocks[key],
@@ -862,7 +878,7 @@ export function createProjectDatabaseHelpers({
       return null;
     }
 
-    const blocks = await listAllBlockChildren(store, stored.blockId);
+    const blocks = await loadContentBlocks(store, stored.blockId);
     return blocks.length ? notionBlocksToTiptapDocument(blocks) : emptyDocument();
   }
 

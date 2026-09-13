@@ -79,3 +79,57 @@ describe('media sync identity', () => {
     });
   });
 });
+
+describe('table sync hydration', () => {
+  it('loads nested Notion table rows before importing a page', async () => {
+    const store = { blockMappings: { 'page-1': [] } };
+    const listAllBlockChildren = vi.fn(async (_store, blockId) => {
+      if (blockId === 'notion-page-1') {
+        return [{
+          id: 'notion-table-1',
+          type: 'table',
+          table: {
+            table_width: 2,
+            has_column_header: true,
+            has_row_header: false,
+          },
+        }];
+      }
+
+      return [{
+        id: 'notion-row-1',
+        type: 'table_row',
+        table_row: {
+          cells: [
+            [{ plain_text: 'Topic', annotations: {} }],
+            [{ plain_text: 'Owner', annotations: {} }],
+          ],
+        },
+      }];
+    });
+
+    const content = await importManagedBlocks({
+      store,
+      page: { id: 'page-1', notionPageId: 'notion-page-1' },
+      listAllBlockChildren,
+      hash: (value: string) => value,
+    });
+
+    expect(listAllBlockChildren).toHaveBeenCalledWith(store, 'notion-table-1');
+    expect(content?.content?.[0]).toMatchObject({
+      type: 'table',
+      attrs: { inkwellBlockId: expect.stringMatching(/^inkwell-block-/) },
+      content: [{
+        type: 'tableRow',
+        content: [
+          { type: 'tableHeader', content: [{ type: 'paragraph', content: [{ text: 'Topic' }] }] },
+          { type: 'tableHeader', content: [{ type: 'paragraph', content: [{ text: 'Owner' }] }] },
+        ],
+      }],
+    });
+    expect(store.blockMappings['page-1'][0]).toMatchObject({
+      notionBlockId: 'notion-table-1',
+      kind: 'table',
+    });
+  });
+});

@@ -1427,22 +1427,57 @@ async function appendManagedBlocks(store, notionPageId, notionBlocks, position) 
   const createdBlocks = [];
 
   for (const batch of chunks(notionBlocks, 100)) {
+    const { requestBlocks, tableRowOverflows } = prepareTableBlocksForAppend(batch);
     let results;
     try {
       const response = await notionRequest(store, `/blocks/${notionPageId}/children`, {
         method: 'PATCH',
-        body: { children: batch, ...(position ? { position } : {}) },
+        body: { children: requestBlocks, ...(position ? { position } : {}) },
       });
       results = response.results;
     } catch {
-      results = await appendBlocksWithFallback(store, notionPageId, batch, position);
+      results = await appendBlocksWithFallback(store, notionPageId, requestBlocks, position);
     }
+
+    await appendOverflowTableRows(store, results, tableRowOverflows);
 
     createdBlocks.push(...results);
     position = positionAfterCreatedBlocks(position, results);
   }
 
   return createdBlocks;
+}
+
+function prepareTableBlocksForAppend(blocks) {
+  const tableRowOverflows = new Map();
+  const requestBlocks = blocks.map((block, index) => {
+    const rows = block?.type === 'table' ? block.table?.children ?? [] : [];
+    if (rows.length <= 100) return block;
+    tableRowOverflows.set(index, rows.slice(100));
+    return {
+      ...block,
+      table: {
+        ...block.table,
+        children: rows.slice(0, 100),
+      },
+    };
+  });
+
+  return { requestBlocks, tableRowOverflows };
+}
+
+async function appendOverflowTableRows(store, createdBlocks, tableRowOverflows) {
+  for (const [index, rows] of tableRowOverflows) {
+    const tableId = createdBlocks[index]?.id;
+    if (!tableId) throw new Error('Notion did not return the created table block.');
+
+    for (const batch of chunks(rows, 100)) {
+      await notionRequest(store, `/blocks/${tableId}/children`, {
+        method: 'PATCH',
+        body: { children: batch },
+      });
+    }
+  }
 }
 
 async function appendBlocksWithFallback(store, notionPageId, blocks, position) {
@@ -1454,13 +1489,12 @@ async function appendBlocksWithFallback(store, notionPageId, blocks, position) {
         method: 'PATCH',
         body: { children: [block], ...(position ? { position } : {}) },
       });
-      results.push(...response.results);
+      results.push(response.results?.[0]);
       position = positionAfterCreatedBlocks(position, response.results);
     } catch (error) {
-      // A Notion file upload is the only durable copy of a dropped local file.
-      // Never turn a transient attach failure into a permanent placeholder;
-      // fail the sync job so the queue retries the original upload instead.
-      if (isNotionFileUploadBlock(block)) {
+      // File uploads and tables cannot be represented by the paragraph fallback
+      // without losing data, so leave them queued for a lossless retry.
+      if (isNotionFileUploadBlock(block) || block?.type === 'table') {
         throw error;
       }
 
@@ -1470,10 +1504,11 @@ async function appendBlocksWithFallback(store, notionPageId, blocks, position) {
           method: 'PATCH',
           body: { children: [fallback], ...(position ? { position } : {}) },
         });
-        results.push(...response.results);
+        results.push(response.results?.[0]);
         position = positionAfterCreatedBlocks(position, response.results);
       } catch {
         // skip block rather than aborting the whole page
+        results.push(undefined);
       }
     }
   }
@@ -1525,7 +1560,7 @@ function updateBodyFromNotionBlock(block) {
 }
 
 function positionAfterCreatedBlocks(position, createdBlocks) {
-  const lastBlock = createdBlocks?.[createdBlocks.length - 1];
+  const lastBlock = createdBlocks?.slice().reverse().find(Boolean);
   return lastBlock?.id ? { type: 'after_block', after_block: { id: lastBlock.id } } : position;
 }
 

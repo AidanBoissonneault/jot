@@ -109,7 +109,7 @@ vi.stubGlobal('browser', {
     onMessage: {
       addListener: vi.fn(),
     },
-    sendMessage: vi.fn(),
+    sendMessage: vi.fn(async () => undefined),
   },
   storage: {
     local: {
@@ -123,6 +123,8 @@ vi.stubGlobal('browser', {
   },
   tabs: {
     create: vi.fn(),
+    query: vi.fn(async () => []),
+    sendMessage: vi.fn(async () => true),
   },
 });
 

@@ -1,6 +1,7 @@
-import { setActivePinia, createPinia } from 'pinia';
+import { createPinia, disposePinia, getActivePinia, setActivePinia } from 'pinia';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { nextTick } from 'vue';
+import { websiteHighlightsFromProjectState } from '@/src/extensions/sourceRegistry';
 import { notionClient } from '@/src/services/notionClient';
 import {
   compactPendingSyncOps,
@@ -9,6 +10,7 @@ import {
 } from '@/src/services/syncQueue';
 import { useInkwellStore } from '@/src/stores/inkwell';
 import type { DocumentContent, Project, ProjectPage, SyncConfig } from '@/src/types/capture';
+import type { WebsiteHighlight } from '@/src/types/messages';
 import type { SyncBlockOperation } from '@/src/types/sync';
 import { readBrowserStorage, resetBrowserStorage } from './setup';
 import { doc, paragraph, image } from './helpers/docBuilders';
@@ -46,8 +48,25 @@ const connectedConfig: SyncConfig = {
   authenticated: true,
   connected: true,
 };
+const websiteHighlight: WebsiteHighlight = {
+  id: 'highlight-1',
+  url: 'https://example.com/article',
+  text: 'a precise passage',
+  color: 'yellow',
+  createdAt: '2026-09-13T12:00:00.000Z',
+  anchor: {
+    startXPath: '/html[1]/body[1]/p[1]/text()[1]',
+    startOffset: 0,
+    endXPath: '/html[1]/body[1]/p[1]/text()[1]',
+    endOffset: 17,
+    blockXPath: '/html[1]/body[1]/p[1]',
+    blockText: 'a precise passage',
+  },
+};
 
 beforeEach(() => {
+  const activePinia = getActivePinia();
+  if (activePinia) disposePinia(activePinia);
   setActivePinia(createPinia());
   resetBrowserStorage({
     activePageIdsByProject: { 'project-inkwell': 'page-inkwell' },
@@ -94,7 +113,12 @@ describe('optimistic project creation', () => {
   test('reconciles temp ids and preserves a project switch during sync', async () => {
     const { projectSync, store } = await setupProjectSyncTest('Roadmap');
     const tempProjectId = store.currentProjectId;
+    vi.mocked(browser.runtime.sendMessage).mockClear();
     await store.selectProject('project-inkwell');
+
+    expect(browser.runtime.sendMessage).toHaveBeenCalledWith({
+      type: 'inkwell.refreshWebsiteHighlights',
+    });
 
     projectSync.resolve(jsonResponse({ status: 'saved' }));
     await waitFor(() =>
@@ -121,6 +145,82 @@ describe('optimistic project creation', () => {
     expect(store.currentProject?.name).toBe('Broken');
     expect(store.projects.some((project) => project.id === tempProjectId)).toBe(false);
     expect(await notionClient.pendingSyncEventCount()).toBeGreaterThan(0);
+  });
+});
+
+describe('optimistic startup', () => {
+  test('makes the local workspace usable while session refresh is still pending', async () => {
+    const sessionRefresh = deferred<Response>();
+    const fetchMock = vi.fn(() => sessionRefresh.promise);
+    vi.stubGlobal('fetch', fetchMock);
+    const store = useInkwellStore();
+
+    const initialization = store.initialize();
+
+    await waitFor(() => {
+      expect(store.isLoading).toBe(false);
+      expect(store.currentProjectId).toBe(baseProject.id);
+      expect(store.currentPage?.id).toBe(basePage.id);
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    sessionRefresh.resolve(jsonResponse({
+      authenticated: false,
+      connected: false,
+    }));
+    await initialization;
+  });
+});
+
+describe('local-first website highlights', () => {
+  test('persists rapid highlights and queues sync without waiting for the network', async () => {
+    const fetchMock = vi.fn(() => new Promise<Response>(() => undefined));
+    vi.stubGlobal('fetch', fetchMock);
+    const secondHighlight = {
+      ...websiteHighlight,
+      id: 'highlight-2',
+      text: 'another passage',
+    };
+
+    const [firstProject, secondProject] = await Promise.all([
+      notionClient.createWebsiteHighlight(websiteHighlight),
+      notionClient.createWebsiteHighlight(secondHighlight),
+    ]);
+
+    expect(firstProject?.syncState).toBe('saving');
+    expect(secondProject?.syncState).toBe('saving');
+    expect(fetchMock).not.toHaveBeenCalled();
+    const [storedProject] = readBrowserStorage().projects as Project[];
+    expect(websiteHighlightsFromProjectState(storedProject.stateContent))
+      .toEqual([websiteHighlight, secondHighlight]);
+    const queued = await listPendingProjectSyncEvents();
+    expect(queued).toHaveLength(1);
+    expect(websiteHighlightsFromProjectState(queued[0].payload.project.stateContent))
+      .toEqual([websiteHighlight, secondHighlight]);
+  });
+
+  test('removes a highlight locally before its queued sync is delivered', async () => {
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(() => undefined)));
+    await notionClient.createWebsiteHighlight(websiteHighlight);
+
+    const project = await notionClient.removeWebsiteHighlights(
+      [websiteHighlight.id],
+      websiteHighlight.url,
+    );
+
+    expect(project?.syncState).toBe('saving');
+    const [storedProject] = readBrowserStorage().projects as Project[];
+    expect(websiteHighlightsFromProjectState(storedProject.stateContent)).toEqual([]);
+    const queued = await listPendingProjectSyncEvents();
+    expect(queued).toHaveLength(1);
+    expect(websiteHighlightsFromProjectState(queued[0].payload.project.stateContent)).toEqual([]);
+
+    const alreadyRemoved = await notionClient.removeWebsiteHighlights(
+      [websiteHighlight.id],
+      websiteHighlight.url,
+    );
+    expect(alreadyRemoved).not.toBeNull();
+    expect(websiteHighlightsFromProjectState(alreadyRemoved!.stateContent)).toEqual([]);
   });
 });
 
@@ -513,17 +613,69 @@ describe('page title and content saves', () => {
     saveRequest.resolve(jsonResponse({ queued: true, versions: { 'page-inkwell': 1 } }));
   });
 
-  test('content save shows saved locally after IndexedDB queue write', async () => {
+  test('content save remains pending until Notion confirms the sync', async () => {
     const { fetchMock, store } = await setupTimerFetchStoreTest();
     await store.saveCurrentPageContent(docWithText('local state is enough'), {
       preserveLocalContent: true,
     });
 
-    expect(store.saveStatus).toBe('saved');
-    expect(store.currentPage?.syncState).toBe('saved');
+    expect(store.isSavingLocally).toBe(false);
+    expect(store.saveStatus).toBe('saving');
+    expect(store.currentPage?.syncState).toBe('saving');
     expect((await listPendingSyncOps()).length).toBeGreaterThan(0);
     await vi.advanceTimersByTimeAsync(9_999);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  test('tracks local persistence separately from the pending Notion sync', async () => {
+    const store = useInkwellStore();
+    await seedStore(store);
+    const savedPage = {
+      ...basePage,
+      content: docWithText('locally durable'),
+      syncState: 'saving' as const,
+    };
+    const localSave = deferred<ProjectPage>();
+    vi.spyOn(notionClient, 'updateProjectPage').mockReturnValueOnce(localSave.promise);
+
+    const save = store.saveCurrentPageContent(savedPage.content, {
+      preserveLocalContent: true,
+    });
+    expect(store.isSavingLocally).toBe(true);
+
+    localSave.resolve(savedPage);
+    await save;
+
+    expect(store.isSavingLocally).toBe(false);
+    expect(store.saveStatus).toBe('saving');
+  });
+
+  test('reconciles a missed live sync event from the server status', async () => {
+    const pendingPage = {
+      ...basePage,
+      notionPageId: 'notion-page-inkwell',
+      syncState: 'saving' as const,
+    };
+    resetBrowserStorage({
+      activePageIdsByProject: { 'project-inkwell': 'page-inkwell' },
+      currentProjectId: 'project-inkwell',
+      hasMigratedCapturesToPages: true,
+      pages: [pendingPage],
+      projects: [baseProject],
+      syncConfig: connectedConfig,
+    });
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({
+      status: 'synced',
+      localVersion: 3,
+      syncedVersion: 3,
+      notionBlockId: 'notion-page-inkwell',
+    })));
+
+    const page = await notionClient.waitForProjectPageSync(pendingPage.id);
+
+    expect(page?.syncState).toBe('saved');
+    expect(page?.knownSyncVersion).toBe(3);
+    expect((readBrowserStorage().pages as ProjectPage[])[0].syncState).toBe('saved');
   });
 
   test('local queue waits 10 seconds after the latest edit before pushing compacted updates', async () => {

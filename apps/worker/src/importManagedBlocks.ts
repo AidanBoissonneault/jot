@@ -14,7 +14,11 @@ export async function importManagedBlocks({
   listAllBlockChildren,
   hash = defaultHash,
 }) {
-  const children = await listAllBlockChildren(store, page.notionPageId);
+  const children = await loadBlocksWithTableRows(
+    store,
+    page.notionPageId,
+    listAllBlockChildren,
+  );
   const imported = notionBlocksToTiptapDocumentStrict(children);
 
   if (!imported) {
@@ -30,6 +34,22 @@ export async function importManagedBlocks({
   });
 
   return mapped.content?.length ? mapped : null;
+}
+
+async function loadBlocksWithTableRows(store, parentBlockId, listAllBlockChildren) {
+  const blocks = await listAllBlockChildren(store, parentBlockId);
+
+  return Promise.all(blocks.map(async (block) => {
+    if (block.type !== 'table' || !block.id) return block;
+    const rows = await listAllBlockChildren(store, block.id);
+    return {
+      ...block,
+      table: {
+        ...(block.table ?? {}),
+        children: rows,
+      },
+    };
+  }));
 }
 
 function rebuildImportedBlockMappings({

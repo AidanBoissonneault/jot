@@ -140,6 +140,13 @@ export type SyncEnqueueResponse = {
   opVersions?: Record<string, number>;
 };
 
+export type SyncStatusResponse = {
+  status: 'pending' | 'syncing' | 'synced' | 'failed';
+  localVersion: number;
+  syncedVersion?: number;
+  notionBlockId?: string | null;
+};
+
 
 export type SyncEventMessage =
   | { status: 'synced'; pageId: string; notionBlockId?: string | null; version?: number }
