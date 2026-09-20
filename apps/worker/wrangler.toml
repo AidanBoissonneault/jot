@@ -4,6 +4,10 @@ compatibility_date = "2025-05-01"
 compatibility_flags = ["nodejs_compat"]
 workers_dev = true
 
+[observability.logs]
+enabled = true
+invocation_logs = true
+
 [[durable_objects.bindings]]
 name = "SYNC_EVENTS"
 class_name = "SyncEventsDO"

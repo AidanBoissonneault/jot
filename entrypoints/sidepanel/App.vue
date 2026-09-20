@@ -69,6 +69,17 @@ import type {
 
 const INKWELL_DRAG_MIME = 'application/x-inkwell-capture';
 const INKWELL_HEADING_DRAG_MIME = 'application/x-inkwell-heading-capture';
+const CATEGORY_COLORS_KEY = 'inkwellCategoryColors';
+const categoryColorOptions = [
+  '#2563eb',
+  '#7c3aed',
+  '#c026d3',
+  '#dc2626',
+  '#d97706',
+  '#16835f',
+  '#0f766e',
+  '#4b5563',
+] as const;
 const blockTypes = [
   { label: 'Paragraph', value: 'paragraph' },
   { label: 'Heading 1', value: 'heading-1' },
@@ -124,7 +135,11 @@ const parentPageTitleDraft = ref('');
 const uiMessage = ref('');
 const hasAcceptedLegalTerms = ref(false);
 const isLegalAcceptanceLoaded = ref(false);
-const activeTab = ref<'editor' | 'projects' | 'media' | 'sync' | 'settings'>('editor');
+const activeTab = ref<'editor' | 'settings'>('editor');
+const activeTitleMenu = ref<'project' | 'page' | 'category' | null>(null);
+const isProjectNameEditing = ref(false);
+const projectNameInputRef = ref<HTMLInputElement | null>(null);
+const categoryColors = ref<Record<string, string>>({});
 const interfaceScale = ref(DEFAULT_INTERFACE_SCALE);
 const editorToolbarMode = ref<'style' | 'insert' | 'controls'>('style');
 const editorContextMenuRef = ref<HTMLElement | null>(null);
@@ -145,6 +160,7 @@ const activeEditorMenu = ref<
   | 'link'
   | 'lists'
   | 'blocks'
+  | 'media'
   | 'history'
   | 'record'
   | null
@@ -383,20 +399,6 @@ const editor = useEditor({
   },
 });
 
-const currentPageModel = computed({
-  get: () => store.currentPage?.id ?? '',
-  set: (pageId: string) => {
-    void selectPage(pageId);
-  },
-});
-
-const currentProjectModel = computed({
-  get: () => store.currentProjectId,
-  set: (projectId: string) => {
-    void selectProject(projectId);
-  },
-});
-
 const saveLabel = computed(() => {
   if (store.pullMessage) {
     return store.pullMessage;
@@ -491,14 +493,6 @@ const canLoginWithNotion = computed(
   () => isLegalAcceptanceLoaded.value && hasAcceptedLegalTerms.value && !isSigningIn.value,
 );
 
-const tabs = [
-  { id: 'editor', label: 'Editor', icon: ['far', 'pen-to-square'] },
-  { id: 'projects', label: 'Projects', icon: ['fas', 'folder-tree'] },
-  { id: 'media', label: 'Media', icon: ['fas', 'photo-film'] },
-  { id: 'sync', label: 'Sync', icon: ['fas', 'cloud-arrow-up'] },
-  { id: 'settings', label: 'Settings', icon: ['fas', 'gear'] },
-] as const;
-
 const interfaceScaleLabel = computed(() => {
   if (interfaceScale.value < 100) {
     return 'Compact';
@@ -527,6 +521,7 @@ const activeToolbarItems = computed(() => {
       { id: 'link', label: 'Link', icon: ['fas', 'link'], title: 'Link' },
       { id: 'lists', label: 'Lists', icon: ['fas', 'list-ul'], title: 'Lists' },
       { id: 'blocks', label: 'Blocks', icon: ['fas', 'quote-left'], title: 'Blocks and divider' },
+      { id: 'media', label: 'Media', icon: ['fas', 'photo-film'], title: 'Add media' },
       { id: 'record', label: 'Record', icon: ['fas', 'microphone'], title: 'Record audio note' },
     ] as const;
   }
@@ -557,10 +552,31 @@ const workspaceLabel = computed(() =>
 );
 
 const contextLabel = computed(() => {
-  const project = store.currentProject?.name ?? 'No project';
-  const page = store.currentPage?.title ?? 'No page';
-  return `${project} / ${page}`;
+  return store.currentProject?.name ?? 'No project';
 });
+
+const knownCategories = computed(() => {
+  const categories = new Map<string, string>();
+
+  for (const project of store.projects) {
+    const name = project.category?.trim();
+    if (name) {
+      categories.set(normalizeCategoryName(name), name);
+    }
+  }
+
+  return [...categories.values()].map((name) => ({
+    name,
+    color: colorForCategory(name),
+  }));
+});
+
+const currentCategoryColor = computed(() => colorForCategory(projectCategoryDraft.value));
+
+const currentCategoryStyle = computed(() => ({
+  backgroundColor: currentCategoryColor.value,
+  borderColor: currentCategoryColor.value,
+}));
 
 const parentPageLabel = computed(() =>
   store.syncConfig.selectedParentPageTitle ||
@@ -631,6 +647,7 @@ onMounted(() => {
   document.addEventListener('keydown', handleEditorContextMenuKeydown);
   void loadLegalAcceptance();
   void loadPreferences();
+  void loadCategoryColors();
   void initializePanel();
 });
 
@@ -735,7 +752,7 @@ watch(
 watch(
   () => store.syncConfig.connected,
   (connected) => {
-    if (connected && activeTab.value === 'sync') {
+    if (connected && activeTab.value === 'settings') {
       activeTab.value = 'editor';
     }
   },
@@ -746,7 +763,7 @@ watch(
   (tab) => {
     hideEditorContextMenu();
 
-    if (tab === 'sync' && store.syncConfig.connected) {
+    if (tab === 'settings' && store.syncConfig.connected) {
       void store.loadNotionParentPages(parentPageSearchDraft.value);
     }
   },
@@ -764,6 +781,85 @@ async function loadLegalAcceptance() {
 async function loadPreferences() {
   const preferences = await loadUserPreferences();
   interfaceScale.value = preferences.interfaceScale;
+}
+
+async function loadCategoryColors() {
+  const stored = await browser.storage.local.get(CATEGORY_COLORS_KEY);
+  const value = stored[CATEGORY_COLORS_KEY];
+
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    categoryColors.value = Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .filter((entry): entry is [string, string] =>
+          typeof entry[1] === 'string' && categoryColorOptions.includes(entry[1] as typeof categoryColorOptions[number]),
+        ),
+    );
+  }
+}
+
+function normalizeCategoryName(value: string) {
+  return value.trim().toLocaleLowerCase();
+}
+
+function colorForCategory(value: string) {
+  const key = normalizeCategoryName(value);
+  if (!key) {
+    return '#6b6f76';
+  }
+
+  const savedColor = categoryColors.value[key];
+  if (savedColor) {
+    return savedColor;
+  }
+
+  let hash = 0;
+  for (const character of key) {
+    hash = ((hash << 5) - hash + character.charCodeAt(0)) | 0;
+  }
+
+  return categoryColorOptions[Math.abs(hash) % categoryColorOptions.length];
+}
+
+async function chooseCategoryColor(color: typeof categoryColorOptions[number]) {
+  const key = normalizeCategoryName(projectCategoryDraft.value);
+  if (!key) {
+    return;
+  }
+
+  categoryColors.value = { ...categoryColors.value, [key]: color };
+  await browser.storage.local.set({ [CATEGORY_COLORS_KEY]: categoryColors.value });
+}
+
+async function selectCategory(category: string) {
+  projectCategoryDraft.value = category;
+  await saveProjectMetadata();
+  activeTitleMenu.value = null;
+}
+
+async function commitCategory() {
+  projectCategoryDraft.value = projectCategoryDraft.value.trim();
+  await saveProjectMetadata();
+  activeTitleMenu.value = null;
+}
+
+async function beginProjectNameEdit() {
+  if (!store.currentProject || store.isLoading) {
+    return;
+  }
+
+  isProjectNameEditing.value = true;
+  await nextTick();
+  projectNameInputRef.value?.focus();
+  projectNameInputRef.value?.select();
+}
+
+async function finishProjectNameEdit() {
+  if (!isProjectNameEditing.value) {
+    return;
+  }
+
+  await renameProject();
+  isProjectNameEditing.value = false;
 }
 
 function previewInterfaceScale(event: Event) {
@@ -810,6 +906,7 @@ async function selectPage(pageId: string) {
   await saveEditorContentInBackground();
   void notionClient.flushPendingSyncOps({ force: true }).catch(() => undefined);
   await store.selectPage(pageId);
+  activeTitleMenu.value = null;
 }
 
 async function selectProject(projectId: string) {
@@ -820,6 +917,7 @@ async function selectProject(projectId: string) {
   await saveEditorContentInBackground();
   void notionClient.flushPendingSyncOps({ force: true }).catch(() => undefined);
   await store.selectProject(projectId);
+  activeTitleMenu.value = null;
 }
 
 async function createProject() {
@@ -827,6 +925,7 @@ async function createProject() {
   const name = newProjectNameDraft.value.trim() || 'Untitled Project';
   await store.createProject(name);
   newProjectNameDraft.value = '';
+  activeTitleMenu.value = null;
   activeTab.value = 'editor';
 }
 
@@ -879,6 +978,7 @@ async function archiveProject() {
 async function createPage() {
   await flushEditorContent();
   await store.createPage();
+  activeTitleMenu.value = null;
 }
 
 async function renamePage() {
@@ -966,7 +1066,7 @@ async function logout() {
   window.clearInterval(sessionPollTimer);
   isSigningIn.value = false;
   await store.logout();
-  activeTab.value = 'sync';
+  activeTab.value = 'settings';
 }
 
 function openLinkTools() {
@@ -974,9 +1074,18 @@ function openLinkTools() {
 }
 
 function setEditorToolbarMode(mode: typeof editorToolbarModes[number]['id']) {
+  if (mode === 'insert' && editorToolbarMode.value === 'insert') {
+    activeEditorMenu.value = activeEditorMenu.value === 'media' ? null : 'media';
+    return;
+  }
+
   editorToolbarMode.value = mode;
   activeEditorMenu.value =
-    mode === 'insert' ? 'link' : mode === 'controls' ? 'history' : 'type';
+    mode === 'insert' ? 'media' : mode === 'controls' ? 'history' : 'type';
+}
+
+function toggleTitleMenu(menu: 'project' | 'page' | 'category') {
+  activeTitleMenu.value = activeTitleMenu.value === menu ? null : menu;
 }
 
 function toggleEditorMenu(menu: NonNullable<typeof activeEditorMenu.value>) {
@@ -1507,7 +1616,7 @@ function insertImage() {
 
   editor.value?.chain().focus().setImage({ src }).run();
   imageUrlDraft.value = '';
-  activeTab.value = 'editor';
+  activeEditorMenu.value = null;
   void saveEditorContentOptimistically();
 }
 
@@ -1526,7 +1635,7 @@ function insertVideo() {
 
   uiMessage.value = '';
   videoUrlDraft.value = '';
-  activeTab.value = 'editor';
+  activeEditorMenu.value = null;
   void saveEditorContentOptimistically();
 }
 
@@ -1545,7 +1654,7 @@ function insertAudio() {
   editor.value?.chain().focus().setAudio({ src }).run();
   audioUrlDraft.value = '';
   uiMessage.value = '';
-  activeTab.value = 'editor';
+  activeEditorMenu.value = null;
   void saveEditorContentOptimistically();
 }
 
@@ -2188,82 +2297,183 @@ function textFromNode(node: DocumentContent): string {
           <span class="sync-label">{{ saveLabel }}</span>
         </div>
         <div class="topbar-meta">
-          <strong>{{ contextLabel }}</strong>
+          <div class="project-header-control">
+            <input
+              v-if="isProjectNameEditing"
+              ref="projectNameInputRef"
+              v-model="projectNameDraft"
+              class="project-name-input"
+              aria-label="Project name"
+              :disabled="store.isLoading || !store.currentProject"
+              @blur="finishProjectNameEdit"
+              @keydown.enter.prevent="finishProjectNameEdit"
+              @keydown.escape="isProjectNameEditing = false; projectNameDraft = store.currentProject?.name || ''"
+            >
+            <button
+              v-else
+              type="button"
+              class="project-name-display"
+              :disabled="store.isLoading || !store.currentProject"
+              title="Double-click to rename project"
+              @dblclick="beginProjectNameEdit"
+            >
+              {{ contextLabel }}
+            </button>
+
+            <button
+              type="button"
+              class="category-pill"
+              :style="currentCategoryStyle"
+              :disabled="store.isLoading || !store.currentProject"
+              title="Edit project category"
+              aria-label="Edit project category"
+              :aria-expanded="activeTitleMenu === 'category'"
+              @click="toggleTitleMenu('category')"
+            >
+              {{ projectCategoryDraft || 'Category' }}
+            </button>
+
+            <button
+              type="button"
+              class="title-menu-trigger project-menu-trigger"
+              :class="{ active: activeTitleMenu === 'project' }"
+              :disabled="store.isLoading || store.projects.length === 0"
+              title="Switch project"
+              aria-label="Switch project"
+              :aria-expanded="activeTitleMenu === 'project'"
+              @click="toggleTitleMenu('project')"
+            >
+              <font-awesome-icon :icon="['fas', 'chevron-down']" fixed-width />
+            </button>
+
+            <div v-if="activeTitleMenu === 'project'" class="title-dropdown project-dropdown">
+              <button
+                v-for="project in store.projects"
+                :key="project.id"
+                type="button"
+                class="title-dropdown-item"
+                :class="{ active: project.id === store.currentProjectId }"
+                @click="selectProject(project.id)"
+              >
+                <span>{{ project.name }}</span>
+                <span
+                  v-if="project.category"
+                  class="project-list-category"
+                  :style="{ backgroundColor: colorForCategory(project.category) }"
+                >
+                  {{ project.category }}
+                </span>
+              </button>
+              <div class="title-dropdown-actions">
+                <button type="button" @click="createProject">
+                  <font-awesome-icon :icon="['fas', 'folder-plus']" fixed-width />
+                  New project
+                </button>
+                <button
+                  type="button"
+                  class="danger-button"
+                  :disabled="!store.currentProject"
+                  @click="archiveProject"
+                >
+                  <font-awesome-icon :icon="['fas', 'trash-can']" fixed-width />
+                  Delete project
+                </button>
+              </div>
+            </div>
+
+            <div v-if="activeTitleMenu === 'category'" class="category-dropdown">
+              <form class="category-form" @submit.prevent="commitCategory">
+                <input
+                  v-model="projectCategoryDraft"
+                  aria-label="Project category"
+                  placeholder="Category name"
+                  autocomplete="off"
+                >
+                <button type="submit">Save</button>
+              </form>
+              <div v-if="knownCategories.length" class="known-categories">
+                <button
+                  v-for="category in knownCategories"
+                  :key="category.name"
+                  type="button"
+                  @click="selectCategory(category.name)"
+                >
+                  <span class="category-dot" :style="{ backgroundColor: category.color }" />
+                  {{ category.name }}
+                </button>
+              </div>
+              <div class="category-color-picker" aria-label="Category color">
+                <button
+                  v-for="color in categoryColorOptions"
+                  :key="color"
+                  type="button"
+                  class="category-swatch"
+                  :class="{ active: currentCategoryColor === color }"
+                  :style="{ backgroundColor: color }"
+                  :aria-label="`Use ${color}`"
+                  :aria-pressed="currentCategoryColor === color"
+                  :disabled="!projectCategoryDraft.trim()"
+                  @click="chooseCategoryColor(color)"
+                />
+              </div>
+            </div>
+          </div>
           <small>{{ accountLabel }} / {{ workspaceLabel }}</small>
         </div>
       </div>
 
-      <div class="topbar-switchers">
-        <select
-          v-if="canUseEditor"
-          v-model="currentProjectModel"
-          aria-label="Quick project"
-          :disabled="store.isLoading || store.projects.length === 0"
-        >
-          <option
-            v-for="project in store.projects"
-            :key="project.id"
-            :value="project.id"
-          >
-            {{ project.name }}
-          </option>
-        </select>
-
-        <select
-          v-if="canUseEditor"
-          v-model="currentPageModel"
-          aria-label="Quick page"
-          :disabled="store.isLoading || store.pages.length === 0"
-        >
-          <option
-            v-for="page in store.pages"
-            :key="page.id"
-            :value="page.id"
-          >
-            {{ page.title }}
-          </option>
-        </select>
-      </div>
-
       <div v-if="canUseEditor" class="topbar-actions">
-        <button
-          type="button"
-          class="icon-label-button secondary-button"
-          :disabled="store.isLoading"
-          title="New project"
-          aria-label="New project"
-          @click="activeTab = 'projects'"
-        >
-          <font-awesome-icon :icon="['fas', 'folder-plus']" fixed-width />
-          <span>New project</span>
-        </button>
+        <div class="topbar-action-group">
+          <button
+            type="button"
+            class="icon-label-button secondary-button"
+            :disabled="store.isLoading"
+            title="New project"
+            aria-label="New project"
+            @click="createProject"
+          >
+            <font-awesome-icon :icon="['fas', 'folder-plus']" fixed-width />
+            <span>New project</span>
+          </button>
 
-        <button
-          type="button"
-          class="icon-label-button"
-          :disabled="store.isLoading || !store.currentProjectId"
-          title="New page"
-          aria-label="New page"
-          @click="createPage"
-        >
-          <font-awesome-icon :icon="['fas', 'file-circle-plus']" fixed-width />
-          <span>New page</span>
-        </button>
-        <button
-          type="button"
-          class="icon-label-button secondary-button"
-          :disabled="store.isLoading || !store.syncConfig.connected || !store.isOnline"
-          title="Resync with Notion"
-          aria-label="Resync with Notion"
-          @click="resync"
-        >
-          <font-awesome-icon :icon="['fas', 'rotate']" fixed-width />
-          <span>Sync</span>
-        </button>
+          <button
+            type="button"
+            class="icon-label-button"
+            :disabled="store.isLoading || !store.currentProjectId"
+            title="New page"
+            aria-label="New page"
+            @click="createPage"
+          >
+            <font-awesome-icon :icon="['fas', 'file-circle-plus']" fixed-width />
+            <span>New page</span>
+          </button>
+          <button
+            type="button"
+            class="icon-label-button secondary-button"
+            :disabled="store.isLoading || !store.syncConfig.connected || !store.isOnline"
+            title="Resync with Notion"
+            aria-label="Resync with Notion"
+            @click="resync"
+          >
+            <font-awesome-icon :icon="['fas', 'rotate']" fixed-width />
+            <span>Sync</span>
+          </button>
+          <button
+            type="button"
+            class="icon-label-button secondary-button"
+            :class="{ active: activeTab === 'settings' }"
+            title="Settings"
+            aria-label="Settings"
+            @click="activeTab = activeTab === 'settings' ? 'editor' : 'settings'"
+          >
+            <font-awesome-icon :icon="['fas', 'gear']" fixed-width />
+            <span>Settings</span>
+          </button>
+        </div>
         <button
           v-if="store.syncConfig.connected"
           type="button"
-          class="icon-label-button secondary-button"
+          class="icon-label-button secondary-button logout-button"
           title="Logout"
           aria-label="Logout"
           @click="logout"
@@ -2273,23 +2483,6 @@ function textFromNode(node: DocumentContent): string {
         </button>
       </div>
     </header>
-
-    <nav class="tabs" aria-label="Side panel sections">
-      <button
-        v-for="tab in tabs"
-        :key="tab.id"
-        type="button"
-        class="icon-label-button tab-button"
-        :class="{ active: activeTab === tab.id }"
-        :aria-current="activeTab === tab.id ? 'page' : undefined"
-        :title="tab.label"
-        :aria-label="tab.label"
-        @click="activeTab = tab.id"
-      >
-        <font-awesome-icon :icon="tab.icon" fixed-width />
-        <span>{{ tab.label }}</span>
-      </button>
-    </nav>
 
     <p v-if="hasInlineMessage" class="error">
       {{ uiMessage || store.errorMessage }}
@@ -2324,27 +2517,56 @@ function textFromNode(node: DocumentContent): string {
           </div>
         </div>
         <div class="editor-title-row">
-          <div class="page-title">
-            <input
-              v-model="pageTitleDraft"
-              aria-label="Page title"
-              :disabled="store.isLoading || !store.currentPage"
-              @blur="renamePage"
-              @keydown.enter="blurTitleInput"
-            >
-            <p>{{ store.currentProject?.name || 'Project' }} / {{ saveLabel }}</p>
+          <div class="title-selector page-title-selector">
+            <div class="title-input-row">
+              <input
+                v-model="pageTitleDraft"
+                aria-label="Page title"
+                :disabled="store.isLoading || !store.currentPage"
+                @blur="renamePage"
+                @keydown.enter="blurTitleInput"
+              >
+              <button
+                type="button"
+                class="title-menu-trigger"
+                :class="{ active: activeTitleMenu === 'page' }"
+                :disabled="store.isLoading || store.pages.length === 0"
+                title="Switch page"
+                aria-label="Switch page"
+                :aria-expanded="activeTitleMenu === 'page'"
+                @click="toggleTitleMenu('page')"
+              >
+                <font-awesome-icon :icon="['fas', 'chevron-down']" fixed-width />
+              </button>
+            </div>
+            <div v-if="activeTitleMenu === 'page'" class="title-dropdown page-dropdown">
+              <button
+                v-for="page in store.pages"
+                :key="page.id"
+                type="button"
+                class="title-dropdown-item"
+                :class="{ active: page.id === store.currentPage?.id }"
+                @click="selectPage(page.id)"
+              >
+                {{ page.title }}
+              </button>
+              <div class="title-dropdown-actions">
+                <button type="button" :disabled="!store.currentProjectId" @click="createPage">
+                  <font-awesome-icon :icon="['fas', 'file-circle-plus']" fixed-width />
+                  New page
+                </button>
+                <button
+                  type="button"
+                  class="danger-button"
+                  :disabled="!store.currentPage"
+                  @click="archivePage"
+                >
+                  <font-awesome-icon :icon="['fas', 'trash-can']" fixed-width />
+                  Delete page
+                </button>
+              </div>
+            </div>
           </div>
-          <button
-            type="button"
-            class="icon-label-button secondary-button"
-            :disabled="store.isLoading || !store.currentPage"
-            title="Manage projects and pages"
-            aria-label="Manage projects and pages"
-            @click="activeTab = 'projects'"
-          >
-            <font-awesome-icon :icon="['fas', 'folder-tree']" fixed-width />
-            <span>Manage</span>
-          </button>
         </div>
 
         <div
@@ -2668,6 +2890,46 @@ function textFromNode(node: DocumentContent): string {
               </button>
             </div>
 
+            <div v-else-if="activeEditorMenu === 'media'" class="media-tool-panel">
+              <form @submit.prevent="insertImage">
+                <input
+                  v-model="imageUrlDraft"
+                  type="url"
+                  aria-label="Image URL"
+                  placeholder="Image URL"
+                  :disabled="!editor"
+                >
+                <button type="submit" :disabled="!editor" title="Insert image" aria-label="Insert image">
+                  <font-awesome-icon :icon="['fas', 'image']" fixed-width />
+                </button>
+              </form>
+              <form @submit.prevent="insertVideo">
+                <input
+                  v-model="videoUrlDraft"
+                  type="url"
+                  aria-label="Video or YouTube URL"
+                  placeholder="Video or YouTube URL"
+                  :disabled="!editor"
+                >
+                <button type="submit" :disabled="!editor" title="Insert video" aria-label="Insert video">
+                  <font-awesome-icon :icon="['fas', 'video']" fixed-width />
+                </button>
+              </form>
+              <form @submit.prevent="insertAudio">
+                <input
+                  v-model="audioUrlDraft"
+                  type="url"
+                  aria-label="Audio URL"
+                  placeholder="Audio URL"
+                  :disabled="!editor"
+                >
+                <button type="submit" :disabled="!editor" title="Insert audio" aria-label="Insert audio">
+                  <font-awesome-icon :icon="['fas', 'microphone']" fixed-width />
+                </button>
+              </form>
+              <small>Or drop images, audio, or YouTube links into the editor.</small>
+            </div>
+
             <div v-else-if="activeEditorMenu === 'record'" class="tool-panel record-panel">
               <AudioRecorder
                 :disabled="!editor || !store.currentPage"
@@ -2984,93 +3246,18 @@ function textFromNode(node: DocumentContent): string {
     </section>
 
     <section
-      v-if="canUseEditor && activeTab === 'projects'"
-      class="tab-panel"
-      aria-label="Projects and pages"
+      v-if="canUseEditor && activeTab === 'settings'"
+      class="tab-panel settings-panel"
+      aria-labelledby="settings-heading"
     >
       <div class="panel-section">
-        <div class="section-heading">
-          <h2>Projects</h2>
-          <button
-            type="button"
-            class="icon-label-button secondary-button"
-            title="Editor"
-            aria-label="Editor"
-            @click="activeTab = 'editor'"
-          >
-            <font-awesome-icon :icon="['far', 'pen-to-square']" fixed-width />
-            <span>Editor</span>
-          </button>
+        <div class="settings-heading">
+          <div>
+            <h2 id="settings-heading">Settings</h2>
+            <p>Project details, sync, and interface preferences.</p>
+          </div>
         </div>
-
-        <form class="inline-form" @submit.prevent="createProject">
-          <input
-            v-model="newProjectNameDraft"
-            aria-label="New project name"
-            placeholder="New project name"
-            :disabled="store.isLoading"
-          >
-          <button
-            type="submit"
-            class="icon-label-button"
-            :disabled="store.isLoading"
-            title="Create project"
-            aria-label="Create project"
-          >
-            <font-awesome-icon :icon="['fas', 'folder-plus']" fixed-width />
-            <span>Create</span>
-          </button>
-        </form>
-
-        <div class="manage-row">
-          <select
-            v-model="currentProjectModel"
-            aria-label="Project"
-            :disabled="store.isLoading || store.projects.length === 0"
-          >
-            <option
-              v-for="project in store.projects"
-              :key="project.id"
-              :value="project.id"
-            >
-              {{ project.name }}
-            </option>
-          </select>
-          <button
-            type="button"
-            class="icon-label-button secondary-button danger-button"
-            :disabled="store.isLoading || !store.currentProject"
-            title="Archive project"
-            aria-label="Archive project"
-            @click="archiveProject"
-          >
-            <font-awesome-icon :icon="['fas', 'trash-can']" fixed-width />
-            <span>Archive</span>
-          </button>
-        </div>
-
-        <label class="field-label">
-          Project name
-          <input
-            v-model="projectNameDraft"
-            aria-label="Project name"
-            :disabled="store.isLoading || !store.currentProject"
-            @blur="renameProject"
-            @keydown.enter="blurTitleInput"
-          >
-        </label>
-
-        <label class="field-label">
-          Category
-          <input
-            v-model="projectCategoryDraft"
-            aria-label="Project category"
-            :disabled="store.isLoading || !store.currentProject"
-            @blur="saveProjectMetadata"
-            @keydown.enter="blurTitleInput"
-          >
-        </label>
-
+        <h3>Current project</h3>
         <label class="field-label">
           Project state
           <textarea
@@ -3081,190 +3268,7 @@ function textFromNode(node: DocumentContent): string {
             @blur="saveProjectMetadata"
           />
         </label>
-
-        <div class="item-list">
-          <button
-            v-for="project in store.projects"
-            :key="project.id"
-            type="button"
-            class="item-row"
-            :class="{ active: project.id === store.currentProjectId }"
-            @click="selectProject(project.id)"
-          >
-            <span>{{ project.name }}</span>
-            <small>{{ project.syncState || 'saved' }}</small>
-          </button>
-        </div>
       </div>
-
-      <div class="panel-section">
-        <div class="section-heading">
-          <h2>Pages</h2>
-          <button
-            type="button"
-            class="icon-label-button"
-            :disabled="store.isLoading || !store.currentProjectId"
-            title="New page"
-            aria-label="New page"
-            @click="createPage"
-          >
-            <font-awesome-icon :icon="['fas', 'file-circle-plus']" fixed-width />
-            <span>New page</span>
-          </button>
-        </div>
-
-        <div class="manage-row">
-          <select
-            v-model="currentPageModel"
-            aria-label="Page"
-            :disabled="store.isLoading || store.pages.length === 0"
-          >
-            <option
-              v-for="page in store.pages"
-              :key="page.id"
-              :value="page.id"
-            >
-              {{ page.title }}
-            </option>
-          </select>
-          <button
-            type="button"
-            class="icon-label-button secondary-button danger-button"
-            :disabled="store.isLoading || !store.currentPage"
-            title="Archive page"
-            aria-label="Archive page"
-            @click="archivePage"
-          >
-            <font-awesome-icon :icon="['fas', 'trash-can']" fixed-width />
-            <span>Archive</span>
-          </button>
-        </div>
-
-        <label class="field-label">
-          Page title
-          <input
-            v-model="pageTitleDraft"
-            aria-label="Page title"
-            :disabled="store.isLoading || !store.currentPage"
-            @blur="renamePage"
-            @keydown.enter="blurTitleInput"
-          >
-        </label>
-
-        <div class="item-list">
-          <button
-            v-for="page in store.pages"
-            :key="page.id"
-            type="button"
-            class="item-row"
-            :class="{ active: page.id === store.currentPage?.id }"
-            @click="selectPage(page.id)"
-          >
-            <span>{{ page.title }}</span>
-            <small>{{ page.syncState || 'saved' }}</small>
-          </button>
-        </div>
-      </div>
-    </section>
-
-    <section
-      v-if="canUseEditor && activeTab === 'media'"
-      class="tab-panel"
-      aria-label="Media"
-    >
-      <div class="panel-section">
-        <div class="section-heading">
-          <h2>Media</h2>
-          <button
-            type="button"
-            class="icon-label-button secondary-button"
-            title="Editor"
-            aria-label="Editor"
-            @click="activeTab = 'editor'"
-          >
-            <font-awesome-icon :icon="['far', 'pen-to-square']" fixed-width />
-            <span>Editor</span>
-          </button>
-        </div>
-
-        <form class="stack-form" @submit.prevent="insertImage">
-          <label class="field-label">
-            Image URL
-            <input
-              v-model="imageUrlDraft"
-              type="url"
-              aria-label="Image URL"
-              placeholder="https://..."
-              :disabled="!editor"
-            >
-          </label>
-          <button
-            type="submit"
-            class="icon-label-button"
-            :disabled="!editor"
-            title="Insert image"
-            aria-label="Insert image"
-          >
-            <font-awesome-icon :icon="['fas', 'image']" fixed-width />
-            <span>Insert image</span>
-          </button>
-        </form>
-
-        <form class="stack-form" @submit.prevent="insertVideo">
-          <label class="field-label">
-            Video or YouTube URL
-            <input
-              v-model="videoUrlDraft"
-              type="url"
-              aria-label="Video or YouTube URL"
-              placeholder="https://..."
-              :disabled="!editor"
-            >
-          </label>
-          <button
-            type="submit"
-            class="icon-label-button"
-            :disabled="!editor"
-            title="Insert video"
-            aria-label="Insert video"
-          >
-            <font-awesome-icon :icon="['fas', 'video']" fixed-width />
-            <span>Insert video</span>
-          </button>
-        </form>
-
-        <form class="stack-form" @submit.prevent="insertAudio">
-          <label class="field-label">
-            Audio URL
-            <input
-              v-model="audioUrlDraft"
-              type="url"
-              aria-label="Audio URL"
-              placeholder="https://..."
-              :disabled="!editor"
-            >
-          </label>
-          <button
-            type="submit"
-            class="icon-label-button"
-            :disabled="!editor"
-            title="Insert audio"
-            aria-label="Insert audio"
-          >
-            <font-awesome-icon :icon="['fas', 'microphone']" fixed-width />
-            <span>Insert audio</span>
-          </button>
-        </form>
-
-        <small>Drop images, audio, or YouTube links into the editor.</small>
-      </div>
-    </section>
-
-    <section
-      v-if="activeTab === 'sync'"
-      class="tab-panel"
-      aria-label="Sync"
-    >
       <div class="panel-section">
         <div class="section-heading">
           <h2>Sync</h2>
@@ -3461,17 +3465,10 @@ function textFromNode(node: DocumentContent): string {
           </button>
         </div>
       </div>
-    </section>
-
-    <section
-      v-if="activeTab === 'settings'"
-      class="tab-panel settings-panel"
-      aria-labelledby="settings-heading"
-    >
       <div class="panel-section">
         <div class="settings-heading">
           <div>
-            <h2 id="settings-heading">Settings</h2>
+            <h2>Interface</h2>
             <p>Make Inkwell comfortable to read and use.</p>
           </div>
           <span class="setting-value" aria-live="polite">
@@ -3569,7 +3566,7 @@ function textFromNode(node: DocumentContent): string {
 <style scoped>
 .shell {
   display: grid;
-  grid-template-rows: auto auto auto 1fr;
+  grid-template-rows: auto auto 1fr;
   min-height: 100vh;
   padding: 10px;
 }
@@ -3597,7 +3594,6 @@ function textFromNode(node: DocumentContent): string {
   gap: 1px;
 }
 
-.topbar-meta strong,
 .topbar-meta small {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -3607,6 +3603,137 @@ function textFromNode(node: DocumentContent): string {
 .topbar-meta small {
   color: var(--inkwell-muted);
   font-size: 0.78rem;
+}
+
+.project-header-control {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(60px, 1fr) auto 28px;
+  gap: 4px;
+  align-items: center;
+  min-width: 0;
+}
+
+.project-name-display,
+.project-name-input {
+  min-width: 0;
+  min-height: 27px;
+  padding: 0 3px;
+  overflow: hidden;
+  border-color: transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--inkwell-text);
+  font-size: 1rem;
+  font-weight: 800;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-name-display:hover {
+  background: var(--inkwell-surface-muted);
+}
+
+.project-name-input {
+  border-color: var(--inkwell-border);
+  background: var(--inkwell-surface);
+}
+
+.category-pill {
+  max-width: 120px;
+  min-height: 24px;
+  padding: 0 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  color: white;
+  font-size: 0.72rem;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.category-pill:disabled {
+  color: white;
+}
+
+.category-dropdown {
+  position: absolute;
+  z-index: 31;
+  top: calc(100% + 5px);
+  right: 28px;
+  display: grid;
+  width: min(286px, calc(100vw - 48px));
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--inkwell-border);
+  border-radius: var(--inkwell-radius);
+  background: var(--inkwell-surface);
+  box-shadow: var(--inkwell-shadow);
+}
+
+.category-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+}
+
+.category-form input {
+  min-width: 0;
+}
+
+.category-form button {
+  min-height: 32px;
+  padding: 0 10px;
+  font-weight: 750;
+}
+
+.known-categories {
+  display: flex;
+  max-height: 108px;
+  flex-wrap: wrap;
+  gap: 5px;
+  overflow: auto;
+}
+
+.known-categories button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 28px;
+  padding: 0 8px;
+  border-color: var(--inkwell-border);
+  background: var(--inkwell-surface-muted);
+  color: var(--inkwell-text);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.category-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+}
+
+.category-color-picker {
+  display: flex;
+  gap: 7px;
+  padding-top: 8px;
+  border-top: 1px solid var(--inkwell-border);
+}
+
+.category-color-picker .category-swatch {
+  width: 22px;
+  min-width: 22px;
+  min-height: 22px;
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: 999px;
+}
+
+.category-color-picker .category-swatch.active {
+  border-color: white;
+  box-shadow: 0 0 0 2px var(--inkwell-text);
 }
 
 .sync-badge {
@@ -3735,18 +3862,14 @@ function textFromNode(node: DocumentContent): string {
   background: #16a34a;
 }
 
-.topbar-switchers {
-  display: grid;
-  grid-column: 1 / -1;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 6px;
-}
-
-.topbar-switchers select {
-  min-width: 0;
-}
-
 .topbar-actions {
+  display: flex;
+  grid-column: 1 / -1;
+  justify-content: space-between;
+  gap: 3px;
+}
+
+.topbar-action-group {
   display: flex;
   gap: 3px;
 }
@@ -3764,35 +3887,10 @@ function textFromNode(node: DocumentContent): string {
   max-width: 100%;
 }
 
-.tabs {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 2px;
-  margin-top: 8px;
-  padding: 3px;
-  border: 1px solid var(--inkwell-border);
-  border-radius: var(--inkwell-radius);
-  background: var(--inkwell-surface-muted);
-}
-
-.tabs button {
-  min-width: 0;
-  min-height: 34px;
-  border-color: transparent;
-  background: transparent;
-  color: var(--inkwell-muted);
-  font-size: 0.82rem;
-  font-weight: 800;
-}
-
-.tabs .icon-label-button {
-  justify-self: stretch;
-}
-
-.tabs button.active {
-  border-color: var(--inkwell-border);
-  background: var(--inkwell-surface);
-  color: var(--inkwell-text);
+.topbar-actions button.active {
+  border-color: var(--inkwell-accent);
+  background: var(--inkwell-accent-soft);
+  color: var(--inkwell-accent-strong);
 }
 
 .secondary-button {
@@ -3987,12 +4085,146 @@ function textFromNode(node: DocumentContent): string {
 }
 
 .editor-title-row {
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
   align-items: start;
 }
 
-.editor-title-row .page-title {
+.title-selector {
+  position: relative;
   min-width: 0;
+}
+
+.title-input-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 28px;
+  align-items: center;
+  border-radius: 6px;
+}
+
+.title-input-row input {
+  min-width: 0;
+  min-height: 30px;
+  padding: 0 4px;
+  border: 0;
+  border-radius: 4px 0 0 4px;
+  background: transparent;
+}
+
+.page-title-selector input {
+  color: var(--inkwell-text);
+  font-size: 1.05rem;
+  font-weight: 800;
+}
+
+.title-menu-trigger {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  min-width: 28px;
+  min-height: 28px;
+  padding: 0;
+  border-color: transparent;
+  background: transparent;
+  color: var(--inkwell-muted);
+}
+
+.title-menu-trigger:hover,
+.title-menu-trigger.active {
+  border-color: var(--inkwell-border);
+  background: var(--inkwell-surface-muted);
+  color: var(--inkwell-text);
+}
+
+.title-dropdown {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 5px);
+  display: grid;
+  width: min(280px, calc(100vw - 38px));
+  max-height: min(340px, calc(100vh - 180px));
+  overflow: auto;
+  padding: 6px;
+  border: 1px solid var(--inkwell-border);
+  border-radius: var(--inkwell-radius);
+  background: var(--inkwell-surface);
+  box-shadow: var(--inkwell-shadow);
+}
+
+.project-dropdown {
+  left: 0;
+}
+
+.page-dropdown {
+  right: 0;
+}
+
+.title-dropdown-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  justify-content: flex-start;
+  min-height: 32px;
+  padding: 0 9px;
+  overflow: hidden;
+  border-color: transparent;
+  background: transparent;
+  color: var(--inkwell-text);
+  font-weight: 650;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.title-dropdown-item > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.project-list-category {
+  flex: 0 0 auto;
+  max-width: 92px;
+  padding: 2px 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  color: white;
+  font-size: 0.68rem;
+  text-overflow: ellipsis;
+}
+
+.title-dropdown-item:hover,
+.title-dropdown-item.active {
+  background: var(--inkwell-surface-muted);
+}
+
+.title-dropdown-item.active {
+  color: var(--inkwell-accent-strong);
+  font-weight: 800;
+}
+
+.title-dropdown-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  margin-top: 5px;
+  padding-top: 6px;
+  border-top: 1px solid var(--inkwell-border);
+}
+
+.title-dropdown-actions button {
+  min-width: 0;
+  min-height: 34px;
+  padding: 0 7px;
+  border-color: var(--inkwell-border);
+  background: var(--inkwell-surface-muted);
+  color: var(--inkwell-text);
+  font-size: 0.76rem;
+  font-weight: 750;
+}
+
+.title-dropdown-actions .danger-button {
+  color: #991b1b;
 }
 
 .section-heading {
@@ -4045,13 +4277,14 @@ function textFromNode(node: DocumentContent): string {
 }
 
 .panel-section h2,
-.section-heading h2 {
+.section-heading h2,
+.panel-section h3 {
   margin: 0;
   font-size: 0.95rem;
 }
 
 .settings-panel {
-  overflow: visible;
+  overflow: auto;
 }
 
 .settings-heading {
@@ -4434,6 +4667,33 @@ function textFromNode(node: DocumentContent): string {
   background: var(--inkwell-surface-muted);
   color: var(--inkwell-text);
   font-weight: 750;
+}
+
+.media-tool-panel {
+  display: grid;
+  gap: 7px;
+}
+
+.media-tool-panel form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 34px;
+  gap: 6px;
+}
+
+.media-tool-panel input {
+  min-width: 0;
+}
+
+.media-tool-panel button {
+  display: grid;
+  place-items: center;
+  min-width: 34px;
+  min-height: 32px;
+  padding: 0;
+}
+
+.media-tool-panel small {
+  color: var(--inkwell-muted);
 }
 
 .button-grid {

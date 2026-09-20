@@ -6,6 +6,7 @@ import { faPenToSquare } from '@fortawesome/free-regular-svg-icons';
 import {
   faBold,
   faCheck,
+  faChevronDown,
   faCloudArrowUp,
   faCode,
   faEraser,
@@ -48,6 +49,7 @@ import '@/src/styles/global.css';
 library.add(
   faBold,
   faCheck,
+  faChevronDown,
   faCloudArrowUp,
   faCode,
   faEraser,
