@@ -1,7 +1,13 @@
-// @ts-nocheck
+/**
+ * @file Defines the Inkwell API routes and composes authentication, Notion, persistence, and queue services.
+ * @author Aidan Boissonneault
+ * @lastModified September 2026
+ */
+
 import { Hono } from 'hono';
+import type { Context } from 'hono';
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
-import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { createClient } from '@supabase/supabase-js';
 import { createAuth } from './auth.js';
 import {
@@ -24,6 +30,62 @@ import {
 } from './projectDatabase.js';
 import { syncProjectFolder } from './projectSync.js';
 import { createRootPageHelpers } from './rootPages.js';
+import { closePage, legalPage, privacyBody, termsBody, youtubeEmbedPage } from './htmlPages.js';
+import {
+  computeHmacSignature,
+  deleteNotionWebhook,
+  exchangeNotionCode,
+  notionUserFromToken,
+  registerNotionWebhook,
+} from './notionAuth.js';
+import {
+  MAX_SYNC_QUEUE_MESSAGE_BYTES,
+  chunkSyncOpsForQueue,
+  queueMessageBytes,
+  syncOpGroupsByPage,
+  syncOpWithoutRepeatedContext,
+} from './syncQueueMessages.js';
+import {
+  chunks,
+  findMappedNotionBlockId,
+  findNotionBlockIdByFileUploadId,
+  hash,
+  isBase64,
+  isBlockNotPageError,
+  isNotionObjectNotFound,
+  isSupportedMediaMimeType,
+  isTrustedOrigin,
+  mediaFallbackBlock,
+  mediaUrlFromNotionBlock,
+  positionAfterCreatedBlocks,
+  randomToken,
+  sanitizeMediaFilename,
+  serverBaseUrl,
+  stringValue,
+  titleFromPage,
+  updateBodyFromNotionBlock,
+} from './workerUtils.js';
+export { SyncEventsDO } from './syncEvents.js';
+import type { AuthService, AuthSessionResult } from './auth.js';
+import type {
+  Identifier,
+  BlockQueuePayload,
+  ConnectedWorkerStore,
+  JsonObject,
+  NotionBlock,
+  NotionBlockPayload,
+  NotionObject,
+  NotionRequester,
+  PageQueuePayload,
+  ManagedBlockOperation,
+  WorkerEnv,
+  WorkerStore,
+  WorkerSupabaseClient,
+  SyncQueueMessage,
+} from './types.js';
+import type { DocumentContent, NotionParentPage, Project, ProjectPage } from '../../../src/types/capture.js';
+import type { QueueJobBase } from './syncQueueMessages.js';
+import type { BlockPosition } from './workerUtils.js';
 import type {
   CreateNotionPageRequest,
   MediaRefreshRequest,
@@ -32,22 +94,66 @@ import type {
   SyncProjectRequest,
   SyncProjectSourceRequest,
   SyncReloadRequest,
+  SyncBlockOperation,
   SyncValidationRequest,
 } from '../../../src/types/sync.js';
 import { youtubeEmbedUrl, youtubeVideoInfo, youtubeStartSeconds } from '../../../src/lib/youtubeUtils.js';
-import { compactPendingSyncOps } from '../../../src/services/syncQueue.js';
 
 const INKWELL_SESSION_COOKIE = 'inkwell_session';
 const INKWELL_OAUTH_STATE_COOKIE = 'inkwell_notion_oauth_state';
 const SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 30;
 const MAX_MEDIA_UPLOAD_BYTES = 20 * 1024 * 1024;
-const MAX_SYNC_QUEUE_MESSAGE_BYTES = 120 * 1024;
 
 // TODO: replace with Durable Objects for cross-instance distributed locking
-const installationMutationLocks = new Map();
+const installationMutationLocks = new Map<string, Promise<unknown>>();
 
-export const app = new Hono();
+type ApiContext = Context<{ Bindings: WorkerEnv }>;
 
+interface PageSyncInput {
+  page: ProjectPage;
+  project: Project;
+  selectedParentPageId: string | undefined;
+}
+
+interface ProjectSyncInput {
+  project: Project;
+  selectedParentPageId: string | undefined;
+}
+
+interface BlockOpsInput extends PageSyncInput {
+  ops: ManagedBlockOperation[];
+}
+
+interface EnqueueJobBase {
+  installationId: Identifier;
+  localId: string;
+  pageId: string;
+  projectId: string;
+}
+
+interface BlockEnqueueJob extends EnqueueJobBase {
+  batchId: string;
+  batchIndex: number;
+  batchSize: number;
+  payload: BlockQueuePayload;
+  type: 'block_op';
+}
+
+interface PageEnqueueJob extends EnqueueJobBase {
+  payload: PageQueuePayload;
+  type: 'page';
+}
+
+type EnqueueJob = BlockEnqueueJob | PageEnqueueJob;
+
+interface InstallationTokens {
+  id: Identifier;
+  tokens: { access_token: string };
+}
+
+export const app = new Hono<{ Bindings: WorkerEnv }>();
+
+/** Applies CORS headers and handles preflight requests. @param c - Hono context. @param next - Downstream middleware. @returns Middleware response. */
 app.use('*', async (c, next) => {
   const origin = c.req.header('origin');
   const trusted = isTrustedOrigin(c.env, origin);
@@ -62,19 +168,24 @@ app.use('*', async (c, next) => {
   await next();
 });
 
+/** Serves the terms page. @param c - Hono context. @returns HTML response. */
 app.get('/terms', (c) => c.html(legalPage('Terms of Service', termsBody())));
+/** Serves the privacy page. @param c - Hono context. @returns HTML response. */
 app.get('/privacy', (c) => c.html(legalPage('Privacy Policy', privacyBody())));
 
 // ─── Auth routes ──────────────────────────────────────────────────────────────
 
+/** Serves the successful authentication close page. @param c - Hono context. @returns HTML response. */
 app.get('/auth/inkwell/complete', (c) =>
   c.html(closePage('You are logged in to Inkwell. You can return to the side panel.')),
 );
 
+/** Serves the failed authentication close page. @param c - Hono context. @returns HTML response. */
 app.get('/auth/inkwell/error', (c) =>
   c.html(closePage('Inkwell login did not complete. You can close this tab and try again.'), 400),
 );
 
+/** Starts the Notion OAuth flow. @param c - Hono context. @returns Redirect response. */
 app.get('/auth/notion/start', async (c) => {
   const env = c.env;
 
@@ -103,6 +214,7 @@ app.get('/auth/notion/start', async (c) => {
   return c.redirect(url.toString());
 });
 
+/** Completes OAuth and creates an application session. @param c - Hono context. @returns Redirect response. */
 app.get('/auth/notion/callback', async (c) => {
   const env = c.env;
   const expectedState = getCookie(c, INKWELL_OAUTH_STATE_COOKIE);
@@ -142,7 +254,13 @@ app.get('/auth/notion/callback', async (c) => {
 
     if (installationId) {
       await ensureInkwellSyncStateRow(installationId);
-      await registerNotionWebhook(env, installationId, tokens.access_token).catch(() => undefined);
+      await registerNotionWebhook(
+        env,
+        supabase,
+        installationId,
+        tokens.access_token,
+        serverBaseUrl(env),
+      ).catch(() => undefined);
     }
 
     setCookie(c, INKWELL_SESSION_COOKIE, sessionToken, {
@@ -160,6 +278,7 @@ app.get('/auth/notion/callback', async (c) => {
   }
 });
 
+/** Returns the active application and Notion session. @param c - Hono context. @returns JSON response. */
 app.get('/session', async (c) => {
   const session = await getInkwellSession(c);
   const installation = session
@@ -176,6 +295,7 @@ app.get('/session', async (c) => {
   });
 });
 
+/** Revokes the active installation and clears its session. @param c - Hono context. @returns JSON response. */
 app.post('/auth/notion/logout', async (c) => {
   const session = await requireInkwellSession(c);
   if (!session) return;
@@ -183,7 +303,7 @@ app.post('/auth/notion/logout', async (c) => {
   const token = getCookie(c, INKWELL_SESSION_COOKIE);
   const installation = await auth.getActiveInstallation(session.user.id).catch(() => undefined);
   if (installation?.id) {
-    await deleteNotionWebhook(c.env, installation.id).catch(() => undefined);
+    await deleteNotionWebhook(c.env, supabase, installation.id).catch(() => undefined);
   }
   await auth.revokeInstallation(session.user.id);
   await auth.deleteCustomSession(token);
@@ -192,6 +312,7 @@ app.post('/auth/notion/logout', async (c) => {
   return c.json({ connected: false });
 });
 
+/** Returns recent installation diagnostics. @param c - Hono context. @returns JSON response. */
 app.get('/logs', async (c) => {
   const store = await readStore();
   return c.json({ logs: store.logs.slice(-100) });
@@ -199,6 +320,7 @@ app.get('/logs', async (c) => {
 
 // ─── Notion routes ─────────────────────────────────────────────────────────────
 
+/** Serves the restricted YouTube embed wrapper. @param c - Hono context. @returns HTML response. */
 app.get('/youtube/embed', (c) => {
   const src = c.req.query('src') ?? '';
   const embedUrl = youtubeEmbedUrl(src);
@@ -216,6 +338,7 @@ app.get('/youtube/embed', (c) => {
   return c.html(youtubeEmbedPage(embedUrl));
 });
 
+/** Lists selectable Notion parent pages. @param c - Hono context. @returns JSON response. */
 app.get('/notion/pages', async (c) => {
   const query = c.req.query('query') ?? '';
   const store = await requireConnectedStore(c);
@@ -237,8 +360,9 @@ app.get('/notion/pages', async (c) => {
   });
 });
 
+/** Creates a selectable Notion workspace page. @param c - Hono context. @returns JSON response. */
 app.post('/notion/pages', async (c) => {
-  const body = await c.req.json<CreateNotionPageRequest>().catch(() => ({}));
+  const body: Partial<CreateNotionPageRequest> = await c.req.json<CreateNotionPageRequest>().catch(() => ({}));
   const title = String(body?.title ?? '').trim() || 'Inkwell';
   const store = await requireConnectedStore(c);
   const page = await createWorkspacePage(store, title);
@@ -251,8 +375,9 @@ app.post('/notion/pages', async (c) => {
 
 // ─── Sync routes ───────────────────────────────────────────────────────────────
 
+/** Queues page or block synchronization work. @param c - Hono context. @returns JSON response. */
 app.post('/sync/push', async (c) => {
-  const body = await c.req.json<SyncPageRequest>().catch(() => ({}));
+  const body: Partial<SyncPageRequest> = await c.req.json<SyncPageRequest>().catch(() => ({}));
   const { page, project, selectedParentPageId } = body ?? {};
   const ops = Array.isArray(body?.ops) ? body.ops : [];
 
@@ -261,8 +386,8 @@ app.post('/sync/push', async (c) => {
   }
 
   const store = await requireConnectedStore(c);
-  const versions = {};
-  const opVersions = {};
+  const versions: Record<string, number> = {};
+  const opVersions: Record<string, number> = {};
 
   if (ops.length) {
     const groups = syncOpGroupsByPage(ops);
@@ -274,7 +399,7 @@ app.post('/sync/push', async (c) => {
       }
 
       const queuedOps = group.ops.map(syncOpWithoutRepeatedContext);
-      const jobBase = {
+      const jobBase: QueueJobBase = {
         type: 'block_op',
         localId: latestOp.pageId,
         pageId: latestOp.pageId,
@@ -323,6 +448,10 @@ app.post('/sync/push', async (c) => {
     return c.json({ queued: true, versions, opVersions });
   }
 
+  if (!page || !project) {
+    return c.json({ status: 'error', message: 'Missing page or project.' }, 400);
+  }
+
   const version = await enqueueSync(c.env, {
     type: 'page',
     localId: page.id,
@@ -335,76 +464,9 @@ app.post('/sync/push', async (c) => {
   return c.json({ queued: true, version });
 });
 
-function syncOpGroupsByPage(ops) {
-  const groups = new Map();
-  for (const op of ops) {
-    if (!op?.pageId || !op?.opId) continue;
-    const group = groups.get(op.pageId) ?? [];
-    group.push(op);
-    groups.set(op.pageId, group);
-  }
-
-  return Array.from(groups.entries()).map(([pageId, pageOps]) => {
-    const compacted = compactPendingSyncOps(pageOps);
-    return {
-      pageId,
-      ops: compacted,
-      version: Math.max(...compacted.map(syncOpSortValue)),
-    };
-  }).filter((group) => group.ops.length)
-    .sort((first, second) => first.version - second.version);
-}
-
-function syncOpWithoutRepeatedContext(op) {
-  const { page: _page, project: _project, selectedParentPageId: _parent, ...payload } = op.payload ?? {};
-  return { ...op, payload };
-}
-
-function queueMessageBytes(value) {
-  return new TextEncoder().encode(JSON.stringify(value)).byteLength;
-}
-
-function chunkSyncOpsForQueue(jobBase, ops, queuedVersion) {
-  const chunks = [];
-  let current = [];
-
-  for (const op of ops) {
-    const singleJob = {
-      ...jobBase,
-      queuedVersion,
-      batchIndex: chunks.length,
-      batchSize: ops.length,
-      payload: { ...jobBase.payload, ops: [op] },
-    };
-    if (queueMessageBytes(singleJob) > MAX_SYNC_QUEUE_MESSAGE_BYTES) return null;
-
-    const candidate = [...current, op];
-    const candidateJob = {
-      ...jobBase,
-      queuedVersion,
-      batchIndex: chunks.length,
-      batchSize: ops.length,
-      payload: { ...jobBase.payload, ops: candidate },
-    };
-    if (queueMessageBytes(candidateJob) <= MAX_SYNC_QUEUE_MESSAGE_BYTES) {
-      current = candidate;
-      continue;
-    }
-    chunks.push(current);
-    current = [op];
-  }
-
-  if (current.length) chunks.push(current);
-  return chunks;
-}
-
-
-function syncOpSortValue(op) {
-  return Number(op?.localVersion ?? op?.sequence ?? 0);
-}
-
+/** Synchronizes project metadata immediately. @param c - Hono context. @returns JSON response. */
 app.post('/sync/project', async (c) => {
-  const body = await c.req.json<SyncProjectRequest>().catch(() => ({}));
+  const body: Partial<SyncProjectRequest> = await c.req.json<SyncProjectRequest>().catch(() => ({}));
   const { project, selectedParentPageId } = body ?? {};
 
   if (!project?.id) {
@@ -420,8 +482,9 @@ app.post('/sync/project', async (c) => {
   }
 });
 
+/** Synchronizes one project-state source block. @param c - Hono context. @returns JSON response. */
 app.post('/sync/project/source', async (c) => {
-  const body = await c.req.json<SyncProjectSourceRequest>().catch(() => ({}));
+  const body: Partial<SyncProjectSourceRequest> = await c.req.json<SyncProjectSourceRequest>().catch(() => ({}));
   const { project, blockId, block, selectedParentPageId } = body ?? {};
 
   if (!project?.id || !blockId || !block) {
@@ -431,7 +494,8 @@ app.post('/sync/project/source', async (c) => {
   try {
     const store = await requireConnectedStore(c);
     return c.json(await withFreshInstallationStore(store, async (freshStore) => {
-      const projectPage = await ensureProjectPage(freshStore, project, {
+      const completeProject: Project = { ...project, stateContent: { type: 'doc', content: [] } };
+      const projectPage = await ensureProjectPage(freshStore, completeProject, {
         selectedParentPageId,
         syncState: false,
       });
@@ -446,7 +510,8 @@ app.post('/sync/project/source', async (c) => {
         container.id,
         [{
           type: 'block_update',
-          inkwellBlockId: block.attrs?.inkwellBlockId ?? `source:${encodeURIComponent(blockId)}`,
+          inkwellBlockId: stringValue(block.attrs?.inkwellBlockId)
+            ?? `source:${encodeURIComponent(blockId)}`,
           payload: { block },
         }],
         { type: 'doc', content: [block] },
@@ -470,6 +535,7 @@ app.post('/sync/project/source', async (c) => {
   }
 });
 
+/** Returns local synchronization versions and statuses. @param c - Hono context. @returns JSON response. */
 app.get('/sync/status', async (c) => {
   const pageId = c.req.query('pageId');
 
@@ -493,15 +559,17 @@ app.get('/sync/status', async (c) => {
   });
 });
 
+/** Proxies the installation event stream from its durable object. @param c - Hono context. @returns Streaming response. */
 app.get('/sync/events', async (c) => {
   const store = await requireConnectedStore(c);
-  const doId = c.env.SYNC_EVENTS.idFromName(store.installationId);
+  const doId = c.env.SYNC_EVENTS.idFromName(String(store.installationId));
   const stub = c.env.SYNC_EVENTS.get(doId);
   return stub.fetch(new Request('http://do/connect'));
 });
 
+/** Compares client state with persisted versions and remote cache validity. @param c - Hono context. @returns JSON response. */
 app.post('/sync/validate', async (c) => {
-  const body = await c.req.json<SyncValidationRequest>().catch(() => ({}));
+  const body: Partial<SyncValidationRequest> = await c.req.json<SyncValidationRequest>().catch(() => ({}));
   const { pages = [], projects = [], knownVersions = {} } = body ?? {};
   const store = await requireConnectedStore(c);
   const result = await validateNotionCache(store, {
@@ -551,8 +619,9 @@ app.post('/sync/validate', async (c) => {
   });
 });
 
+/** Reloads database-backed project state from Notion. @param c - Hono context. @returns JSON response. */
 app.post('/sync/reload', async (c) => {
-  const body = await c.req.json<SyncReloadRequest>().catch(() => ({}));
+  const body: Partial<SyncReloadRequest> = await c.req.json<SyncReloadRequest>().catch(() => ({}));
   const { selectedParentPageId } = body ?? {};
   const store = await requireConnectedStore(c);
 
@@ -566,8 +635,9 @@ app.post('/sync/reload', async (c) => {
   return c.json({ status: 'saved', ...result });
 });
 
+/** Pulls a linked page from Notion. @param c - Hono context. @returns JSON response. */
 app.post('/sync/pull', async (c) => {
-  const body = await c.req.json<SyncPageRequest>().catch(() => ({}));
+  const body: Partial<SyncPageRequest> = await c.req.json<SyncPageRequest>().catch(() => ({}));
   const { page } = body ?? {};
 
   if (!page?.id || !page.notionPageId) {
@@ -636,8 +706,9 @@ app.post('/sync/pull', async (c) => {
   });
 });
 
+/** Marks a stale synchronization row as current. @param c - Hono context. @returns JSON response. */
 app.post('/sync/clear-stale', async (c) => {
-  const body = await c.req.json<{ pageIds?: string[] }>().catch(() => ({}));
+  const body: { pageIds?: string[] } = await c.req.json<{ pageIds?: string[] }>().catch(() => ({}));
   const pageIds = Array.isArray(body?.pageIds) ? body.pageIds : [];
   if (!pageIds.length) return c.json({ cleared: true });
 
@@ -651,6 +722,7 @@ app.post('/sync/clear-stale', async (c) => {
   return c.json({ cleared: true });
 });
 
+/** Verifies and accepts Notion webhook events. @param c - Hono context. @returns JSON acknowledgement. */
 app.post('/webhooks/notion', async (c) => {
   const rawBody = await c.req.text();
 
@@ -694,7 +766,8 @@ app.post('/webhooks/notion', async (c) => {
   return c.json({ ok: true });
 });
 
-async function processNotionWebhook(env, payload) {
+/** Processes a verified Notion event and marks mapped local pages stale. @param env - Worker bindings. @param payload - Parsed webhook body. @returns Completion after notifications are queued. */
+async function processNotionWebhook(env: WorkerEnv, payload: JsonObject): Promise<void> {
   const notionPageId = (payload.entity as Record<string, unknown> | undefined)?.id as string | undefined;
   if (!notionPageId) return;
 
@@ -742,8 +815,9 @@ async function processNotionWebhook(env, payload) {
 
 // ─── Media upload ──────────────────────────────────────────────────────────────
 
+/** Uploads validated local media to Notion. @param c - Hono context. @returns JSON upload metadata. */
 app.post('/media/upload', async (c) => {
-  const body = await c.req.json<MediaUploadRequest>().catch(() => ({}));
+  const body: Partial<MediaUploadRequest> = await c.req.json<MediaUploadRequest>().catch(() => ({}));
   const { dataBase64, mimeType, filename } = body ?? {};
 
   if (!dataBase64 || !mimeType) return c.json({ error: 'Missing dataBase64 or mimeType.' }, 400);
@@ -766,8 +840,9 @@ app.post('/media/upload', async (c) => {
   return c.json({ fileUploadId });
 });
 
+/** Refreshes the signed URL for uploaded Notion media. @param c - Hono context. @returns JSON response. */
 app.post('/media/refresh', async (c) => {
-  const body = await c.req.json<MediaRefreshRequest>().catch(() => ({}));
+  const body: Partial<MediaRefreshRequest> = await c.req.json<MediaRefreshRequest>().catch(() => ({}));
   const fileUploadId = String(body?.fileUploadId ?? '').trim();
   const requestedBlockId = String(body?.notionBlockId ?? '').trim();
   if (!fileUploadId && !requestedBlockId) {
@@ -789,14 +864,25 @@ app.post('/media/refresh', async (c) => {
 
 // ─── Per-request singletons ────────────────────────────────────────────────────
 
-let supabase;
-let auth;
-let notionRequest;
-let ensureInkwellRootPage, ensureProjectRootPage, pageSummary;
-let archiveThreadToggle, ensureProjectDatabase, ensureProjectPage, ensureProjectStateContainer, ensureThreadToggle,
-    reloadProjectDatabaseFromNotion, updateThreadToggleTitle;
+type RootHelpers = ReturnType<typeof createRootPageHelpers>;
+type DatabaseHelpers = ReturnType<typeof createProjectDatabaseHelpers>;
 
-function initSingletons(env) {
+let supabase: WorkerSupabaseClient;
+let auth: AuthService;
+let notionRequest: NotionRequester;
+let ensureInkwellRootPage: RootHelpers['ensureInkwellRootPage'];
+let ensureProjectRootPage: RootHelpers['ensureProjectRootPage'];
+let pageSummary: RootHelpers['pageSummary'];
+let archiveThreadToggle: DatabaseHelpers['archiveThreadToggle'];
+let ensureProjectDatabase: DatabaseHelpers['ensureProjectDatabase'];
+let ensureProjectPage: DatabaseHelpers['ensureProjectPage'];
+let ensureProjectStateContainer: DatabaseHelpers['ensureProjectStateContainer'];
+let ensureThreadToggle: DatabaseHelpers['ensureThreadToggle'];
+let reloadProjectDatabaseFromNotion: DatabaseHelpers['reloadProjectDatabaseFromNotion'];
+let updateThreadToggleTitle: DatabaseHelpers['updateThreadToggleTitle'];
+
+/** Initializes request-scoped service singletons from worker bindings. @param env - Worker bindings. @returns Nothing. */
+function initSingletons(env: WorkerEnv): void {
   supabase = createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_KEY);
   auth = createAuth(supabase);
 
@@ -842,7 +928,8 @@ function initSingletons(env) {
 
 // ─── Sync handlers ─────────────────────────────────────────────────────────────
 
-async function pushPageToNotion({ c, page, project, selectedParentPageId }) {
+/** Pushes a page from an authenticated HTTP request. @param input - Request context and page synchronization data. @returns Synchronization response data. */
+async function pushPageToNotion({ c, page, project, selectedParentPageId }: PageSyncInput & { c: ApiContext }) {
   const store = await requireConnectedStore(c);
 
   return withFreshInstallationStore(store, (freshStore) =>
@@ -870,7 +957,8 @@ async function pushPageToNotion({ c, page, project, selectedParentPageId }) {
   );
 }
 
-async function performSyncProjectFolder(freshStore, { project, selectedParentPageId }) {
+/** Synchronizes one project using an already refreshed store. @param freshStore - Current installation state. @param input - Project and parent selection. @returns Project synchronization result. */
+async function performSyncProjectFolder(freshStore: WorkerStore, { project, selectedParentPageId }: ProjectSyncInput) {
   const response = await syncProjectFolder({
     store: freshStore,
     project,
@@ -886,14 +974,16 @@ async function performSyncProjectFolder(freshStore, { project, selectedParentPag
   return response;
 }
 
-async function syncProjectToNotion({ c, project, selectedParentPageId }) {
+/** Synchronizes a project from an authenticated HTTP request. @param input - Request context and project data. @returns Project synchronization result. */
+async function syncProjectToNotion({ c, project, selectedParentPageId }: ProjectSyncInput & { c: ApiContext }) {
   const store = await requireConnectedStore(c);
   return withFreshInstallationStore(store, (freshStore) => performSyncProjectFolder(freshStore, { project, selectedParentPageId }));
 }
 
 // ─── Queue helpers ─────────────────────────────────────────────────────────────
 
-async function enqueueSync(env, job, clientVersion = 0) {
+/** Persists a pending version and sends its normalized Queue message. @param env - Worker bindings. @param job - Queue job input. @param clientVersion - Client-side revision. @returns Enqueued revision number. */
+async function enqueueSync(env: WorkerEnv, job: EnqueueJob, clientVersion = 0): Promise<number> {
   const version = Number.isFinite(Number(clientVersion)) ? Number(clientVersion) : 0;
   const { data: existing } = await supabase
     .from('notion_block_sync')
@@ -914,11 +1004,15 @@ async function enqueueSync(env, job, clientVersion = 0) {
     { onConflict: 'installation_id,local_id' },
   );
 
-  await env.SYNC_QUEUE.send({ ...job, queuedVersion: version });
+  const message: SyncQueueMessage = job.type === 'block_op'
+    ? { ...job, queuedVersion: version }
+    : { ...job, queuedVersion: version };
+  await env.SYNC_QUEUE.send(message);
   return version;
 }
 
-async function getInstallationById(installationId) {
+/** Loads an active installation and its Notion token. @param installationId - Installation identifier. @returns Installation tokens, or null when unavailable. */
+async function getInstallationById(installationId: Identifier): Promise<InstallationTokens | null> {
   const { data: installRow } = await supabase
     .from('notion_installations')
     .select('id, user_id')
@@ -941,13 +1035,15 @@ async function getInstallationById(installationId) {
   return { id: installRow.id, tokens: { access_token: accountRow.accessToken } };
 }
 
-async function freshConnectedStoreForInstallation(installationId) {
+/** Builds fresh normalized state for a queue installation. @param installationId - Installation identifier. @returns Connected worker state. */
+async function freshConnectedStoreForInstallation(installationId: Identifier): Promise<WorkerStore> {
   const installation = await getInstallationById(installationId);
   if (!installation) throw new Error('Installation not found or revoked.');
-  return freshConnectedStore({ installationId, tokens: installation.tokens });
+  return freshConnectedStore(normalizeStore({ installationId, tokens: installation.tokens }));
 }
 
-async function pushPageToNotionForInstallation(installationId, { page, project, selectedParentPageId }) {
+/** Pushes a page for a background installation. @param installationId - Installation identifier. @param input - Page synchronization input. @returns Synchronization response data. */
+async function pushPageToNotionForInstallation(installationId: Identifier, { page, project, selectedParentPageId }: PageSyncInput) {
   const store = await freshConnectedStoreForInstallation(installationId);
 
   return withFreshInstallationStore(store, (freshStore) =>
@@ -975,7 +1071,8 @@ async function pushPageToNotionForInstallation(installationId, { page, project, 
   );
 }
 
-async function applyBlockOpsToNotionForInstallation(installationId, { ops, page, project, selectedParentPageId }) {
+/** Applies queued block operations for one installation. @param installationId - Installation identifier. @param input - Operations and page context. @returns Updated page result. */
+async function applyBlockOpsToNotionForInstallation(installationId: Identifier, { ops, page, project, selectedParentPageId }: BlockOpsInput) {
   const store = await freshConnectedStoreForInstallation(installationId);
 
   return withFreshInstallationStore(store, async (freshStore) => {
@@ -1003,6 +1100,8 @@ async function applyBlockOpsToNotionForInstallation(installationId, { ops, page,
       page.content = normalizeSyncedMediaContent(content, replacement?.createdBlocks ?? []);
       refreshed = await notionRequest(freshStore, `/blocks/${notionPageId}`).catch(() => toggle);
       freshStore.notePages[page.id] = {
+        archived: false,
+        dataSourceId: undefined,
         notionPageId,
         parentPageId,
         title: page.title,
@@ -1027,6 +1126,9 @@ async function applyBlockOpsToNotionForInstallation(installationId, { ops, page,
       page.content = normalizeSyncedMediaContent(content, replacement?.createdBlocks ?? []);
       refreshed = await notionRequest(freshStore, `/pages/${notionPageId}`).catch(() => notePage);
       freshStore.notePages[page.id] = {
+        archived: false,
+        dataSourceId: undefined,
+        kind: undefined,
         notionPageId,
         parentPageId,
         title: page.title,
@@ -1054,31 +1156,49 @@ async function applyBlockOpsToNotionForInstallation(installationId, { ops, page,
   });
 }
 
-function syncContentForOps(ops, legacyContent) {
+/** Selects the newest replacement document carried by queued operations. @param ops - Managed block operations. @param legacyContent - Page content fallback. @returns Effective document content. */
+function syncContentForOps(ops: ManagedBlockOperation[], legacyContent: DocumentContent): DocumentContent {
   if (legacyContent?.content) return legacyContent;
-  const blocks = ops.map((op) => op.payload?.block).filter(Boolean);
+  const blocks = ops
+    .map((op: ManagedBlockOperation) => op.payload.block)
+    .filter((block: DocumentContent | undefined): block is DocumentContent => Boolean(block));
   return { type: 'doc', content: blocks };
 }
 
-async function syncProjectToNotionForInstallation(installationId, { project, selectedParentPageId }) {
+/** Reads the single-operation field used by older Queue messages. @param payload - Current or legacy block payload. @returns Legacy operation when present. */
+function legacyQueueOperation(payload: BlockQueuePayload): ManagedBlockOperation | undefined {
+  const operation: unknown = (payload as unknown as JsonObject).op;
+  if (!operation || typeof operation !== 'object' || Array.isArray(operation)) return undefined;
+  const candidate = operation as JsonObject;
+  if (typeof candidate.type !== 'string' || !candidate.payload || typeof candidate.payload !== 'object') return undefined;
+  return operation as ManagedBlockOperation;
+}
+
+/** Synchronizes a project for a background installation. @param installationId - Installation identifier. @param input - Project synchronization input. @returns Project synchronization result. */
+async function syncProjectToNotionForInstallation(installationId: Identifier, { project, selectedParentPageId }: ProjectSyncInput) {
   const store = await freshConnectedStoreForInstallation(installationId);
   return withFreshInstallationStore(store, (freshStore) => performSyncProjectFolder(freshStore, { project, selectedParentPageId }));
 }
 
 // ─── Store helpers ─────────────────────────────────────────────────────────────
 
-function readStore() {
+/** Creates an empty normalized worker store. @returns Empty normalized state. */
+function readStore(): WorkerStore {
   return normalizeStore({});
 }
 
-async function writeStore(store) {
+/** Persists normalized state for its connected installation. @param store - Worker state. @returns Completion after persistence. */
+async function writeStore(store: WorkerStore): Promise<void> {
   if (store.installationId) {
     await writeInkwellSyncState(store.installationId, store);
   }
 }
 
-function normalizeStore(store) {
+/** Fills all state collections and nullable connection values. @param store - Partial persisted state. @returns Fully normalized state. */
+function normalizeStore(store: Partial<WorkerStore>): WorkerStore {
   return {
+    ignoredInkwellDatabaseIds: store.ignoredInkwellDatabaseIds ?? new Set<string>(),
+    installationId: store.installationId,
     parentPages: store.parentPages ?? {},
     projectPages: store.projectPages ?? {},
     projectBlocks: store.projectBlocks ?? {},
@@ -1088,15 +1208,18 @@ function normalizeStore(store) {
     notePages: store.notePages ?? {},
     blockMappings: store.blockMappings ?? {},
     logs: store.logs ?? [],
+    tokens: store.tokens,
   };
 }
 
-function appendLog(store, event, message) {
+/** Appends a bounded diagnostic event to worker state. @param store - Worker state. @param event - Event code. @param message - Human-readable detail. @returns Nothing. */
+function appendLog(store: WorkerStore, event: string, message: string): void {
   store.logs.push({ at: new Date().toISOString(), event, message });
   store.logs = store.logs.slice(-250);
 }
 
-async function requireConnectedStore(c) {
+/** Resolves authenticated installation state for an API request. @param c - Hono request context. @returns Connected normalized state. */
+async function requireConnectedStore(c: ApiContext): Promise<ConnectedWorkerStore> {
   const session = await getInkwellSession(c);
 
   if (!session) throw new Error('Log in to Inkwell before syncing Notion.');
@@ -1120,9 +1243,13 @@ async function requireConnectedStore(c) {
   };
 }
 
-function withInstallationLock(lockKey, fn) {
+/** Serializes mutations for one installation in the current isolate. @param installationId - Installation identifier. @param operation - Mutating operation. @returns Operation result. */
+function withInstallationLock<Result>(
+  lockKey: string,
+  operation: () => Promise<Result>,
+): Promise<Result> {
   const previous = installationMutationLocks.get(lockKey) ?? Promise.resolve();
-  const current = previous.catch(() => undefined).then(fn);
+  const current = previous.catch(() => undefined).then(operation);
   const tracked = current.finally(() => {
     if (installationMutationLocks.get(lockKey) === tracked) {
       installationMutationLocks.delete(lockKey);
@@ -1133,7 +1260,11 @@ function withInstallationLock(lockKey, fn) {
   return current;
 }
 
-async function withFreshInstallationStore(store, mutator) {
+/** Refreshes state under the installation lock before executing work. @param store - Connected state. @param operation - Operation using fresh state. @returns Operation result. */
+async function withFreshInstallationStore<Result>(
+  store: WorkerStore,
+  mutator: (freshStore: WorkerStore) => Promise<Result>,
+): Promise<Result> {
   const lockKey = store.installationId ? String(store.installationId) : 'local';
   return withInstallationLock(lockKey, async () => {
     const freshStore = await freshConnectedStore(store);
@@ -1141,7 +1272,8 @@ async function withFreshInstallationStore(store, mutator) {
   });
 }
 
-async function freshConnectedStore(store) {
+/** Reloads persisted state while preserving active credentials. @param store - Connected state. @returns Fresh connected state. */
+async function freshConnectedStore(store: WorkerStore): Promise<WorkerStore> {
   if (!store.installationId) return store;
 
   const [localStore, syncState] = await Promise.all([
@@ -1159,11 +1291,13 @@ async function freshConnectedStore(store) {
 
 // ─── Session helpers ───────────────────────────────────────────────────────────
 
-async function getInkwellSession(c) {
+/** Reads the current application session cookie. @param c - Hono request context. @returns Session data, or null. */
+async function getInkwellSession(c: ApiContext): Promise<AuthSessionResult | null> {
   return auth.getCustomSession(getCookie(c, INKWELL_SESSION_COOKIE));
 }
 
-async function requireInkwellSession(c) {
+/** Requires a valid session and emits an HTTP error when absent. @param c - Hono request context. @returns Session data, or null after responding. */
+async function requireInkwellSession(c: ApiContext): Promise<AuthSessionResult | null> {
   const session = await getInkwellSession(c);
 
   if (!session) {
@@ -1176,14 +1310,16 @@ async function requireInkwellSession(c) {
 
 // ─── Sync state (Supabase) ─────────────────────────────────────────────────────
 
-async function ensureInkwellSyncStateRow(installationId) {
+/** Ensures persisted synchronization state exists. @param installationId - Installation identifier. @returns Completion after upsert. */
+async function ensureInkwellSyncStateRow(installationId: Identifier): Promise<void> {
   await supabase.from('inkwell_sync_state').upsert(
     { installation_id: installationId },
     { onConflict: 'installation_id', ignoreDuplicates: true },
   );
 }
 
-async function readInkwellSyncState(installationId) {
+/** Loads and normalizes persisted synchronization state. @param installationId - Installation identifier. @returns Normalized state. */
+async function readInkwellSyncState(installationId: Identifier): Promise<WorkerStore> {
   await ensureInkwellSyncStateRow(installationId);
 
   const { data: row } = await supabase
@@ -1194,7 +1330,7 @@ async function readInkwellSyncState(installationId) {
 
   if (!row) return normalizeStore({});
 
-  return {
+  return normalizeStore({
     inkwellRootPage: row.inkwell_database_id && !row.inkwell_data_source_id
       ? { id: row.inkwell_database_id, parentPageId: row.inkwell_parent_page_id, title: row.inkwell_database_title }
       : undefined,
@@ -1204,6 +1340,9 @@ async function readInkwellSyncState(installationId) {
           dataSourceId: row.inkwell_data_source_id,
           parentPageId: row.inkwell_parent_page_id,
           title: row.inkwell_database_title,
+          propertyIds: {},
+          url: undefined,
+          views: {},
         }
       : undefined,
     // Supabase returns JSONB columns as parsed objects already
@@ -1213,10 +1352,11 @@ async function readInkwellSyncState(installationId) {
     projectPages: row.project_pages_json ?? {},
     projectBlocks: row.project_blocks_json ?? {},
     threadBlocks: row.thread_blocks_json ?? {},
-  };
+  });
 }
 
-async function writeInkwellSyncState(installationId, store) {
+/** Serializes worker state into the persistence row. @param installationId - Installation identifier. @param store - Normalized state. @returns Completion after persistence. */
+async function writeInkwellSyncState(installationId: Identifier, store: WorkerStore): Promise<void> {
   await ensureInkwellSyncStateRow(installationId);
   await supabase.from('inkwell_sync_state').update({
     inkwell_database_id: store.inkwellDatabase?.databaseId ?? store.inkwellRootPage?.id ?? null,
@@ -1235,123 +1375,12 @@ async function writeInkwellSyncState(installationId, store) {
 
 // ─── Notion webhook helpers ────────────────────────────────────────────────────
 
-async function computeHmacSignature(secret: string, body: string): Promise<string> {
-  const key = await crypto.subtle.importKey(
-    'raw',
-    new TextEncoder().encode(secret),
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['sign'],
-  );
-  const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(body));
-  return Array.from(new Uint8Array(sig)).map((b) => b.toString(16).padStart(2, '0')).join('');
-}
-
-async function registerNotionWebhook(env, installationId: number, accessToken: string): Promise<void> {
-  if (!env.NOTION_WEBHOOK_SECRET) return;
-
-  const workerUrl = serverBaseUrl(env);
-  const response = await fetch('https://api.notion.com/v1/webhooks', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      'Content-Type': 'application/json',
-      'Notion-Version': env.NOTION_VERSION ?? '2026-03-11',
-    },
-    body: JSON.stringify({
-      url: `${workerUrl}/webhooks/notion`,
-      filter: { event_types: ['page.content_updated', 'page.properties_updated'] },
-    }),
-  });
-
-  if (!response.ok) return;
-
-  const data = await response.json().catch(() => ({}));
-  if (data?.id) {
-    await supabase
-      .from('notion_installations')
-      .update({ notion_webhook_id: data.id })
-      .eq('id', installationId);
-  }
-}
-
-async function deleteNotionWebhook(env, installationId: number): Promise<void> {
-  const { data: row } = await supabase
-    .from('notion_installations')
-    .select('notion_webhook_id')
-    .eq('id', installationId)
-    .maybeSingle();
-
-  if (!row?.notion_webhook_id) return;
-
-  const { data: accountRow } = await supabase
-    .from('notion_installations')
-    .select('user_id')
-    .eq('id', installationId)
-    .maybeSingle();
-
-  if (!accountRow?.user_id) return;
-
-  const { data: account } = await supabase
-    .from('account')
-    .select('accessToken')
-    .eq('userId', accountRow.user_id)
-    .eq('providerId', 'notion')
-    .maybeSingle();
-
-  if (!account?.accessToken) return;
-
-  await fetch(`https://api.notion.com/v1/webhooks/${row.notion_webhook_id}`, {
-    method: 'DELETE',
-    headers: {
-      Authorization: `Bearer ${account.accessToken}`,
-      'Notion-Version': env.NOTION_VERSION ?? '2026-03-11',
-    },
-  }).catch(() => undefined);
-
-  await supabase
-    .from('notion_installations')
-    .update({ notion_webhook_id: null })
-    .eq('id', installationId);
-}
-
 // ─── Notion OAuth helpers ──────────────────────────────────────────────────────
-
-async function exchangeNotionCode(env, code, redirectUri) {
-  const credentials = Buffer.from(
-    `${env.NOTION_OAUTH_CLIENT_ID}:${env.NOTION_OAUTH_CLIENT_SECRET}`,
-  ).toString('base64');
-  const response = await fetch('https://api.notion.com/v1/oauth/token', {
-    method: 'POST',
-    headers: {
-      Authorization: `Basic ${credentials}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ grant_type: 'authorization_code', code, redirect_uri: redirectUri }),
-  });
-  const payload = await response.json().catch(() => ({}));
-
-  if (!response.ok || !payload.access_token) {
-    throw new Error(payload.message ?? `Notion OAuth returned ${response.status}.`);
-  }
-
-  return payload;
-}
-
-function notionUserFromToken(tokens) {
-  const ownerUser = tokens.owner?.user;
-  const id = ownerUser?.id ?? tokens.bot_id ?? tokens.workspace_id;
-  const name = ownerUser?.name ?? tokens.workspace_name ?? 'Notion user';
-  const email = ownerUser?.person?.email ?? `${id}@notion.local`;
-
-  if (!id) throw new Error('Notion OAuth response did not include a user or bot id.');
-
-  return { id, name, email, image: ownerUser?.avatar_url ?? null };
-}
 
 // ─── Notion API helpers ────────────────────────────────────────────────────────
 
-async function validateNotionCache(store, { pages, projects }) {
+/** Removes cached mappings whose Notion objects no longer exist. @param store - Worker state. @param entities - Local pages and projects. @returns Cache validation summary. */
+async function validateNotionCache(store: WorkerStore, { pages, projects }: { pages: ProjectPage[]; projects: Project[] }) {
   const uncachedProjectIds = new Set();
   const uncachedPageIds = new Set();
   let clearSelectedParentPage = false;
@@ -1437,13 +1466,15 @@ async function validateNotionCache(store, { pages, projects }) {
   };
 }
 
-function uncachePage(store, pageId) {
+/** Removes every cached record associated with a local page. @param store - Worker state. @param pageId - Local page identifier. @returns Nothing. */
+function uncachePage(store: WorkerStore, pageId: string): void {
   delete store.threadBlocks?.[threadKey(pageId)];
   delete store.notePages?.[pageId];
   delete store.blockMappings?.[pageId];
 }
 
-async function notionObjectExists(store, kind, id) {
+/** Checks whether a cached Notion object remains retrievable. @param store - Worker state. @param kind - Notion object kind. @param id - Notion identifier. @returns Whether the object exists. */
+async function notionObjectExists(store: WorkerStore, kind: 'block' | 'database' | 'page', id: string): Promise<boolean> {
   try {
     const endpoint = kind === 'database' ? `/databases/${id}` : kind === 'block' ? `/blocks/${id}` : `/pages/${id}`;
     await notionRequest(store, endpoint);
@@ -1454,7 +1485,8 @@ async function notionObjectExists(store, kind, id) {
   }
 }
 
-async function retrieveNotionPageOrBlock(store, page) {
+/** Retrieves a linked page, falling back to the block endpoint for threads. @param store - Worker state. @param page - Linked local page. @returns Notion page or block response. */
+async function retrieveNotionPageOrBlock(store: WorkerStore, page: ProjectPage): Promise<NotionObject> {
   if (isThreadBackedPage(store, page)) {
     return notionRequest(store, `/blocks/${page.notionPageId}`);
   }
@@ -1468,13 +1500,15 @@ async function retrieveNotionPageOrBlock(store, page) {
   }
 }
 
-function isThreadBackedPage(store, page) {
+/** Determines whether a local page is represented by a toggle block. @param store - Worker state. @param page - Local page. @returns Whether the page is thread-backed. */
+function isThreadBackedPage(store: WorkerStore, page: ProjectPage): boolean {
   const cachedThread = store.threadBlocks?.[threadKey(page.id)];
   const cachedNote = store.notePages?.[page.id];
   return Boolean(cachedThread?.blockId === page.notionPageId || cachedNote?.kind === 'thread');
 }
 
-async function replaceManagedBlocks(store, localPageId, notionPageId, content) {
+/** Replaces managed children and updates mappings. @param store - Worker state. @param localPageId - Local page identifier. @param notionPageId - Parent Notion identifier. @param content - Desired document. @returns Replacement result. */
+async function replaceManagedBlocks(store: WorkerStore, localPageId: string, notionPageId: string, content: DocumentContent) {
   return replaceManagedBlocksWithDependencies({
     store, localPageId, notionPageId, content,
     listAllBlockChildren, deleteManagedBlock, appendManagedBlocks,
@@ -1482,7 +1516,8 @@ async function replaceManagedBlocks(store, localPageId, notionPageId, content) {
   });
 }
 
-async function applyManagedBlockOps(store, localPageId, notionPageId, ops, content) {
+/** Applies incremental managed-block changes. @param store - Worker state. @param localPageId - Local page identifier. @param notionPageId - Parent Notion identifier. @param ops - Ordered changes. @param content - Effective document. @returns Mutation result. */
+async function applyManagedBlockOps(store: WorkerStore, localPageId: string, notionPageId: string, ops: ManagedBlockOperation[], content: DocumentContent) {
   return applyManagedBlockOpsWithDependencies({
     store, localPageId, notionPageId, ops, content,
     appendManagedBlocks, deleteManagedBlock, updateManagedBlock,
@@ -1490,13 +1525,21 @@ async function applyManagedBlockOps(store, localPageId, notionPageId, ops, conte
   });
 }
 
-async function importManagedBlocks(store, page) {
-  return importManagedBlocksWithDependencies({ hash, listAllBlockChildren, page, store });
+/** Imports supported remote children for a linked page. @param store - Worker state. @param page - Linked local page. @returns Imported document, or null. */
+async function importManagedBlocks(store: WorkerStore, page: ProjectPage): Promise<DocumentContent | null> {
+  if (!page.notionPageId) return null;
+  return importManagedBlocksWithDependencies({
+    hash,
+    listAllBlockChildren,
+    page: { id: page.id, notionPageId: page.notionPageId },
+    store,
+  });
 }
 
-async function listAllBlockChildren(store, blockId) {
-  const results = [];
-  let cursor;
+/** Loads every paginated child of a Notion block. @param store - Worker state. @param blockId - Parent block identifier. @returns All child blocks. */
+async function listAllBlockChildren(store: WorkerStore, blockId: string): Promise<NotionBlock[]> {
+  const results: NotionBlock[] = [];
+  let cursor: string | undefined;
 
   do {
     const search = new URLSearchParams();
@@ -1504,14 +1547,15 @@ async function listAllBlockChildren(store, blockId) {
     if (cursor) search.set('start_cursor', cursor);
 
     const response = await notionRequest(store, `/blocks/${blockId}/children?${search}`);
-    results.push(...response.results);
-    cursor = response.has_more ? response.next_cursor : undefined;
+    results.push(...(response.results as NotionBlock[]));
+    cursor = response.has_more ? response.next_cursor ?? undefined : undefined;
   } while (cursor);
 
   return results;
 }
 
-async function createChildPage(store, parentPageId, title) {
+/** Creates a child page beneath a Notion page. @param store - Worker state. @param parentPageId - Parent identifier. @param title - Page title. @returns Created page. */
+async function createChildPage(store: WorkerStore, parentPageId: string, title: string): Promise<NotionObject> {
   return notionRequest(store, '/pages', {
     method: 'POST',
     body: {
@@ -1521,7 +1565,8 @@ async function createChildPage(store, parentPageId, title) {
   });
 }
 
-async function createWorkspacePage(store, title) {
+/** Creates a top-level workspace page. @param store - Worker state. @param title - Page title. @returns Created page. */
+async function createWorkspacePage(store: WorkerStore, title: string): Promise<NotionObject> {
   return notionRequest(store, '/pages', {
     method: 'POST',
     body: {
@@ -1531,45 +1576,51 @@ async function createWorkspacePage(store, title) {
   });
 }
 
-async function updatePageTitle(store, pageId, title) {
+/** Updates a Notion page title. @param store - Worker state. @param pageId - Page identifier. @param title - New title. @returns Updated page. */
+async function updatePageTitle(store: WorkerStore, pageId: string, title: string): Promise<NotionObject> {
   return notionRequest(store, `/pages/${pageId}`, {
     method: 'PATCH',
     body: { properties: { title: [{ text: { content: title || 'Untitled Page' } }] } },
   });
 }
 
-async function updateChildNotePage(store, pageId, page) {
-  const body = { properties: { title: [{ text: { content: page.title || 'Untitled Page' } }] } };
+/** Updates a linked note page title and archive state. @param store - Worker state. @param pageId - Notion page identifier. @param page - Local page state. @returns Updated page. */
+async function updateChildNotePage(store: WorkerStore, pageId: string, page: ProjectPage): Promise<NotionObject> {
+  const body: JsonObject = { properties: { title: [{ text: { content: page.title || 'Untitled Page' } }] } };
   if (page.status === 'archived') body.archived = true;
   return notionRequest(store, `/pages/${pageId}`, { method: 'PATCH', body });
 }
 
-async function archiveProjectRootPage(store, pageId) {
+/** Archives a legacy project root page. @param store - Worker state. @param pageId - Notion page identifier. @returns Archived page. */
+async function archiveProjectRootPage(store: WorkerStore, pageId: string): Promise<NotionObject> {
   return notionRequest(store, `/pages/${pageId}`, { method: 'PATCH', body: { archived: true } });
 }
 
-async function deleteManagedBlock(store, blockId) {
+/** Deletes a managed Notion block. @param store - Worker state. @param blockId - Block identifier. @returns Deleted block response. */
+async function deleteManagedBlock(store: WorkerStore, blockId: string): Promise<NotionObject> {
   return notionRequest(store, `/blocks/${blockId}`, { method: 'DELETE' });
 }
 
-async function updateManagedBlock(store, blockId, notionBlock) {
+/** Updates a managed Notion block in place. @param store - Worker state. @param blockId - Block identifier. @param notionBlock - Desired block payload. @returns Updated block. */
+async function updateManagedBlock(store: WorkerStore, blockId: string, notionBlock: NotionBlockPayload): Promise<NotionObject> {
   return notionRequest(store, `/blocks/${blockId}`, {
     method: 'PATCH',
     body: updateBodyFromNotionBlock(notionBlock),
   });
 }
 
-async function appendManagedBlocks(store, notionPageId, notionBlocks, position) {
-  const createdBlocks = [];
+/** Appends managed blocks in API-sized batches. @param store - Worker state. @param notionPageId - Parent identifier. @param notionBlocks - Blocks to append. @param position - Optional insertion position. @returns Created blocks. */
+async function appendManagedBlocks(store: WorkerStore, notionPageId: string, notionBlocks: NotionBlockPayload[], position?: BlockPosition): Promise<NotionBlock[]> {
+  const createdBlocks: NotionBlock[] = [];
 
   for (const batch of chunks(notionBlocks, 100)) {
-    let results;
+    let results: NotionBlock[];
     try {
       const response = await notionRequest(store, `/blocks/${notionPageId}/children`, {
         method: 'PATCH',
         body: { children: batch, ...(position ? { position } : {}) },
       });
-      results = response.results;
+      results = response.results as NotionBlock[];
     } catch {
       results = await appendBlocksWithFallback(store, notionPageId, batch, position);
     }
@@ -1581,8 +1632,9 @@ async function appendManagedBlocks(store, notionPageId, notionBlocks, position) 
   return createdBlocks;
 }
 
-async function appendBlocksWithFallback(store, notionPageId, blocks, position) {
-  const results = [];
+/** Appends blocks individually and substitutes unsupported media. @param store - Worker state. @param notionPageId - Parent identifier. @param blocks - Blocks to append. @param position - Optional insertion position. @returns Created blocks. */
+async function appendBlocksWithFallback(store: WorkerStore, notionPageId: string, blocks: NotionBlockPayload[], position?: BlockPosition): Promise<NotionBlock[]> {
+  const results: NotionBlock[] = [];
 
   for (const block of blocks) {
     try {
@@ -1590,8 +1642,9 @@ async function appendBlocksWithFallback(store, notionPageId, blocks, position) {
         method: 'PATCH',
         body: { children: [block], ...(position ? { position } : {}) },
       });
-      results.push(...response.results);
-      position = positionAfterCreatedBlocks(position, response.results);
+      const created = response.results as NotionBlock[];
+      results.push(...created);
+      position = positionAfterCreatedBlocks(position, created);
     } catch (error) {
       // A Notion file upload is the only durable copy of a dropped local file.
       // Never turn a transient attach failure into a permanent placeholder;
@@ -1606,8 +1659,9 @@ async function appendBlocksWithFallback(store, notionPageId, blocks, position) {
           method: 'PATCH',
           body: { children: [fallback], ...(position ? { position } : {}) },
         });
-        results.push(...response.results);
-        position = positionAfterCreatedBlocks(position, response.results);
+        const created = response.results as NotionBlock[];
+        results.push(...created);
+        position = positionAfterCreatedBlocks(position, created);
       } catch {
         // skip block rather than aborting the whole page
       }
@@ -1619,335 +1673,29 @@ async function appendBlocksWithFallback(store, notionPageId, blocks, position) {
 
 // ─── Utility helpers ───────────────────────────────────────────────────────────
 
-function isTrustedOrigin(env, origin) {
-  if (!origin) return true;
-  if (origin.startsWith('chrome-extension://')) return true;
-
-  const trusted = [
-    env.WORKER_URL,
-    env.INKWELL_EXTENSION_ORIGIN,
-    ...(env.TRUSTED_ORIGINS?.split(',') ?? []),
-  ].map((o) => o?.trim()).filter(Boolean);
-
-  return trusted.includes(origin);
-}
-
-function serverBaseUrl(env) {
-  return env.WORKER_URL ?? 'http://localhost:8787';
-}
-
-function randomToken(byteLength = 32) {
-  return randomBytes(byteLength).toString('base64url');
-}
-
-function hash(value) {
-  return createHash('sha256').update(value).digest('hex');
-}
-
-function isNotionObjectNotFound(error) {
-  return error?.status === 404 || error?.code === 'object_not_found';
-}
-
-function isBlockNotPageError(error) {
-  return (
-    error?.code === 'validation_error' &&
-    /is a block, not a page|retrieve block API/i.test(error?.message ?? '')
-  );
-}
-
-function updateBodyFromNotionBlock(block) {
-  if (!block?.type) return {};
-  return { [block.type]: block[block.type] ?? {} };
-}
-
-function positionAfterCreatedBlocks(position, createdBlocks) {
-  const lastBlock = createdBlocks?.[createdBlocks.length - 1];
-  return lastBlock?.id ? { type: 'after_block', after_block: { id: lastBlock.id } } : position;
-}
-
-function mediaFallbackBlock(block) {
-  const url = mediaUrlFromNotionBlock(block);
-  const isLinkable = url && !url.startsWith('data:');
-  return {
-    object: 'block',
-    type: 'paragraph',
-    paragraph: {
-      rich_text: isLinkable
-        ? [{ type: 'text', text: { content: url, link: { url } } }]
-        : [{ type: 'text', text: { content: '[Image — not synced]' } }],
-      color: 'default',
-    },
-  };
-}
-
-function mediaUrlFromNotionBlock(block) {
-  const t = block?.type;
-  if (t === 'image') return block.image?.external?.url ?? block.image?.file?.url ?? block.image?.file_upload?.url ?? null;
-  if (t === 'video') return block.video?.external?.url ?? block.video?.file?.url ?? null;
-  if (t === 'audio') return block.audio?.external?.url ?? block.audio?.file?.url ?? null;
-  if (t === 'embed') return block.embed?.url ?? null;
-  if (t === 'file') return block.file?.external?.url ?? block.file?.file?.url ?? null;
-  return null;
-}
-
-function findNotionBlockIdByFileUploadId(store, fileUploadId) {
-  for (const mappings of Object.values(store.blockMappings ?? {})) {
-    for (const mapping of mappings ?? []) {
-      for (const state of [mapping?.newState, mapping?.oldState]) {
-        const type = state?.type;
-        const uploadedId = type ? state?.[type]?.file_upload?.id : undefined;
-
-        if (uploadedId === fileUploadId && mapping?.notionBlockId) {
-          return mapping.notionBlockId;
-        }
-      }
-    }
-  }
-
-  return null;
-}
-
-function findMappedNotionBlockId(store, notionBlockId) {
-  if (!notionBlockId) return null;
-
-  for (const mappings of Object.values(store.blockMappings ?? {})) {
-    if ((mappings ?? []).some((mapping) => mapping?.notionBlockId === notionBlockId)) {
-      return notionBlockId;
-    }
-  }
-
-  return null;
-}
-
-function titleFromPage(page) {
-  const titleProperty = Object.values(page.properties ?? {}).find((p) => p.type === 'title');
-  return titleProperty?.title?.map((item) => item.plain_text).join('') || 'Untitled';
-}
-
-function chunks(values, size) {
-  const result = [];
-  for (let i = 0; i < values.length; i += size) result.push(values.slice(i, i + size));
-  return result;
-}
-
-function isBase64(value) {
-  return typeof value === 'string' && /^[A-Za-z0-9+/]*={0,2}$/.test(value) && value.length % 4 === 0;
-}
-
-function isSupportedMediaMimeType(mimeType) {
-  const n = String(mimeType).toLowerCase();
-  return n.startsWith('image/') || n.startsWith('audio/');
-}
-
-function sanitizeMediaFilename(filename, mimeType) {
-  const safeName = String(filename ?? '')
-    .trim()
-    .replace(/[\\/:"*?<>|]+/g, '-')
-    .replace(/\s+/g, ' ')
-    .slice(0, 180);
-  const mediaKind = String(mimeType).toLowerCase().startsWith('audio/') ? 'audio' : 'image';
-  const extension = mediaExtensionFromMimeType(mimeType);
-  const name = safeName || `${mediaKind}.${extension}`;
-  return /\.[A-Za-z0-9]+$/.test(name) ? name : `${name}.${extension}`;
-}
-
-function mediaExtensionFromMimeType(mimeType) {
-  return {
-    'image/jpeg': 'jpg', 'image/png': 'png', 'image/gif': 'gif', 'image/webp': 'webp',
-    'image/svg+xml': 'svg', 'image/avif': 'avif', 'audio/mpeg': 'mp3', 'audio/mp3': 'mp3',
-    'audio/mp4': 'm4a', 'audio/aac': 'aac', 'audio/wav': 'wav', 'audio/x-wav': 'wav',
-    'audio/ogg': 'ogg', 'audio/opus': 'opus', 'audio/webm': 'webm',
-  }[String(mimeType).toLowerCase()] ?? (String(mimeType).toLowerCase().startsWith('audio/') ? 'mp3' : 'png');
-}
-
-
-function youtubeEmbedPage(embedUrl) {
-  return `<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <meta name="referrer" content="strict-origin-when-cross-origin">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>YouTube video</title>
-  <style>
-    html, body { width: 100%; height: 100%; margin: 0; background: #111113; overflow: hidden; }
-    iframe { width: 100%; height: 100%; border: 0; display: block; }
-  </style>
-</head>
-<body>
-  <iframe
-    src="${escapeHtml(embedUrl)}"
-    title="YouTube video player"
-    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-    referrerpolicy="strict-origin-when-cross-origin"
-    allowfullscreen></iframe>
-</body>
-</html>`;
-}
-
-function legalPage(title, body) {
-  return `<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>${escapeHtml(title)} - Inkwell</title>
-  <style>
-    :root { color-scheme: light; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-    body { margin: 0; background: #fafafa; color: #171717; }
-    main { width: min(100% - 32px, 920px); margin: 0 auto; padding: 48px 0; }
-    article { padding: clamp(28px, 5vw, 56px); border: 1px solid #e7e5e4; border-radius: 18px; background: #fff; box-shadow: 0 18px 60px rgba(0, 0, 0, 0.06); line-height: 1.7; }
-    h1 { margin: 0 0 8px; font-size: clamp(2rem, 5vw, 3rem); line-height: 1.05; }
-    h2 { margin: 32px 0 10px; font-size: 1.3rem; line-height: 1.25; }
-    p, li { color: #44403c; }
-    a { color: #1d4ed8; text-decoration: none; overflow-wrap: anywhere; }
-    a:hover { text-decoration: underline; }
-    ul { padding-left: 1.35rem; }
-    .updated { margin: 0 0 28px; color: #78716c; }
-  </style>
-</head>
-<body>
-  <main>
-    <article>
-      ${body}
-    </article>
-  </main>
-</body>
-</html>`;
-}
-
-function termsBody() {
-  return `
-    <h1>Terms of Service</h1>
-    <p class="updated"><strong>Last updated</strong> May 09, 2026</p>
-    <p>These Terms of Service govern your access to and use of Inkwell, a browser-based note-taking and content capture tool operated by Aidan Boissonneault, doing business as Inkwell.</p>
-    <h2>Use of the Service</h2>
-    <p>Inkwell lets users collect, organize, edit, and sync notes, highlights, project content, and uploaded media with connected Notion workspaces. You may use the service only for lawful purposes and in compliance with these terms.</p>
-    <h2>Notion and Third-Party Services</h2>
-    <p>Inkwell relies on third-party services, including Notion, to provide sync, storage, and workspace features. Some functionality may be unavailable, delayed, or interrupted due to third-party outages, API limits, network issues, or synchronization conflicts.</p>
-    <h2>User Content</h2>
-    <p>You are responsible for the notes, highlights, media, and other content you create or sync through Inkwell. You retain ownership of your content. You grant Inkwell the limited permission needed to process, store, transmit, and synchronize that content to provide the service.</p>
-    <h2>Accounts and Security</h2>
-    <p>You are responsible for maintaining control of your browser profile, Notion account, and devices used with Inkwell. Do not misuse, disrupt, reverse engineer, or attempt to bypass access restrictions, rate limits, or security protections.</p>
-    <h2>Availability and Disclaimer</h2>
-    <p>The service is provided as-is and as-available. Inkwell does not guarantee that synchronization will always be uninterrupted or error-free. Users should review important changes and maintain backups of critical content.</p>
-    <h2>Privacy</h2>
-    <p>Your use of Inkwell is also governed by the <a href="/privacy">Privacy Policy</a>, which explains how Inkwell collects, uses, stores, and shares user data.</p>
-    <h2>Contact</h2>
-    <p>Questions about these terms can be sent to <a href="mailto:support@byaidan.com">support@byaidan.com</a>.</p>
-  `;
-}
-
-function privacyBody() {
-  return `
-    <h1>Privacy Policy</h1>
-    <p class="updated"><strong>Last updated</strong> May 13, 2026</p>
-    <p>This Privacy Policy explains how Inkwell collects, uses, stores, and shares information when you use the Inkwell browser extension and sync service.</p>
-    <h2>Information Inkwell Handles</h2>
-    <ul>
-      <li>Notion account and workspace information returned during Notion OAuth, such as account identifiers, name, email address, workspace ID, and workspace name.</li>
-      <li>Authentication and session metadata required to keep you logged in, including session tokens, IP address, user agent, and token expiry metadata.</li>
-      <li>User-generated content you create or sync, including notes, highlights, page titles, source links, project metadata, images, audio, and other media you choose to add.</li>
-      <li>Website content and browsing-related data you intentionally capture with the extension, such as selected text, source URLs, page titles, and highlight context.</li>
-      <li>Synchronization metadata needed to map local Inkwell content to Notion pages, blocks, databases, and file uploads.</li>
-    </ul>
-    <h2>How Information Is Used</h2>
-    <p>Inkwell uses this information to authenticate with Notion, create and update your Inkwell workspace structure, synchronize content across devices, upload or refresh media, detect sync conflicts, provide user-facing capture features, prevent abuse, and maintain service security.</p>
-    <h2>Sharing</h2>
-    <p>Inkwell shares user data with Notion only as needed to provide the sync features you request. Inkwell uses Supabase and Cloudflare infrastructure to store and process authentication, session, and synchronization data. Inkwell does not sell user data and does not use user data for personalized advertising.</p>
-    <h2>Local Storage</h2>
-    <p>The extension stores local projects, pages, pending sync operations, server configuration, and legal acceptance metadata in browser storage and IndexedDB on your device.</p>
-    <h2>Security</h2>
-    <p>Inkwell transmits data using HTTPS in production and stores authentication tokens in server-side storage. You should keep your browser profile, device, and Notion account secure.</p>
-    <h2>Chrome Web Store Limited Use</h2>
-    <p>The use of information received from Google APIs will adhere to the Chrome Web Store User Data Policy, including the Limited Use requirements.</p>
-    <h2>Your Choices</h2>
-    <p>You can disconnect Notion from Inkwell by logging out in the extension. You can also revoke access from your Notion workspace settings and remove local extension data through your browser.</p>
-    <h2>Contact</h2>
-    <p>Questions about this policy can be sent to <a href="mailto:support@byaidan.com">support@byaidan.com</a>.</p>
-  `;
-}
-
-function closePage(message) {
-  return `<!doctype html><html><body><p>${escapeHtml(message)}</p><script>setTimeout(() => window.close(), 900)</script></body></html>`;
-}
-
-function escapeHtml(value) {
-  return String(value)
-    .replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
-}
 
 // ─── SSE Durable Object ────────────────────────────────────────────────────────
 
-export class SyncEventsDO {
-  private sessions = new Map<string, { writer: WritableStreamDefaultWriter<Uint8Array>; encoder: TextEncoder }>();
-
-  async fetch(request: Request): Promise<Response> {
-    const url = new URL(request.url);
-
-    if (url.pathname === '/connect') {
-      const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
-      const writer = writable.getWriter();
-      const encoder = new TextEncoder();
-      const id = crypto.randomUUID();
-      this.sessions.set(id, { writer, encoder });
-
-      const heartbeat = setInterval(() => {
-        writer.write(encoder.encode(': heartbeat\n\n')).catch(() => {
-          clearInterval(heartbeat);
-          this.sessions.delete(id);
-        });
-      }, 25000);
-
-      writer.closed.finally(() => {
-        clearInterval(heartbeat);
-        this.sessions.delete(id);
-      });
-
-      return new Response(readable, {
-        headers: {
-          'Content-Type': 'text/event-stream',
-          'Cache-Control': 'no-cache',
-          'X-Accel-Buffering': 'no',
-        },
-      });
-    }
-
-    if (url.pathname === '/notify' && request.method === 'POST') {
-      const event = await request.json<object>();
-      const payload = `data: ${JSON.stringify(event)}\n\n`;
-      const dead: string[] = [];
-
-      for (const [id, { writer, encoder }] of this.sessions) {
-        try {
-          await writer.write(encoder.encode(payload));
-        } catch {
-          dead.push(id);
-        }
-      }
-      dead.forEach((id) => this.sessions.delete(id));
-      return new Response('ok');
-    }
-
-    return new Response('not found', { status: 404 });
-  }
-}
 
 // ─── Worker export ─────────────────────────────────────────────────────────────
 
 export default {
+  /** Dispatches an HTTP request through Hono. @param request - Incoming request. @param env - Worker bindings. @param ctx - Execution context. @returns HTTP response. */
   async fetch(request, env, ctx) {
     initSingletons(env);
     return app.fetch(request, env, ctx);
   },
 
+  /** Processes synchronization Queue messages. @param batch - Queue batch. @param env - Worker bindings. @returns Completion after every message is acknowledged or retried. */
   async queue(batch, env) {
     initSingletons(env);
 
     for (const msg of batch.messages) {
       const job = msg.body;
+      const installationId = String(job.installationId);
+      const queuedVersion = job.queuedVersion ?? 0;
       let syncRow;
-      console.log('[queue] processing', job.type, job.localId, 'v', job.queuedVersion);
+      console.log('[queue] processing', job.type, job.localId, 'v', queuedVersion);
       try {
         const { data: row } = await supabase
           .from('notion_block_sync')
@@ -1960,8 +1708,8 @@ export default {
         // Stale check — a newer edit was enqueued after this one
         // A block batch may span multiple Queue messages. Every chunk must run
         // or the remote page would be left only partially applied.
-        if (job.type !== 'block_op' && row && row.local_version > job.queuedVersion) {
-          console.log('[queue] skipped stale', job.type, job.localId, 'v', job.queuedVersion, 'latest', row.local_version);
+        if (job.type !== 'block_op' && row && row.local_version > queuedVersion) {
+          console.log('[queue] skipped stale', job.type, job.localId, 'v', queuedVersion, 'latest', row.local_version);
           msg.ack();
           continue;
         }
@@ -1975,45 +1723,54 @@ export default {
         let notionBlockId = null;
 
         if (job.type === 'block_op') {
-          const result = await applyBlockOpsToNotionForInstallation(job.installationId, {
-            ops: job.payload.ops?.length ? job.payload.ops : [job.payload.op].filter(Boolean),
-            page: job.payload.page,
-            project: job.payload.project,
+          const queuedPage = job.payload.page;
+          const queuedProject = job.payload.project;
+          if (!queuedPage || !queuedProject) throw new Error('Block queue job is missing page or project context.');
+          const legacyOperation = legacyQueueOperation(job.payload);
+          const result = await applyBlockOpsToNotionForInstallation(installationId, {
+            ops: job.payload.ops?.length ? job.payload.ops : legacyOperation ? [legacyOperation] : [],
+            page: { ...queuedPage, content: queuedPage.content ?? { type: 'doc', content: [] } },
+            project: { ...queuedProject, stateContent: queuedProject.stateContent ?? { type: 'doc', content: [] } },
             selectedParentPageId: job.payload.selectedParentPageId,
           });
           notionBlockId = result?.page?.notionPageId ?? null;
         } else if (job.type === 'page') {
-          const result = await pushPageToNotionForInstallation(job.installationId, {
-            page: job.payload.page,
-            project: job.payload.project,
+          const queuedPage = job.payload.page;
+          const queuedProject = job.payload.project;
+          if (!queuedPage || !queuedProject) throw new Error('Page queue job is missing page or project context.');
+          const result = await pushPageToNotionForInstallation(installationId, {
+            page: { ...queuedPage, content: queuedPage.content ?? { type: 'doc', content: [] } },
+            project: { ...queuedProject, stateContent: queuedProject.stateContent ?? { type: 'doc', content: [] } },
             selectedParentPageId: job.payload.selectedParentPageId,
           });
           notionBlockId = result?.page?.notionPageId ?? null;
         } else if (job.type === 'project') {
-          await syncProjectToNotionForInstallation(job.installationId, {
-            project: job.payload.project,
+          const queuedProject = job.payload.project;
+          if (!queuedProject) throw new Error('Project queue job is missing project context.');
+          await syncProjectToNotionForInstallation(installationId, {
+            project: { ...queuedProject, stateContent: queuedProject.stateContent ?? { type: 'doc', content: [] } },
             selectedParentPageId: job.payload.selectedParentPageId,
           });
         }
 
-        const isFinalBatchMessage = job.batchSize == null || job.batchIndex === job.batchSize - 1;
-        const isCurrentVersion = !row || row.local_version <= job.queuedVersion;
+        const isFinalBatchMessage = job.type !== 'block_op' || job.batchIndex === job.batchSize - 1;
+        const isCurrentVersion = !row || row.local_version <= queuedVersion;
         if (isFinalBatchMessage && isCurrentVersion) {
           await supabase
             .from('notion_block_sync')
             .update({
               status: 'synced',
-              synced_version: job.queuedVersion,
+              synced_version: queuedVersion,
               notion_block_id: notionBlockId,
               updated_at: new Date().toISOString(),
             })
             .eq('installation_id', job.installationId)
             .eq('local_id', job.localId);
 
-          const doStub = env.SYNC_EVENTS.get(env.SYNC_EVENTS.idFromName(job.installationId));
+          const doStub = env.SYNC_EVENTS.get(env.SYNC_EVENTS.idFromName(installationId));
           await doStub.fetch(new Request('http://do/notify', {
             method: 'POST',
-            body: JSON.stringify({ status: 'synced', pageId: job.localId, notionBlockId, version: job.queuedVersion }),
+            body: JSON.stringify({ status: 'synced', pageId: job.localId, notionBlockId, version: queuedVersion }),
           })).catch(() => undefined);
         }
 
@@ -2021,16 +1778,17 @@ export default {
         msg.ack();
       } catch (err) {
         console.error('[queue] failed', job.type, job.localId, err);
-        await supabase
+        await Promise.resolve(supabase
           .from('notion_block_sync')
           .update({ status: 'failed', updated_at: new Date().toISOString() })
           .eq('installation_id', job.installationId)
           .eq('local_id', job.localId)
-          .eq('local_version', job.queuedVersion)
-          .then(() => {}).catch(() => {});
+          .eq('local_version', queuedVersion))
+          .then((): void => undefined)
+          .catch((): void => undefined);
 
-        if (!syncRow || syncRow.local_version <= job.queuedVersion) {
-          const doStub = env.SYNC_EVENTS.get(env.SYNC_EVENTS.idFromName(job.installationId));
+        if (!syncRow || syncRow.local_version <= queuedVersion) {
+          const doStub = env.SYNC_EVENTS.get(env.SYNC_EVENTS.idFromName(installationId));
           await doStub.fetch(new Request('http://do/notify', {
             method: 'POST',
             body: JSON.stringify({ status: 'failed', pageId: job.localId }),
@@ -2041,4 +1799,4 @@ export default {
       }
     }
   },
-};
+} satisfies ExportedHandler<WorkerEnv, SyncQueueMessage>;

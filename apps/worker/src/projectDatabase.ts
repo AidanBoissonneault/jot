@@ -1,18 +1,112 @@
-// @ts-nocheck
-const INKWELL_DATABASE_TITLE = 'Inkwell';
-const PROJECT_STATE_BLOCK_KEY = 'project-state';
+/**
+ * @file Coordinates creation, discovery, import, and synchronization of the Notion project database.
+ * @author Aidan Boissonneault
+ * @lastModified September 2026
+ */
 
-const PROJECT_PROPERTIES = {
-  title: 'Name',
-  status: 'Status',
-  category: 'Category',
-  created: 'Created',
-  updated: 'Updated',
-  createdBy: 'Created by',
-  lastEditedBy: 'Last edited by',
-  inkwellId: 'Inkwell ID',
-  managed: 'Managed by Inkwell',
-};
+import {
+  INKWELL_DATABASE_TITLE,
+  PROJECT_PROPERTIES,
+  activeProjectsView,
+  allProjectsView,
+  byCategoryView,
+  databaseParent,
+  databaseSummary,
+  dateProperty,
+  emptyDocument,
+  firstDataSourceId,
+  isArchivedAncestorError,
+  isArchivedObject,
+  isBlockNotPageError,
+  pageSummaryFromNotionPage,
+  parentPageIdFromObject,
+  projectProperties,
+  projectSchema,
+  projectStateKey,
+  propertyIdMap,
+  richText,
+  richTextProperty,
+  selectProperty,
+  threadKey,
+  titleFromDatabase,
+  titleFromPage,
+  toggleBlock,
+  toggleTitle,
+} from './projectDatabaseValues.js';
+
+export { projectStateKey, threadKey } from './projectDatabaseValues.js';
+
+import type { DocumentContent, Project, ProjectPage } from '../../../src/types/capture.js';
+import type {
+  AppendLog,
+  HashValue,
+  InkwellDatabase,
+  JsonObject,
+  ListAllBlockChildren,
+  NotionBlock,
+  NotionBlockPayload,
+  NotionObject,
+  NotionRequester,
+  ReplaceManagedBlocks,
+  StoredBlock,
+  StoredPage,
+  WorkerStore,
+} from './types.js';
+
+type DocumentToBlocks = (document: DocumentContent) => NotionBlockPayload[];
+type BlocksToDocument = (blocks: NotionBlock[]) => DocumentContent;
+
+interface ProjectDatabaseDependencies {
+  appendLog: AppendLog;
+  createWorkspacePage: (store: WorkerStore, title: string) => Promise<NotionObject>;
+  hash: HashValue;
+  isNotionObjectNotFound: (error: unknown) => boolean;
+  listAllBlockChildren: ListAllBlockChildren;
+  notionBlocksToTiptapDocument: BlocksToDocument;
+  notionRequest: NotionRequester;
+  replaceManagedBlocks: ReplaceManagedBlocks;
+  tiptapDocumentToNotionBlocks: DocumentToBlocks;
+}
+
+interface ParentSelection {
+  selectedParentPageId: string | undefined;
+}
+
+interface DatabaseSearchOptions {
+  ignoredDatabaseIds: Set<string>;
+  parentPageId: string | undefined;
+}
+
+interface EnsureProjectPageOptions extends ParentSelection {
+  retryOnArchivedAncestor: boolean;
+  syncState: boolean;
+}
+
+interface DatabaseCandidate {
+  dataSourceId: string;
+  database: NotionObject;
+  managedProjects: number;
+  mappedProjects: number;
+}
+
+interface ProjectPageResult {
+  id: string;
+  parentPageId?: string;
+  project: Project;
+  title: string;
+  url?: string;
+}
+
+interface ToggleOptions {
+  key: string;
+  mappings: Record<string, StoredBlock>;
+}
+
+/**
+ * Creates project-database operations bound to Notion and persistence dependencies.
+ * @param dependencies - Notion transport, conversion, logging, and mapping dependencies.
+ * @returns Operations for project databases, rows, state blocks, and thread toggles.
+ */
 
 export function createProjectDatabaseHelpers({
   appendLog,
@@ -24,8 +118,12 @@ export function createProjectDatabaseHelpers({
   notionRequest,
   replaceManagedBlocks,
   tiptapDocumentToNotionBlocks,
-}) {
-  async function ensureProjectDatabase(store, { selectedParentPageId } = {}) {
+}: ProjectDatabaseDependencies) {
+  /** Ensures the managed project database exists. @param store - Worker state. @param options - Parent selection. @returns Active database. */
+  async function ensureProjectDatabase(
+    store: WorkerStore,
+    { selectedParentPageId }: ParentSelection = { selectedParentPageId: undefined },
+  ): Promise<InkwellDatabase> {
     store.projectPages ??= {};
     store.projectBlocks ??= {};
     store.threadBlocks ??= {};
@@ -77,7 +175,11 @@ export function createProjectDatabaseHelpers({
     return created;
   }
 
-  async function ensureDatabaseParentPage(store, selectedParentPageId) {
+  /** Resolves or creates the database parent. @param store - Worker state. @param selectedParentPageId - Selected parent. @returns Parent summary. */
+  async function ensureDatabaseParentPage(
+    store: WorkerStore,
+    selectedParentPageId: string | undefined = undefined,
+  ) {
     if (selectedParentPageId) {
       try {
         const page = await notionRequest(store, `/pages/${selectedParentPageId}`);
@@ -92,7 +194,7 @@ export function createProjectDatabaseHelpers({
         if (!isNotionObjectNotFound(error) && !isBlockNotPageError(error)) {
           throw error;
         }
-        appendLog(store, 'database_parent_inaccessible', `${selectedParentPageId}: ${error.message}`);
+        appendLog(store, 'database_parent_inaccessible', `${selectedParentPageId}: ${errorMessage(error)}`);
       }
 
       return undefined;
@@ -124,7 +226,11 @@ export function createProjectDatabaseHelpers({
     return store.inkwellRootPage;
   }
 
-  async function refreshDatabase(store, stored) {
+  /** Refreshes a stored database. @param store - Worker state. @param stored - Stored summary. @returns Refreshed summary. */
+  async function refreshDatabase(
+    store: WorkerStore,
+    stored: InkwellDatabase,
+  ): Promise<InkwellDatabase | undefined> {
     try {
       const database = await notionRequest(store, `/databases/${stored.databaseId}`);
 
@@ -144,7 +250,7 @@ export function createProjectDatabaseHelpers({
       await ensureProjectViews(store, refreshed);
       return refreshed;
     } catch (error) {
-      appendLog(store, 'project_database_lookup_error', error.message);
+      appendLog(store, 'project_database_lookup_error', errorMessage(error));
 
       // A missing/removed database is recoverable by discovery. Rate limits,
       // network errors, and other transient failures are not evidence that the
@@ -158,12 +264,16 @@ export function createProjectDatabaseHelpers({
     }
   }
 
-  async function findExistingDatabase(store, { parentPageId, ignoredDatabaseIds = new Set() } = {}) {
+  /** Discovers the best accessible database. @param store - Worker state. @param options - Search filters. @returns Matching database. */
+  async function findExistingDatabase(
+    store: WorkerStore,
+    { parentPageId, ignoredDatabaseIds = new Set<string>() }: Partial<DatabaseSearchOptions> = {},
+  ): Promise<InkwellDatabase | undefined> {
     const databases = [];
     let cursor;
 
     do {
-      const body = {
+      const body: JsonObject = {
         query: INKWELL_DATABASE_TITLE,
         page_size: 100,
         filter: {
@@ -220,19 +330,21 @@ export function createProjectDatabaseHelpers({
       : undefined;
   }
 
-  function mappedProjectCount(store, databaseId) {
+  /** Counts mapped projects. @param store - Worker state. @param databaseId - Database ID. @returns Mapping count. */
+  function mappedProjectCount(store: WorkerStore, databaseId: string): number {
     return Object.values(store.projectPages ?? {}).filter(
       (page) => page?.parentPageId === databaseId,
     ).length;
   }
 
-  async function managedProjectCount(store, dataSourceId) {
+  /** Counts managed project rows. @param store - Worker state. @param dataSourceId - Data source ID. @returns Managed count. */
+  async function managedProjectCount(store: WorkerStore, dataSourceId: string): Promise<number> {
     let count = 0;
     let cursor;
 
     try {
       do {
-        const body = {
+        const body: JsonObject = {
           page_size: 100,
           filter: {
             property: PROJECT_PROPERTIES.managed,
@@ -258,8 +370,8 @@ export function createProjectDatabaseHelpers({
       // Other failures may be transient, so abort discovery instead of making a
       // guess that could split data across databases.
       if (
-        error?.code === 'validation_error' &&
-        /managed by inkwell|property/i.test(error?.message ?? '')
+        errorCode(error) === 'validation_error' &&
+        /managed by inkwell|property/i.test(errorMessage(error))
       ) {
         return -1;
       }
@@ -268,7 +380,8 @@ export function createProjectDatabaseHelpers({
     }
   }
 
-  function compareDatabaseCandidates(first, second) {
+  /** Ranks database candidates. @param first - First candidate. @param second - Second candidate. @returns Sort value. */
+  function compareDatabaseCandidates(first: DatabaseCandidate, second: DatabaseCandidate): number {
     if (first.mappedProjects !== second.mappedProjects) {
       return second.mappedProjects - first.mappedProjects;
     }
@@ -287,9 +400,12 @@ export function createProjectDatabaseHelpers({
     return String(first.database.id).localeCompare(String(second.database.id));
   }
 
-  async function createProjectDatabaseWithFallback(store, parentPageId, {
-    ignoredDatabaseIds = new Set(),
-  } = {}) {
+  /** Creates a database with safe discovery fallback. @param store - Worker state. @param parentPageId - Preferred parent. @param options - Ignored IDs. @returns Database summary. */
+  async function createProjectDatabaseWithFallback(
+    store: WorkerStore,
+    parentPageId: string | undefined,
+    { ignoredDatabaseIds = new Set<string>() }: Partial<Pick<DatabaseSearchOptions, 'ignoredDatabaseIds'>> = {},
+  ): Promise<InkwellDatabase> {
     if (parentPageId) {
       return createProjectDatabase(store, parentPageId);
     }
@@ -297,7 +413,7 @@ export function createProjectDatabaseHelpers({
     try {
       return await createProjectDatabase(store);
     } catch (error) {
-      appendLog(store, 'project_database_workspace_create_error', error.message);
+      appendLog(store, 'project_database_workspace_create_error', errorMessage(error));
       const found = await findExistingDatabase(store, { ignoredDatabaseIds });
 
       if (found) {
@@ -305,11 +421,18 @@ export function createProjectDatabaseHelpers({
       }
 
       const parentPage = await ensureDatabaseParentPage(store);
+      if (!parentPage) {
+        throw new Error('Unable to create a parent page for the Inkwell database.');
+      }
       return createProjectDatabase(store, parentPage.id);
     }
   }
 
-  async function createProjectDatabase(store, parentPageId) {
+  /** Creates the managed project database. @param store - Worker state. @param parentPageId - Parent page. @returns Database summary. */
+  async function createProjectDatabase(
+    store: WorkerStore,
+    parentPageId: string | undefined = undefined,
+  ): Promise<InkwellDatabase> {
     const database = await notionRequest(store, '/databases', {
       method: 'POST',
       body: {
@@ -332,10 +455,11 @@ export function createProjectDatabaseHelpers({
     return databaseSummary(fullDatabase, dataSourceId, parentPageId);
   }
 
-  async function ensureProjectSchema(store, dataSourceId) {
+  /** Adds missing schema fields. @param store - Worker state. @param dataSourceId - Data source ID. @returns Completion promise. */
+  async function ensureProjectSchema(store: WorkerStore, dataSourceId: string): Promise<void> {
     const dataSource = await notionRequest(store, `/data_sources/${dataSourceId}`);
     const properties = dataSource.properties ?? {};
-    const missing = {};
+    const missing: JsonObject = {};
 
     for (const [name, schema] of Object.entries(projectSchema())) {
       if (!properties[name]) {
@@ -351,11 +475,12 @@ export function createProjectDatabaseHelpers({
     }
   }
 
-  async function ensureProjectViews(store, database) {
+  /** Adds missing managed views. @param store - Worker state. @param database - Database summary. @returns Completion promise. */
+  async function ensureProjectViews(store: WorkerStore, database: InkwellDatabase): Promise<void> {
     const existing = await listViews(store, database.databaseId);
-    const existingNames = new Set(existing.map((view) => view.name).filter(Boolean));
-    const dataSource = await notionRequest(store, `/data_sources/${database.dataSourceId}`).catch(() => ({}));
-    const propertyIds = propertyIdMap(dataSource.properties ?? {});
+    const existingNames = new Set(existing.map((view) => stringProperty(view, 'name')).filter(isString));
+    const dataSource = await notionRequest(store, `/data_sources/${database.dataSourceId}`).catch(() => undefined);
+    const propertyIds = propertyIdMap(dataSource?.properties ?? {});
     const views = [
       activeProjectsView(propertyIds),
       byCategoryView(propertyIds),
@@ -363,7 +488,8 @@ export function createProjectDatabaseHelpers({
     ];
 
     for (const view of views) {
-      if (existingNames.has(view.name)) {
+      const viewName = stringProperty(view, 'name') ?? 'Unnamed view';
+      if (existingNames.has(viewName)) {
         continue;
       }
 
@@ -375,20 +501,19 @@ export function createProjectDatabaseHelpers({
           ...view,
         },
       }).catch((error) => {
-        appendLog(store, 'project_view_create_error', `${view.name}: ${error.message}`);
+        appendLog(store, 'project_view_create_error', `${viewName}: ${errorMessage(error)}`);
         return undefined;
       });
 
       if (created?.id) {
-        store.inkwellDatabase.views = {
-          ...(store.inkwellDatabase.views ?? {}),
-          [view.name]: created.id,
-        };
+        database.views[viewName] = created.id;
+        store.inkwellDatabase = database;
       }
     }
   }
 
-  async function listViews(store, databaseId) {
+  /** Lists database views. @param store - Worker state. @param databaseId - Database ID. @returns Hydrated views. */
+  async function listViews(store: WorkerStore, databaseId: string): Promise<NotionObject[]> {
     const results = [];
     let cursor;
 
@@ -397,30 +522,36 @@ export function createProjectDatabaseHelpers({
       search.set('database_id', databaseId);
       if (cursor) search.set('start_cursor', cursor);
 
-      const response = await notionRequest(store, `/views?${search}`).catch(() => ({ results: [] }));
-      for (const viewRef of response.results ?? []) {
-        if (viewRef.name) {
+      const response = await notionRequest(store, `/views?${search}`).catch(() => undefined);
+      for (const viewRef of response?.results ?? []) {
+        if (stringProperty(viewRef, 'name')) {
           results.push(viewRef);
         } else if (viewRef.id) {
           const view = await notionRequest(store, `/views/${viewRef.id}`).catch(() => viewRef);
           results.push(view);
         }
       }
-      cursor = response.has_more ? response.next_cursor : undefined;
+      cursor = response?.has_more ? response.next_cursor ?? undefined : undefined;
     } while (cursor);
 
     return results;
   }
 
-  async function ensureProjectPage(store, project, { selectedParentPageId, syncState = true } = {}) {
+  /** Ensures a row exists for a project. @param store - Worker state. @param project - Local project. @param options - Sync options. @returns Project page result. */
+  async function ensureProjectPage(
+    store: WorkerStore,
+    project: Project,
+    { selectedParentPageId, syncState = true }: Partial<Pick<EnsureProjectPageOptions, 'selectedParentPageId' | 'syncState'>> = {},
+  ): Promise<ProjectPageResult> {
     return ensureProjectPageAttempt(store, project, { selectedParentPageId, syncState });
   }
 
+  /** Performs a project-row sync attempt. @param store - Worker state. @param project - Local project. @param options - Retry options. @returns Project page result. */
   async function ensureProjectPageAttempt(
-    store,
-    project,
-    { selectedParentPageId, retryOnArchivedAncestor = true, syncState = true } = {},
-  ) {
+    store: WorkerStore,
+    project: Project,
+    { selectedParentPageId, retryOnArchivedAncestor = true, syncState = true }: Partial<EnsureProjectPageOptions> = {},
+  ): Promise<ProjectPageResult> {
     const database = await ensureProjectDatabase(store, { selectedParentPageId });
     const stored = store.projectPages?.[project.id];
     const existingPageId = stored?.notionPageId;
@@ -470,7 +601,11 @@ export function createProjectDatabaseHelpers({
     }
   }
 
-  async function reloadProjectDatabaseFromNotion(store, { selectedParentPageId } = {}) {
+  /** Rebuilds local state from Notion. @param store - Worker state. @param options - Parent selection. @returns Imported state. */
+  async function reloadProjectDatabaseFromNotion(
+    store: WorkerStore,
+    { selectedParentPageId }: ParentSelection = { selectedParentPageId: undefined },
+  ) {
     clearSyncMappings(store);
     const requestedParentPageId = selectedParentPageId;
     const database = await ensureProjectDatabase(store, { selectedParentPageId });
@@ -480,9 +615,9 @@ export function createProjectDatabaseHelpers({
       store.inkwellRootPage.id !== requestedParentPageId,
     );
     const rows = await queryManagedProjectRows(store, database.dataSourceId);
-    const projects = [];
-    const pages = [];
-    const activePageIdsByProject = {};
+    const projects: Project[] = [];
+    const pages: ProjectPage[] = [];
+    const activePageIdsByProject: Record<string, string> = {};
 
     for (const row of rows) {
       const project = projectFromNotionPage(row);
@@ -533,7 +668,8 @@ export function createProjectDatabaseHelpers({
     };
   }
 
-  function clearSyncMappings(store) {
+  /** Clears database-derived mappings. @param store - Worker state. @returns Nothing. */
+  function clearSyncMappings(store: WorkerStore): void {
     store.projectPages = {};
     store.projectBlocks = {};
     store.threadBlocks = {};
@@ -541,7 +677,8 @@ export function createProjectDatabaseHelpers({
     store.blockMappings = {};
   }
 
-  function invalidateProjectDatabase(store, databaseId) {
+  /** Invalidates a failed database. @param store - Worker state. @param databaseId - Database ID. @returns Nothing. */
+  function invalidateProjectDatabase(store: WorkerStore, databaseId: string): void {
     store.ignoredInkwellDatabaseIds ??= new Set();
     if (databaseId) {
       store.ignoredInkwellDatabaseIds.add(databaseId);
@@ -550,12 +687,13 @@ export function createProjectDatabaseHelpers({
     clearSyncMappings(store);
   }
 
-  async function queryManagedProjectRows(store, dataSourceId) {
+  /** Queries managed rows. @param store - Worker state. @param dataSourceId - Data source ID. @returns Project pages. */
+  async function queryManagedProjectRows(store: WorkerStore, dataSourceId: string): Promise<NotionObject[]> {
     const results = [];
     let cursor;
 
     do {
-      const body = {
+      const body: JsonObject = {
         page_size: 100,
         filter: {
           and: [
@@ -592,7 +730,8 @@ export function createProjectDatabaseHelpers({
     return results;
   }
 
-  function projectFromNotionPage(page) {
+  /** Converts a Notion row to a project. @param page - Notion page. @returns Local project. */
+  function projectFromNotionPage(page: NotionObject): Project | undefined {
     const properties = page.properties ?? {};
     const id = richTextProperty(properties[PROJECT_PROPERTIES.inkwellId]).trim();
 
@@ -628,7 +767,13 @@ export function createProjectDatabaseHelpers({
     };
   }
 
-  async function importProjectState(store, projectPage, project, stateBlock) {
+  /** Imports project-state content. @param store - Worker state. @param projectPage - Project page. @param project - Local project. @param stateBlock - State toggle. @returns Imported project. */
+  async function importProjectState(
+    store: WorkerStore,
+    projectPage: NotionObject,
+    project: Project,
+    stateBlock: NotionBlock,
+  ): Promise<Project> {
     const blocks = await listAllBlockChildren(store, stateBlock.id).catch(() => []);
     const content = blocks.length ? notionBlocksToTiptapDocument(blocks) : emptyDocument();
     store.projectBlocks[projectStateKey(project.id)] = {
@@ -645,7 +790,13 @@ export function createProjectDatabaseHelpers({
     };
   }
 
-  async function pageFromThreadBlock(store, project, projectPage, threadBlock) {
+  /** Imports a thread toggle. @param store - Worker state. @param project - Local project. @param projectPage - Project page. @param threadBlock - Thread toggle. @returns Local page. */
+  async function pageFromThreadBlock(
+    store: WorkerStore,
+    project: Project,
+    projectPage: NotionObject,
+    threadBlock: NotionBlock,
+  ): Promise<ProjectPage> {
     const id = `page-${project.id}-${threadBlock.id}`;
     const title = toggleTitle(threadBlock) || 'Untitled Page';
     const contentBlocks = await listAllBlockChildren(store, threadBlock.id).catch(() => []);
@@ -659,6 +810,8 @@ export function createProjectDatabaseHelpers({
       title,
     };
     store.notePages[id] = {
+      archived: false,
+      dataSourceId: undefined,
       notionPageId: threadBlock.id,
       parentPageId: projectPage.id,
       title,
@@ -685,7 +838,12 @@ export function createProjectDatabaseHelpers({
     };
   }
 
-  async function findProjectPageByInkwellId(store, dataSourceId, projectId) {
+  /** Finds a row by Inkwell ID. @param store - Worker state. @param dataSourceId - Data source. @param projectId - Project ID. @returns Matching page. */
+  async function findProjectPageByInkwellId(
+    store: WorkerStore,
+    dataSourceId: string,
+    projectId: string,
+  ): Promise<NotionObject | undefined> {
     const response = await notionRequest(store, `/data_sources/${dataSourceId}/query`, {
       method: 'POST',
       body: {
@@ -700,7 +858,12 @@ export function createProjectDatabaseHelpers({
     return response.results?.[0];
   }
 
-  async function createProjectDatabasePage(store, dataSourceId, project) {
+  /** Creates a project row. @param store - Worker state. @param dataSourceId - Data source. @param project - Local project. @returns Created page. */
+  async function createProjectDatabasePage(
+    store: WorkerStore,
+    dataSourceId: string,
+    project: Project,
+  ): Promise<NotionObject> {
     return notionRequest(store, '/pages', {
       method: 'POST',
       body: {
@@ -713,8 +876,13 @@ export function createProjectDatabaseHelpers({
     });
   }
 
-  async function updateProjectDatabasePage(store, pageId, project) {
-    const body = {
+  /** Updates a project row. @param store - Worker state. @param pageId - Notion page. @param project - Local project. @returns Updated page. */
+  async function updateProjectDatabasePage(
+    store: WorkerStore,
+    pageId: string,
+    project: Project,
+  ): Promise<NotionObject> {
+    const body: JsonObject = {
       properties: projectProperties(project),
     };
 
@@ -728,7 +896,8 @@ export function createProjectDatabaseHelpers({
     });
   }
 
-  async function syncProjectState(store, notionPageId, project) {
+  /** Reconciles project state. @param store - Worker state. @param notionPageId - Notion page. @param project - Local project. @returns Revision and optional content. */
+  async function syncProjectState(store: WorkerStore, notionPageId: string, project: Project) {
     const key = projectStateKey(project.id);
     const previous = store.projectBlocks?.[key];
     const container = await ensureToggleBlock(store, notionPageId, 'Project State', {
@@ -772,21 +941,37 @@ export function createProjectDatabaseHelpers({
     };
   }
 
-  async function ensureProjectStateContainer(store, notionPageId, projectId) {
+  /** Ensures the project-state toggle. @param store - Worker state. @param notionPageId - Notion page. @param projectId - Project ID. @returns Toggle block. */
+  async function ensureProjectStateContainer(
+    store: WorkerStore,
+    notionPageId: string,
+    projectId: string,
+  ): Promise<NotionObject> {
     return ensureToggleBlock(store, notionPageId, 'Project State', {
       key: projectStateKey(projectId),
       mappings: store.projectBlocks,
     });
   }
 
-  async function ensureThreadToggle(store, projectPageId, page) {
+  /** Ensures a page thread toggle. @param store - Worker state. @param projectPageId - Project page. @param page - Local page. @returns Toggle block. */
+  async function ensureThreadToggle(
+    store: WorkerStore,
+    projectPageId: string,
+    page: ProjectPage,
+  ): Promise<NotionObject> {
     return ensureToggleBlock(store, projectPageId, page.title || 'Untitled Page', {
       key: threadKey(page.id),
       mappings: store.threadBlocks,
     });
   }
 
-  async function ensureToggleBlock(store, parentBlockId, title, { key, mappings }) {
+  /** Resolves or creates a toggle. @param store - Worker state. @param parentBlockId - Parent block. @param title - Toggle title. @param options - Mapping options. @returns Toggle block. */
+  async function ensureToggleBlock(
+    store: WorkerStore,
+    parentBlockId: string,
+    title: string,
+    { key, mappings }: ToggleOptions,
+  ): Promise<NotionObject> {
     const stored = mappings?.[key];
     if (stored?.blockId) {
       const block = await notionRequest(store, `/blocks/${stored.blockId}`).catch(() => undefined);
@@ -807,7 +992,12 @@ export function createProjectDatabaseHelpers({
     );
 
     if (matching) {
-      mappings[key] = { blockId: matching.id, parentPageId: parentBlockId, title };
+      mappings[key] = {
+        blockId: matching.id,
+        lastEditedTime: matching.last_edited_time,
+        parentPageId: parentBlockId,
+        title,
+      };
       return matching;
     }
 
@@ -823,11 +1013,17 @@ export function createProjectDatabaseHelpers({
       throw new Error(`Unable to create Notion toggle for ${title}.`);
     }
 
-    mappings[key] = { blockId: created.id, parentPageId: parentBlockId, title };
+    mappings[key] = {
+      blockId: created.id,
+      lastEditedTime: created.last_edited_time,
+      parentPageId: parentBlockId,
+      title,
+    };
     return created;
   }
 
-  async function updateToggleTitle(store, blockId, title) {
+  /** Renames a toggle. @param store - Worker state. @param blockId - Toggle ID. @param title - New title. @returns Updated block. */
+  async function updateToggleTitle(store: WorkerStore, blockId: string, title: string): Promise<NotionObject> {
     return notionRequest(store, `/blocks/${blockId}`, {
       method: 'PATCH',
       body: {
@@ -838,7 +1034,8 @@ export function createProjectDatabaseHelpers({
     });
   }
 
-  async function updateThreadToggleTitle(store, page) {
+  /** Renames a mapped thread. @param store - Worker state. @param page - Local page. @returns Completion promise. */
+  async function updateThreadToggleTitle(store: WorkerStore, page: ProjectPage): Promise<void> {
     const stored = store.threadBlocks?.[threadKey(page.id)];
 
     if (!stored?.blockId || stored.title === page.title) {
@@ -849,7 +1046,8 @@ export function createProjectDatabaseHelpers({
     stored.title = page.title || 'Untitled Page';
   }
 
-  async function archiveThreadToggle(store, page) {
+  /** Archives a mapped thread. @param store - Worker state. @param page - Local page. @returns Completion promise. */
+  async function archiveThreadToggle(store: WorkerStore, page: ProjectPage): Promise<void> {
     const stored = store.threadBlocks?.[threadKey(page.id)];
 
     if (!stored?.blockId) {
@@ -863,7 +1061,11 @@ export function createProjectDatabaseHelpers({
     delete store.blockMappings[page.id];
   }
 
-  async function importThreadContent(store, page) {
+  /** Imports mapped thread content. @param store - Worker state. @param page - Local page. @returns Imported document. */
+  async function importThreadContent(
+    store: WorkerStore,
+    page: ProjectPage,
+  ): Promise<DocumentContent | null> {
     const stored = store.threadBlocks?.[threadKey(page.id)];
 
     if (!stored?.blockId) {
@@ -874,8 +1076,16 @@ export function createProjectDatabaseHelpers({
     return blocks.length ? notionBlocksToTiptapDocument(blocks) : emptyDocument();
   }
 
-  function storeProjectPage(store, database, project, page) {
+  /** Stores a project-page mapping. @param store - Worker state. @param database - Database summary. @param project - Local project. @param page - Notion page. @returns Nothing. */
+  function storeProjectPage(
+    store: WorkerStore,
+    database: InkwellDatabase,
+    project: Project,
+    page: NotionObject,
+  ): void {
     store.projectPages[project.id] = {
+      archived: false,
+      kind: undefined,
       notionPageId: page.id,
       parentPageId: database.databaseId,
       dataSourceId: database.dataSourceId,
@@ -898,252 +1108,41 @@ export function createProjectDatabaseHelpers({
   };
 }
 
-function projectProperties(project) {
-  const createdAt = project.createdAt ?? new Date().toISOString();
-  const updatedAt = project.updatedAt ?? createdAt;
-  const category = String(project.category ?? '').trim();
-
-  return {
-    [PROJECT_PROPERTIES.title]: {
-      title: [{ text: { content: project.name || 'Untitled Project' } }],
-    },
-    [PROJECT_PROPERTIES.status]: {
-      select: {
-        name: project.status === 'archived' ? 'Archived' : 'Active',
-      },
-    },
-    [PROJECT_PROPERTIES.category]: {
-      select: category ? { name: category } : null,
-    },
-    [PROJECT_PROPERTIES.created]: {
-      date: { start: createdAt },
-    },
-    [PROJECT_PROPERTIES.updated]: {
-      date: { start: updatedAt },
-    },
-    [PROJECT_PROPERTIES.inkwellId]: {
-      rich_text: [{ text: { content: project.id } }],
-    },
-    [PROJECT_PROPERTIES.managed]: {
-      checkbox: true,
-    },
-  };
+/**
+ * Converts an unknown thrown value to readable text.
+ * @param error - Unknown thrown value.
+ * @returns Human-readable error text.
+ */
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
-function projectSchema() {
-  return {
-    [PROJECT_PROPERTIES.title]: { title: {} },
-    [PROJECT_PROPERTIES.status]: {
-      select: {
-        options: [
-          { name: 'Active', color: 'green' },
-          { name: 'Archived', color: 'gray' },
-        ],
-      },
-    },
-    [PROJECT_PROPERTIES.category]: { select: { options: [] } },
-    [PROJECT_PROPERTIES.created]: { date: {} },
-    [PROJECT_PROPERTIES.updated]: { date: {} },
-    [PROJECT_PROPERTIES.createdBy]: { created_by: {} },
-    [PROJECT_PROPERTIES.lastEditedBy]: { last_edited_by: {} },
-    [PROJECT_PROPERTIES.inkwellId]: { rich_text: {} },
-    [PROJECT_PROPERTIES.managed]: { checkbox: {} },
-  };
+/**
+ * Reads a string error code from an unknown thrown value.
+ * @param error - Unknown error-like value.
+ * @returns String error code or undefined.
+ */
+function errorCode(error: unknown): string | undefined {
+  return stringProperty(error, 'code');
 }
 
-function activeProjectsView(propertyIds) {
-  return {
-    name: 'Active Projects',
-    type: 'table',
-    filter: {
-      property: PROJECT_PROPERTIES.status,
-      select: { does_not_equal: 'Archived' },
-    },
-    sorts: [{ property: PROJECT_PROPERTIES.updated, direction: 'descending' }],
-    configuration: tableConfiguration(propertyIds, {
-      visible: [
-        PROJECT_PROPERTIES.title,
-        PROJECT_PROPERTIES.status,
-        PROJECT_PROPERTIES.category,
-        PROJECT_PROPERTIES.updated,
-      ],
-    }),
-    position: { type: 'start' },
-  };
+/**
+ * Reads a string property from an unknown object.
+ * @param value - Unknown object-like value.
+ * @param key - Property name.
+ * @returns String property or undefined.
+ */
+function stringProperty(value: unknown, key: string): string | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const property: unknown = (value as JsonObject)[key];
+  return typeof property === 'string' ? property : undefined;
 }
 
-function byCategoryView(propertyIds) {
-  return {
-    name: 'By Category',
-    type: 'board',
-    filter: {
-      property: PROJECT_PROPERTIES.status,
-      select: { does_not_equal: 'Archived' },
-    },
-    sorts: [{ property: PROJECT_PROPERTIES.updated, direction: 'descending' }],
-    configuration: {
-      type: 'board',
-      group_by: propertyIds[PROJECT_PROPERTIES.category]
-        ? {
-            type: 'select',
-            property_id: propertyIds[PROJECT_PROPERTIES.category],
-            group_by: 'value',
-            sort: { type: 'manual' },
-          }
-        : undefined,
-      card_layout: 'compact',
-      properties: propertyVisibility(propertyIds, [
-        PROJECT_PROPERTIES.title,
-        PROJECT_PROPERTIES.status,
-        PROJECT_PROPERTIES.updated,
-      ]),
-    },
-  };
-}
-
-function allProjectsView(propertyIds) {
-  return {
-    name: 'All Projects',
-    type: 'table',
-    sorts: [{ property: PROJECT_PROPERTIES.updated, direction: 'descending' }],
-    configuration: tableConfiguration(propertyIds, {
-      visible: Object.values(PROJECT_PROPERTIES),
-    }),
-  };
-}
-
-function tableConfiguration(propertyIds, { visible }) {
-  return {
-    type: 'table',
-    properties: propertyVisibility(propertyIds, visible),
-    wrap_cells: false,
-  };
-}
-
-function propertyVisibility(propertyIds, visibleNames) {
-  const visible = new Set(visibleNames);
-  return Object.entries(propertyIds).map(([name, property_id]) => ({
-    property_id,
-    visible: visible.has(name),
-  }));
-}
-
-function propertyIdMap(properties) {
-  return Object.fromEntries(
-    Object.entries(properties).map(([name, property]) => [name, property.id ?? name]),
-  );
-}
-
-function databaseSummary(database, dataSourceId, parentPageId) {
-  return {
-    databaseId: database.id,
-    dataSourceId,
-    parentPageId: parentPageId ?? parentPageIdFromObject(database),
-    title: titleFromDatabase(database) || INKWELL_DATABASE_TITLE,
-    url: database.url,
-  };
-}
-
-function pageSummaryFromNotionPage(page, database) {
-  return {
-    id: page.id,
-    parentPageId: database.databaseId,
-    title: titleFromPage(page),
-    url: page.url,
-  };
-}
-
-function databaseParent(parentPageId) {
-  return parentPageId
-    ? {
-        type: 'page_id',
-        page_id: parentPageId,
-      }
-    : {
-        type: 'workspace',
-        workspace: true,
-      };
-}
-
-function firstDataSourceId(database) {
-  return database?.data_sources?.[0]?.id ?? database?.initial_data_source?.id;
-}
-
-function parentPageIdFromObject(object) {
-  return object?.parent?.type === 'page_id' ? object.parent.page_id : undefined;
-}
-
-function isArchivedObject(object) {
-  return Boolean(object?.archived || object?.in_trash);
-}
-
-function isArchivedAncestorError(error) {
-  return (
-    error?.code === 'validation_error' &&
-    /archived ancestor|unarchive the ancestor/i.test(error?.message ?? '')
-  );
-}
-
-function isBlockNotPageError(error) {
-  return (
-    error?.code === 'validation_error' &&
-    /is a block, not a page|retrieve block API/i.test(error?.message ?? '')
-  );
-}
-
-function titleFromDatabase(database) {
-  return (database?.title ?? []).map((item) => item.plain_text ?? item.text?.content ?? '').join('');
-}
-
-function titleFromPage(page) {
-  const titleProperty = Object.values(page.properties ?? {}).find(
-    (property) => property.type === 'title',
-  );
-  return titleProperty?.title?.map((item) => item.plain_text ?? item.text?.content ?? '').join('') || page.title || 'Untitled';
-}
-
-function richTextProperty(property) {
-  return (property?.rich_text ?? []).map((item) => item.plain_text ?? item.text?.content ?? '').join('');
-}
-
-function selectProperty(property) {
-  return property?.select?.name ?? '';
-}
-
-function dateProperty(property) {
-  return property?.date?.start;
-}
-
-function richText(content) {
-  return [{ type: 'text', text: { content } }];
-}
-
-function toggleBlock(title) {
-  return {
-    object: 'block',
-    type: 'toggle',
-    toggle: {
-      rich_text: richText(title || 'Untitled Page'),
-      color: 'default',
-    },
-  };
-}
-
-function toggleTitle(block) {
-  return block?.toggle?.rich_text?.map((item) => item.plain_text ?? item.text?.content ?? '').join('') ?? '';
-}
-
-function emptyDocument() {
-  return {
-    type: 'doc',
-    content: [{ type: 'paragraph' }],
-  };
-}
-
-export function projectStateKey(projectId) {
-  return `${PROJECT_STATE_BLOCK_KEY}:${projectId}`;
-}
-
-export function threadKey(pageId) {
-  return `thread:${pageId}`;
+/**
+ * Narrows a possibly absent value to a string.
+ * @param value - Candidate string.
+ * @returns Whether the value is a string.
+ */
+function isString(value: string | undefined): value is string {
+  return typeof value === 'string';
 }

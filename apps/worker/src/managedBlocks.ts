@@ -1,7 +1,120 @@
-// @ts-nocheck
+/**
+ * @file Reconciles ordered local editor blocks with their managed Notion block counterparts.
+ * @author Aidan Boissonneault
+ * @lastModified September 2026
+ */
+
+import type { DocumentContent } from '../../../src/types/capture.js';
+import type {
+  BlockMapping,
+  HashValue,
+  ListAllBlockChildren,
+  ManagedBlockResult,
+  ManagedBlockOperation,
+  NotionBlock,
+  NotionBlockPayload,
+  WorkerStore,
+} from './types.js';
+
 const INKWELL_BLOCK_ID_ATTR = 'inkwellBlockId';
 
-async function appendAndTrackBlock(appendManagedBlocks, store, notionPageId, notionBlock, position, createdByOrder, order) {
+interface BlockPosition {
+  after_block?: { id: string };
+  type: 'after_block' | 'start';
+}
+
+type AppendManagedBlocks = (
+  store: WorkerStore,
+  notionPageId: string,
+  blocks: NotionBlockPayload[],
+  position?: BlockPosition,
+) => Promise<NotionBlock[]>;
+type DeleteManagedBlock = (store: WorkerStore, blockId: string) => Promise<unknown>;
+type UpdateManagedBlock = (store: WorkerStore, blockId: string, block: NotionBlockPayload) => Promise<unknown>;
+type ConvertDocument = (content: DocumentContent) => NotionBlockPayload[];
+type ClassifyBlock = (block: Pick<NotionBlockPayload, 'type'>) => string;
+
+interface DesiredManagedBlock {
+  inkwellBlockId: string;
+  kind: string;
+  lastSyncedHash: string;
+  localNodeId: string;
+  localPageId: string;
+  notionBlock: NotionBlockPayload;
+  order: number;
+}
+
+interface ManagedBlockDependencies {
+  appendManagedBlocks: AppendManagedBlocks;
+  deleteManagedBlock: DeleteManagedBlock;
+  hash: HashValue;
+  kindFromNotionBlock: ClassifyBlock;
+  tiptapDocumentToNotionBlocks: ConvertDocument;
+  updateManagedBlock: UpdateManagedBlock;
+}
+
+interface ReplaceManagedBlocksOptions extends ManagedBlockDependencies {
+  content: DocumentContent;
+  listAllBlockChildren: ListAllBlockChildren;
+  localPageId: string;
+  notionPageId: string;
+  store: WorkerStore;
+}
+
+interface ApplyManagedBlockOpsOptions extends ManagedBlockDependencies {
+  content: DocumentContent;
+  localPageId: string;
+  notionPageId: string;
+  ops: ManagedBlockOperation[];
+  replaceManagedBlocks: (
+    store: WorkerStore,
+    localPageId: string,
+    notionPageId: string,
+    content: DocumentContent,
+  ) => Promise<ManagedBlockResult>;
+  store: WorkerStore;
+}
+
+interface ReconcileOptions {
+  appendManagedBlocks: AppendManagedBlocks;
+  deleteManagedBlock: DeleteManagedBlock;
+  desiredBlocks: DesiredManagedBlock[];
+  existingMappings: BlockMapping[];
+  localPageId: string;
+  notionBlocks: NotionBlockPayload[];
+  notionPageId: string;
+  store: WorkerStore;
+  updateManagedBlock: UpdateManagedBlock;
+}
+
+interface DesiredManagedBlocksOptions {
+  content: DocumentContent;
+  hash: HashValue;
+  kindFromNotionBlock: ClassifyBlock;
+  localPageId: string;
+  notionBlocks: NotionBlockPayload[];
+}
+
+/**
+ * Appends one block and records it at the matching local document order.
+ * @param appendManagedBlocks - Notion append operation.
+ * @param store - Normalized worker state.
+ * @param notionPageId - Parent Notion block identifier.
+ * @param notionBlock - Outbound block payload.
+ * @param position - Desired Notion insertion position.
+ * @param createdByOrder - Sparse result indexed by local order.
+ * @param order - Local block order.
+ * @returns The created Notion block, when returned by the API.
+ */
+async function appendAndTrackBlock(
+  appendManagedBlocks: AppendManagedBlocks,
+  store: WorkerStore,
+  notionPageId: string,
+  notionBlock: NotionBlockPayload,
+  position: BlockPosition,
+  createdByOrder: Array<NotionBlock | undefined>,
+  order: number,
+): Promise<NotionBlock | undefined> {
   const [createdBlock] = await appendManagedBlocks(store, notionPageId, [notionBlock], position);
   createdByOrder[order] = createdBlock;
   return createdBlock;
@@ -15,6 +128,11 @@ const UPDATEABLE_NOTION_TYPES = new Set([
   'heading_3',
 ]);
 
+/**
+ * Reconciles an entire local document with its managed Notion children.
+ * @param options - Document state, mapping store, and Notion mutation dependencies.
+ * @returns Created blocks aligned to local order and the outbound payloads.
+ */
 export async function replaceManagedBlocks({
   store,
   localPageId,
@@ -27,7 +145,7 @@ export async function replaceManagedBlocks({
   tiptapDocumentToNotionBlocks,
   kindFromNotionBlock,
   hash,
-}) {
+}: ReplaceManagedBlocksOptions) {
   const notionBlocks = tiptapDocumentToNotionBlocks(content);
   const desiredBlocks = desiredManagedBlocks({
     content,
@@ -77,6 +195,11 @@ export async function replaceManagedBlocks({
   });
 }
 
+/**
+ * Replaces every remote child when no reliable local mapping exists.
+ * @param options - Prepared desired state and Notion mutation dependencies.
+ * @returns Newly created and outbound blocks.
+ */
 async function replaceAllManagedBlocks({
   appendManagedBlocks,
   deleteManagedBlock,
@@ -86,7 +209,9 @@ async function replaceAllManagedBlocks({
   notionBlocks,
   notionPageId,
   store,
-}) {
+}: Pick<ReplaceManagedBlocksOptions,
+  'appendManagedBlocks' | 'deleteManagedBlock' | 'listAllBlockChildren' | 'localPageId' | 'notionPageId' | 'store'
+> & { desiredBlocks: DesiredManagedBlock[]; notionBlocks: NotionBlockPayload[] }) {
   const existingBlocks = await listAllBlockChildren(store, notionPageId);
 
   for (const block of existingBlocks) {
@@ -94,7 +219,7 @@ async function replaceAllManagedBlocks({
   }
 
   const createdBlocks = await appendManagedBlocks(store, notionPageId, notionBlocks);
-  const createdByOrder = [];
+  const createdByOrder: Array<NotionBlock | undefined> = [];
 
   store.blockMappings[localPageId] = desiredBlocks.map((entry, index) => {
     const createdBlock = createdBlocks[index];
@@ -108,6 +233,11 @@ async function replaceAllManagedBlocks({
   };
 }
 
+/**
+ * Applies queued granular block operations or falls back to document reconciliation.
+ * @param options - Operations, fallback content, mapping state, and Notion dependencies.
+ * @returns Created blocks and, when relevant, outbound payloads.
+ */
 export async function applyManagedBlockOps({
   store,
   localPageId,
@@ -121,12 +251,12 @@ export async function applyManagedBlockOps({
   tiptapDocumentToNotionBlocks,
   kindFromNotionBlock,
   hash,
-}) {
+}: ApplyManagedBlockOpsOptions) {
   const replacementOp = ops.find((op) => op.type === 'block_reorder');
   if (replacementOp) {
     if (replacementOp.payload?.replaceAll) {
       // A full local snapshot is authoritative. Clearing the mappings makes
-      // replaceManagedBlocks remove every current child first, including any
+      // replaceManagedBlocks removes every current child first, including all
       // untracked blocks left by an interrupted or older first-sync attempt.
       store.blockMappings[localPageId] = [];
     }
@@ -144,7 +274,7 @@ export async function applyManagedBlockOps({
     'block_delete',
   ].includes(op.type));
   if (isGranularBatch) {
-    const createdBlocks = [];
+    const createdBlocks: Array<NotionBlock | undefined> = [];
     if (ops.some((op) => op.type === 'blocks_reset')) {
       store.blockMappings[localPageId] = [];
       await replaceManagedBlocks(store, localPageId, notionPageId, { type: 'doc', content: [] });
@@ -180,7 +310,7 @@ export async function applyManagedBlockOps({
   const existingMappings = store.blockMappings[localPageId] ?? [];
   const existingById = mappingsByInkwellId(existingMappings);
   const nextById = new Map(existingMappings.map((mapping) => [mappingKey(mapping), mapping]));
-  const createdByOrder = [];
+  const createdByOrder: Array<NotionBlock | undefined> = [];
 
   for (const op of ops) {
     const inkwellBlockId = op.inkwellBlockId;
@@ -227,7 +357,7 @@ export async function applyManagedBlockOps({
 
   store.blockMappings[localPageId] = desiredBlocks
     .map((entry) => nextById.get(entry.inkwellBlockId))
-    .filter((mapping) => mapping?.notionBlockId);
+    .filter((mapping: BlockMapping | undefined): mapping is BlockMapping => Boolean(mapping?.notionBlockId));
 
   return {
     createdBlocks: createdByOrder,
@@ -235,6 +365,11 @@ export async function applyManagedBlockOps({
   };
 }
 
+/**
+ * Applies one create, update, or delete operation and rewrites mapping order.
+ * @param options - Single operation, mapping state, and Notion dependencies.
+ * @returns Blocks created while applying the operation.
+ */
 async function applySingleManagedBlockOp({
   store,
   localPageId,
@@ -246,7 +381,17 @@ async function applySingleManagedBlockOp({
   tiptapDocumentToNotionBlocks,
   kindFromNotionBlock,
   hash,
-}) {
+}: Pick<ApplyManagedBlockOpsOptions,
+  | 'appendManagedBlocks'
+  | 'deleteManagedBlock'
+  | 'hash'
+  | 'kindFromNotionBlock'
+  | 'localPageId'
+  | 'notionPageId'
+  | 'store'
+  | 'tiptapDocumentToNotionBlocks'
+  | 'updateManagedBlock'
+> & { op: ManagedBlockOperation }) {
   const mappings = [...(store.blockMappings[localPageId] ?? [])];
   const existingIndex = mappings.findIndex((mapping) => mappingKey(mapping) === op.inkwellBlockId);
   const existing = existingIndex >= 0 ? mappings[existingIndex] : undefined;
@@ -277,10 +422,12 @@ async function applySingleManagedBlockOp({
     notionBlock,
     kind: kindFromNotionBlock(notionBlock),
     lastSyncedHash: hash(JSON.stringify(notionBlock ?? {})),
-    order: Number.isFinite(op.payload.index) ? op.payload.index : mappings.length,
+    order: typeof op.payload.index === 'number' && Number.isFinite(op.payload.index)
+      ? op.payload.index
+      : mappings.length,
   };
-  let nextMapping;
-  let createdBlock;
+  let nextMapping: BlockMapping;
+  let createdBlock: NotionBlock | undefined;
 
   if (!existing?.notionBlockId) {
     const previous = mappings.find((mapping) =>
@@ -332,12 +479,22 @@ async function applySingleManagedBlockOp({
   return { createdBlocks: createdBlock ? [createdBlock] : [], notionBlocks: [notionBlock] };
 }
 
-function normalizeMappingOrder(mappings) {
+/**
+ * Removes invalid mappings and rewrites their contiguous order values.
+ * @param mappings - Candidate block mappings.
+ * @returns Valid mappings in normalized order.
+ */
+function normalizeMappingOrder(mappings: BlockMapping[]): BlockMapping[] {
   return mappings
     .filter((mapping) => mapping?.notionBlockId)
     .map((mapping, order) => ({ ...mapping, order }));
 }
 
+/**
+ * Reconciles mapped blocks without disturbing blocks whose order is unchanged.
+ * @param options - Desired/current mappings and Notion mutation operations.
+ * @returns Created blocks and outbound payloads.
+ */
 async function reconcileManagedBlocks({
   appendManagedBlocks,
   deleteManagedBlock,
@@ -348,12 +505,12 @@ async function reconcileManagedBlocks({
   notionPageId,
   store,
   updateManagedBlock,
-}) {
+}: ReconcileOptions) {
   const existingByInkwellId = mappingsByInkwellId(existingMappings);
   const desiredIds = new Set(desiredBlocks.map((entry) => entry.inkwellBlockId));
-  const nextMappings = [];
-  const createdByOrder = [];
-  let previousNotionBlockId;
+  const nextMappings: BlockMapping[] = [];
+  const createdByOrder: Array<NotionBlock | undefined> = [];
+  let previousNotionBlockId: string | undefined;
 
   for (const entry of desiredBlocks) {
     const existing = existingByInkwellId.get(entry.inkwellBlockId);
@@ -398,6 +555,11 @@ async function reconcileManagedBlocks({
   };
 }
 
+/**
+ * Rebuilds the smallest contiguous range affected by a local reorder.
+ * @param options - Desired/current mappings and Notion mutation operations.
+ * @returns Created blocks aligned to local order and outbound payloads.
+ */
 async function rebuildReorderedRange({
   appendManagedBlocks,
   deleteManagedBlock,
@@ -407,7 +569,7 @@ async function rebuildReorderedRange({
   notionBlocks,
   notionPageId,
   store,
-}) {
+}: Omit<ReconcileOptions, 'updateManagedBlock'>) {
   const range = reorderedRange(existingMappings, desiredBlocks);
   const existingByInkwellId = mappingsByInkwellId(existingMappings);
   const affectedDesired = desiredBlocks.slice(range.start, range.end + 1);
@@ -427,7 +589,7 @@ async function rebuildReorderedRange({
     .reverse()
     .map((entry) => existingByInkwellId.get(entry.inkwellBlockId))
     .find((mapping) => mapping?.notionBlockId);
-  const createdByOrder = [];
+  const createdByOrder: Array<NotionBlock | undefined> = [];
 
   for (const mapping of mappingsToDelete) {
     if (mapping.notionBlockId) {
@@ -441,7 +603,7 @@ async function rebuildReorderedRange({
     affectedDesired.map((entry) => entry.notionBlock),
     positionAfter(previousMapping?.notionBlockId),
   );
-  const rebuiltMappings = new Map();
+  const rebuiltMappings = new Map<string, BlockMapping>();
 
   affectedDesired.forEach((entry, index) => {
     const createdBlock = createdBlocks[index];
@@ -463,13 +625,18 @@ async function rebuildReorderedRange({
   };
 }
 
+/**
+ * Pairs outbound Notion payloads with stable local identities and hashes.
+ * @param options - Local document, outbound blocks, identity, and mapping helpers.
+ * @returns Desired mapping entries in document order.
+ */
 function desiredManagedBlocks({
   content,
   hash,
   kindFromNotionBlock,
   localPageId,
   notionBlocks,
-}) {
+}: DesiredManagedBlocksOptions): DesiredManagedBlock[] {
   const nodes = content?.content ?? [];
 
   return notionBlocks.map((notionBlock, index) => {
@@ -486,12 +653,29 @@ function desiredManagedBlocks({
   });
 }
 
-function inkwellBlockIdFromNode(node, index) {
+/**
+ * Reads a node's stable Inkwell identifier or derives a positional fallback.
+ * @param node - Tiptap node.
+ * @param index - Top-level document index.
+ * @returns Stable mapping identifier.
+ */
+function inkwellBlockIdFromNode(node: DocumentContent | undefined, index: number): string {
   const value = node?.attrs?.[INKWELL_BLOCK_ID_ATTR];
   return typeof value === 'string' && value ? value : `block-${index}`;
 }
 
-function mappingFromDesired(entry, notionBlockId, previous = {}) {
+/**
+ * Converts desired state into a persisted block mapping.
+ * @param entry - Desired mapped block.
+ * @param notionBlockId - Remote block identifier, when creation succeeded.
+ * @param previous - Prior mapping used to retain historical state.
+ * @returns Persistable mapping state.
+ */
+function mappingFromDesired(
+  entry: DesiredManagedBlock,
+  notionBlockId: string | undefined,
+  previous: Partial<BlockMapping> = {},
+): BlockMapping {
   return {
     localPageId: entry.localPageId,
     inkwellBlockId: entry.inkwellBlockId,
@@ -505,8 +689,13 @@ function mappingFromDesired(entry, notionBlockId, previous = {}) {
   };
 }
 
-function mappingsByInkwellId(mappings) {
-  const result = new Map();
+/**
+ * Indexes mappings by their stable local identity.
+ * @param mappings - Persisted block mappings.
+ * @returns Mapping lookup keyed by Inkwell block identifier.
+ */
+function mappingsByInkwellId(mappings: BlockMapping[]): Map<string, BlockMapping> {
+  const result = new Map<string, BlockMapping>();
 
   for (const mapping of mappings) {
     result.set(mappingKey(mapping), mapping);
@@ -515,11 +704,25 @@ function mappingsByInkwellId(mappings) {
   return result;
 }
 
-function mappingKey(mapping) {
+/**
+ * Returns the stable local key for a mapping.
+ * @param mapping - Persisted block mapping.
+ * @returns Inkwell or legacy local node identifier.
+ */
+function mappingKey(mapping: BlockMapping): string {
   return mapping.inkwellBlockId ?? mapping.localNodeId;
 }
 
-function commonOrderedIds(existingMappings, desiredBlocks) {
+/**
+ * Computes the shared mapping identifiers in old and desired order.
+ * @param existingMappings - Current persisted mappings.
+ * @param desiredBlocks - Desired mapping entries.
+ * @returns Parallel old/new identifier sequences.
+ */
+function commonOrderedIds(
+  existingMappings: BlockMapping[],
+  desiredBlocks: DesiredManagedBlock[],
+): { newCommon: string[]; oldCommon: string[] } {
   const desiredIds = new Set(desiredBlocks.map((entry) => entry.inkwellBlockId));
   const existingIds = new Set(existingMappings.map(mappingKey));
   const oldCommon = existingMappings.map(mappingKey).filter((id) => desiredIds.has(id));
@@ -527,12 +730,30 @@ function commonOrderedIds(existingMappings, desiredBlocks) {
   return { oldCommon, newCommon };
 }
 
-function hasReorderedManagedBlocks(existingMappings, desiredBlocks) {
+/**
+ * Detects whether shared managed blocks changed relative order.
+ * @param existingMappings - Current persisted mappings.
+ * @param desiredBlocks - Desired mapping entries.
+ * @returns Whether a remote range must be rebuilt.
+ */
+function hasReorderedManagedBlocks(
+  existingMappings: BlockMapping[],
+  desiredBlocks: DesiredManagedBlock[],
+): boolean {
   const { oldCommon, newCommon } = commonOrderedIds(existingMappings, desiredBlocks);
   return oldCommon.length > 1 && oldCommon.join('\n') !== newCommon.join('\n');
 }
 
-function reorderedRange(existingMappings, desiredBlocks) {
+/**
+ * Finds the desired index range affected by a reorder.
+ * @param existingMappings - Current persisted mappings.
+ * @param desiredBlocks - Desired mapping entries.
+ * @returns Inclusive start and end indexes.
+ */
+function reorderedRange(
+  existingMappings: BlockMapping[],
+  desiredBlocks: DesiredManagedBlock[],
+): { end: number; start: number } {
   const { oldCommon, newCommon } = commonOrderedIds(existingMappings, desiredBlocks);
   let first = 0;
   let last = newCommon.length - 1;
@@ -556,11 +777,22 @@ function reorderedRange(existingMappings, desiredBlocks) {
   };
 }
 
-function isUpdateCompatible(existing, entry) {
+/**
+ * Checks whether Notion can update a mapped block in place.
+ * @param existing - Current mapping.
+ * @param entry - Desired mapped block.
+ * @returns Whether an in-place update preserves block semantics.
+ */
+function isUpdateCompatible(existing: BlockMapping, entry: DesiredManagedBlock): boolean {
   return existing.kind === entry.kind && UPDATEABLE_NOTION_TYPES.has(entry.notionBlock.type);
 }
 
-function positionAfter(blockId) {
+/**
+ * Builds a Notion insertion position after a block or at the start.
+ * @param blockId - Previous remote block identifier.
+ * @returns Notion insertion position.
+ */
+function positionAfter(blockId: string | undefined): BlockPosition {
   return blockId
     ? {
         type: 'after_block',
@@ -569,7 +801,18 @@ function positionAfter(blockId) {
     : { type: 'start' };
 }
 
-function previousMappedBlockId(desiredBlocks, mappingsById, order) {
+/**
+ * Finds the nearest preceding desired block with a remote mapping.
+ * @param desiredBlocks - Desired mapping entries.
+ * @param mappingsById - Current mappings keyed by local identity.
+ * @param order - Desired insertion order.
+ * @returns Previous Notion block identifier or undefined.
+ */
+function previousMappedBlockId(
+  desiredBlocks: DesiredManagedBlock[],
+  mappingsById: Map<string, BlockMapping>,
+  order: number,
+): string | undefined {
   for (let index = order - 1; index >= 0; index -= 1) {
     const mapping = mappingsById.get(desiredBlocks[index]?.inkwellBlockId);
     if (mapping?.notionBlockId) {

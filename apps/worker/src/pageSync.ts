@@ -1,11 +1,97 @@
-// @ts-nocheck
+/**
+ * @file Coordinates page synchronization for legacy page trees and project-database threads.
+ * @author Aidan Boissonneault
+ * @lastModified September 2026
+ */
+
+import type { DocumentContent, NotionParentPage, Project, ProjectPage } from '../../../src/types/capture.js';
+import type {
+  AppendLog,
+  ManagedBlockResult,
+  NotionObject,
+  NotionRequester,
+  WorkerStore,
+} from './types.js';
+
+interface ProjectPageResult {
+  id: string;
+  project: Project;
+  title: string;
+  url?: string;
+}
+
+interface PageSyncDependencies {
+  appendLog: AppendLog;
+  archiveThreadToggle: ((store: WorkerStore, page: ProjectPage) => Promise<void>) | undefined;
+  createChildPage: (store: WorkerStore, parentPageId: string, title: string) => Promise<NotionObject>;
+  ensureInkwellRootPage: (
+    store: WorkerStore,
+    options: { selectedParentPageId: string | undefined },
+  ) => Promise<NotionParentPage>;
+  ensureProjectPage: ((
+    store: WorkerStore,
+    project: Project,
+    options: { selectedParentPageId: string | undefined },
+  ) => Promise<ProjectPageResult>) | undefined;
+  ensureProjectRootPage: (
+    store: WorkerStore,
+    rootPageId: string,
+    project: Project,
+    options: { candidateNotionPageId: string | undefined },
+  ) => Promise<NotionParentPage>;
+  ensureThreadToggle: ((
+    store: WorkerStore,
+    projectPageId: string,
+    page: ProjectPage,
+  ) => Promise<NotionObject>) | undefined;
+  notionRequest: NotionRequester;
+  replaceManagedBlocks: (
+    store: WorkerStore,
+    localPageId: string,
+    notionPageId: string,
+    content: DocumentContent,
+  ) => Promise<ManagedBlockResult>;
+  requireConnectedStore: (request: unknown) => Promise<WorkerStore>;
+  updateChildNotePage: (store: WorkerStore, pageId: string, page: ProjectPage) => Promise<unknown>;
+  updateThreadToggleTitle: ((store: WorkerStore, page: ProjectPage) => Promise<void>) | undefined;
+  writeStore: (store: WorkerStore) => Promise<void>;
+}
+
+interface PushPageOptions {
+  dependencies: PageSyncDependencies;
+  page: ProjectPage;
+  project: Project;
+  request: unknown;
+  selectedParentPageId: string | undefined;
+}
+
+interface ProjectDatabasePushOptions {
+  appendLog: AppendLog;
+  archiveThreadToggle: ((store: WorkerStore, page: ProjectPage) => Promise<void>) | undefined;
+  ensureProjectPage: NonNullable<PageSyncDependencies['ensureProjectPage']>;
+  ensureThreadToggle: NonNullable<PageSyncDependencies['ensureThreadToggle']>;
+  notionRequest: NotionRequester;
+  page: ProjectPage;
+  project: Project;
+  replaceManagedBlocks: PageSyncDependencies['replaceManagedBlocks'];
+  selectedParentPageId: string | undefined;
+  store: WorkerStore;
+  updateThreadToggleTitle: PageSyncDependencies['updateThreadToggleTitle'];
+  writeStore: PageSyncDependencies['writeStore'];
+}
+
+/**
+ * Pushes a local page through the configured Notion storage strategy.
+ * @param options - Request context, page/project data, parent selection, and dependencies.
+ * @returns The synchronization result and updated page metadata.
+ */
 export async function pushPageToNotionCore({
   request,
   page,
   project,
   selectedParentPageId,
   dependencies,
-}) {
+}: PushPageOptions) {
   const {
     archiveThreadToggle,
     appendLog,
@@ -97,6 +183,9 @@ export async function pushPageToNotionCore({
   };
 
   store.notePages[page.id] = {
+    archived: false,
+    dataSourceId: undefined,
+    kind: undefined,
     notionPageId: notePage.id,
     parentPageId: projectRootPage.id,
     title: page.title,
@@ -113,6 +202,11 @@ export async function pushPageToNotionCore({
   };
 }
 
+/**
+ * Pushes a local page into its project's Notion toggle block.
+ * @param options - Project-database dependencies and local page state.
+ * @returns The synchronization result and updated thread metadata.
+ */
 async function pushPageToProjectDatabase({
   appendLog,
   archiveThreadToggle,
@@ -126,16 +220,19 @@ async function pushPageToProjectDatabase({
   store,
   updateThreadToggleTitle,
   writeStore,
-}) {
+}: ProjectDatabasePushOptions) {
   const projectPage = await ensureProjectPage(store, project, { selectedParentPageId });
 
   if (page.status === 'archived') {
     await archiveThreadToggle?.(store, page);
     store.notePages[page.id] = {
-      ...(store.notePages[page.id] ?? {}),
+      archived: true,
+      dataSourceId: store.notePages[page.id]?.dataSourceId,
+      kind: store.notePages[page.id]?.kind,
+      lastEditedTime: store.notePages[page.id]?.lastEditedTime,
+      notionPageId: store.notePages[page.id]?.notionPageId ?? page.notionPageId,
       parentPageId: projectPage.id,
       title: page.title,
-      archived: true,
     };
     appendLog(store, 'sync_thread_archived', page.title);
     await writeStore(store);
@@ -196,6 +293,8 @@ async function pushPageToProjectDatabase({
   };
 
   store.notePages[page.id] = {
+    archived: false,
+    dataSourceId: undefined,
     notionPageId: toggle.id,
     parentPageId: projectPage.id,
     title: page.title,
@@ -213,7 +312,16 @@ async function pushPageToProjectDatabase({
   };
 }
 
-export function normalizeSyncedMediaContent(content, createdBlocks) {
+/**
+ * Replaces temporary uploaded-media URLs with the canonical URLs returned by Notion.
+ * @param content - Local Tiptap document.
+ * @param createdBlocks - Notion blocks created in matching top-level order.
+ * @returns A document with refreshed media attributes.
+ */
+export function normalizeSyncedMediaContent(
+  content: DocumentContent,
+  createdBlocks: Array<NotionObject | undefined>,
+): DocumentContent {
   if (!content?.content?.length) {
     return content;
   }
@@ -226,7 +334,16 @@ export function normalizeSyncedMediaContent(content, createdBlocks) {
   };
 }
 
-function normalizeSyncedMediaNode(node, createdBlock) {
+/**
+ * Recursively refreshes one media node from its corresponding Notion block.
+ * @param node - Tiptap node to normalize.
+ * @param createdBlock - Corresponding created Notion block, when available.
+ * @returns The normalized Tiptap node.
+ */
+function normalizeSyncedMediaNode(
+  node: DocumentContent,
+  createdBlock: NotionObject | undefined,
+): DocumentContent {
   if ((node?.type === 'image' || node?.type === 'audio') && node.attrs?.notionFileUploadId) {
     const url = mediaUrlFromNotionBlock(createdBlock);
 
@@ -249,18 +366,44 @@ function normalizeSyncedMediaNode(node, createdBlock) {
 
   return {
     ...node,
-    content: node.content.map((child) => normalizeSyncedMediaNode(child)),
+    content: node.content.map((child) => normalizeSyncedMediaNode(child, undefined)),
   };
 }
 
-function mediaUrlFromNotionBlock(block) {
+/**
+ * Reads the served URL from a Notion image or audio block.
+ * @param block - Notion block returned after creation.
+ * @returns The media URL, or null when unavailable.
+ */
+function mediaUrlFromNotionBlock(block: NotionObject | undefined): string | null {
   if (block?.type === 'image') {
-    return block.image?.file?.url ?? block.image?.external?.url ?? null;
+    return nestedString(block, 'image', 'file', 'url')
+      ?? nestedString(block, 'image', 'external', 'url')
+      ?? null;
   }
 
   if (block?.type === 'audio') {
-    return block.audio?.file?.url ?? block.audio?.external?.url ?? null;
+    return nestedString(block, 'audio', 'file', 'url')
+      ?? nestedString(block, 'audio', 'external', 'url')
+      ?? null;
   }
 
   return null;
+}
+
+/**
+ * Safely reads a string along a nested object path.
+ * @param value - Root object.
+ * @param path - Property path to traverse.
+ * @returns The nested string or undefined.
+ */
+function nestedString(value: Record<string, unknown>, ...path: string[]): string | undefined {
+  let current: unknown = value;
+
+  for (const key of path) {
+    if (!current || typeof current !== 'object' || Array.isArray(current)) return undefined;
+    current = (current as Record<string, unknown>)[key];
+  }
+
+  return typeof current === 'string' ? current : undefined;
 }

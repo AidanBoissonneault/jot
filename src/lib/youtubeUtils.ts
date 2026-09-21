@@ -1,3 +1,14 @@
+/**
+ * @file Parses YouTube URLs and produces privacy-enhanced embed URLs for Inkwell media nodes.
+ * @author Aidan Boissonneault
+ * @lastModified September 2026
+ */
+
+/**
+ * Converts a supported YouTube URL into a privacy-enhanced embed URL.
+ * @param value - Candidate YouTube URL.
+ * @returns Embed URL or an empty string when invalid.
+ */
 export function youtubeEmbedUrl(value: string): string {
   const info = youtubeVideoInfo(value);
 
@@ -15,7 +26,12 @@ export function youtubeEmbedUrl(value: string): string {
   return url.toString();
 }
 
-function youtubeVideoInfo(value: string): { id: string; start: number } | null {
+/**
+ * Extracts a video identifier and playback offset from a YouTube URL.
+ * @param value - Candidate YouTube URL.
+ * @returns Parsed video details or null when invalid.
+ */
+export function youtubeVideoInfo(value: string): { id: string; start: number } | null {
   try {
     const url = new URL(value);
     const host = url.hostname.toLowerCase();
@@ -48,7 +64,12 @@ function youtubeVideoInfo(value: string): { id: string; start: number } | null {
   }
 }
 
-function youtubeStartSeconds(value: string): number {
+/**
+ * Converts a YouTube time expression to seconds.
+ * @param value - Numeric seconds or an h/m/s expression.
+ * @returns Non-negative playback offset in seconds.
+ */
+export function youtubeStartSeconds(value: string): number {
   if (!value) {
     return 0;
   }

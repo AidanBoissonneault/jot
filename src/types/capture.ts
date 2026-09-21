@@ -1,3 +1,9 @@
+/**
+ * @file Defines capture, page, project, and Notion parent contracts shared by the application and API.
+ * @author Aidan Boissonneault
+ * @lastModified September 2026
+ */
+
 export type CaptureType = 'quote' | 'task' | 'idea' | 'link';
 export type OptimisticStatus = 'creating' | 'saving' | 'saved' | 'stale' | 'error';
 export type SaveStatus = 'idle' | OptimisticStatus;
@@ -67,6 +73,7 @@ export type ProjectPage = {
   notionParentPageId?: string;
   notionLastEditedTime?: string;
   localRevision?: string;
+  localSyncVersion?: number;
   remoteRevision?: string;
   knownSyncVersion?: number;
   serverSyncVersion?: number;
@@ -96,3 +103,8 @@ export type NotionParentPage = {
   title: string;
   url?: string;
 };
+/**
+ * @file Defines shared capture, project, page, editor-document, and synchronization models.
+ * @author Aidan Boissonneault
+ * @lastModified September 2026
+ */

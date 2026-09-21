@@ -1,4 +1,46 @@
-// @ts-nocheck
+/**
+ * @file Coordinates project-level synchronization for database-backed and legacy Notion layouts.
+ * @author Aidan Boissonneault
+ * @lastModified September 2026
+ */
+
+import type { NotionParentPage, Project } from '../../../src/types/capture.js';
+import type { StoredPage, WorkerStore } from './types.js';
+
+interface ProjectPageResult {
+  id: string;
+  project: Project;
+  title: string;
+  url?: string;
+}
+
+interface SyncProjectFolderOptions {
+  archiveProjectRootPage: (store: WorkerStore, pageId: string) => Promise<unknown>;
+  ensureInkwellRootPage: (
+    store: WorkerStore,
+    options: { selectedParentPageId: string | undefined },
+  ) => Promise<NotionParentPage>;
+  ensureProjectPage: ((
+    store: WorkerStore,
+    project: Project,
+    options: { selectedParentPageId: string | undefined },
+  ) => Promise<ProjectPageResult>) | undefined;
+  ensureProjectRootPage: (
+    store: WorkerStore,
+    rootPageId: string,
+    project: Project,
+  ) => Promise<NotionParentPage>;
+  pageSummary: (page: NotionParentPage) => NotionParentPage;
+  project: Project;
+  selectedParentPageId: string | undefined;
+  store: WorkerStore;
+}
+
+/**
+ * Synchronizes project metadata to the active Notion storage layout.
+ * @param options - Project state, selected parent, worker store, and persistence dependencies.
+ * @returns A saved project synchronization result.
+ */
 export async function syncProjectFolder({
   store,
   project,
@@ -8,7 +50,7 @@ export async function syncProjectFolder({
   ensureProjectRootPage,
   archiveProjectRootPage,
   pageSummary,
-}) {
+}: SyncProjectFolderOptions) {
   if (project.status === 'archived') {
     if (ensureProjectPage) {
       const projectPage = await ensureProjectPage(store, project, { selectedParentPageId });
@@ -21,7 +63,7 @@ export async function syncProjectFolder({
       };
     }
 
-    const stored = store.projectPages?.[project.id];
+    const stored: StoredPage | undefined = store.projectPages[project.id];
 
     if (!stored?.notionPageId) {
       return {

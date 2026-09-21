@@ -1,19 +1,48 @@
-// @ts-nocheck
-import { normalizeCodeLanguage } from '../../../src/lib/codeLanguages.js';
+/**
+ * @file Converts supported Tiptap document nodes to and from Notion block payloads.
+ * @author Aidan Boissonneault
+ * @lastModified September 2026
+ */
 
-export function tiptapDocumentToNotionBlocks(doc) {
+import { normalizeCodeLanguage } from '../../../src/lib/codeLanguages.js';
+import type { DocumentContent } from '../../../src/types/capture.js';
+import type {
+  JsonObject,
+  NotionBlock,
+  NotionBlockPayload,
+  NotionRichText,
+  NotionRichTextPayload,
+} from './types.js';
+
+/**
+ * Converts a Tiptap document into Notion child-block payloads.
+ * @param doc - Tiptap document to convert.
+ * @returns One Notion payload for each top-level Tiptap node.
+ */
+export function tiptapDocumentToNotionBlocks(doc: DocumentContent): NotionBlockPayload[] {
   return (doc?.content ?? []).map((node) => tiptapNodeToNotionBlock(node));
 }
 
-export function isNotionFileUploadBlock(block) {
+/**
+ * Checks whether a block references a Notion-managed file upload.
+ * @param block - Notion block payload to inspect.
+ * @returns Whether the image or audio block has a file-upload identifier.
+ */
+export function isNotionFileUploadBlock(block: NotionBlockPayload): boolean {
   const type = block?.type;
+  const content = objectProperty(block, type);
   return (
     (type === 'image' || type === 'audio') &&
-    Boolean(block?.[type]?.file_upload?.id)
+    Boolean(stringProperty(objectProperty(content, 'file_upload'), 'id'))
   );
 }
 
-function tiptapNodeToNotionBlock(node) {
+/**
+ * Converts one supported Tiptap node to its closest Notion block representation.
+ * @param node - Tiptap node to convert.
+ * @returns A Notion child-block payload.
+ */
+function tiptapNodeToNotionBlock(node: DocumentContent): NotionBlockPayload {
   const richText = inlineContentToRichText(node.content);
 
   if (node.type === 'heading') {
@@ -87,8 +116,8 @@ function tiptapNodeToNotionBlock(node) {
   }
 
   if (node.type === 'image') {
-    const src = node.attrs?.src;
-    const fileUploadId = node.attrs?.notionFileUploadId;
+    const src = stringProperty(node.attrs, 'src');
+    const fileUploadId = stringProperty(node.attrs, 'notionFileUploadId');
 
     if (fileUploadId) {
       return {
@@ -106,7 +135,7 @@ function tiptapNodeToNotionBlock(node) {
   }
 
   if (node.type === 'youtube') {
-    const src = node.attrs?.src;
+    const src = stringProperty(node.attrs, 'src');
     if (!src) return paragraphFallback('');
     const videoUrl = normalizeYoutubeVideoUrl(src);
     if (!videoUrl) return paragraphFallback('');
@@ -123,8 +152,8 @@ function tiptapNodeToNotionBlock(node) {
   }
 
   if (node.type === 'audio') {
-    const src = node.attrs?.src;
-    const fileUploadId = node.attrs?.notionFileUploadId;
+    const src = stringProperty(node.attrs, 'src');
+    const fileUploadId = stringProperty(node.attrs, 'notionFileUploadId');
 
     if (fileUploadId) {
       return {
@@ -141,7 +170,12 @@ function tiptapNodeToNotionBlock(node) {
   return paragraphFallback(richText.length ? richText : plainRichText(''));
 }
 
-function paragraphFallback(richText) {
+/**
+ * Wraps rich text in a standard Notion paragraph payload.
+ * @param richText - Plain text or pre-built Notion rich text.
+ * @returns A paragraph block payload.
+ */
+function paragraphFallback(richText: string | NotionRichTextPayload[]): NotionBlockPayload {
   const rt = typeof richText === 'string' ? plainRichText(richText) : richText;
   return {
     object: 'block',
@@ -153,8 +187,13 @@ function paragraphFallback(richText) {
   };
 }
 
-function inlineContentToRichText(content = []) {
-  const richText = [];
+/**
+ * Converts inline Tiptap content into Notion rich-text objects.
+ * @param content - Inline Tiptap nodes.
+ * @returns Converted Notion rich text.
+ */
+function inlineContentToRichText(content: DocumentContent[] = []): NotionRichTextPayload[] {
+  const richText: NotionRichTextPayload[] = [];
 
   for (const node of content) {
     if (node.type === 'text') {
@@ -169,9 +208,14 @@ function inlineContentToRichText(content = []) {
   return richText.length ? richText : [];
 }
 
-function textNodeToRichText(node) {
+/**
+ * Converts one Tiptap text node and its marks to Notion rich text.
+ * @param node - Tiptap text node.
+ * @returns A Notion rich-text object.
+ */
+function textNodeToRichText(node: DocumentContent): NotionRichTextPayload {
   const marks = node.marks ?? [];
-  const link = marks.find((mark) => mark.type === 'link')?.attrs?.href;
+  const link = stringProperty(marks.find((mark) => mark.type === 'link')?.attrs, 'href');
   const textStyle = marks.find((mark) => mark.type === 'textStyle')?.attrs ?? {};
 
   return {
@@ -191,7 +235,12 @@ function textNodeToRichText(node) {
   };
 }
 
-function plainRichText(text) {
+/**
+ * Creates unformatted Notion rich text.
+ * @param text - Text content.
+ * @returns A single-item Notion rich-text array.
+ */
+function plainRichText(text: string): NotionRichTextPayload[] {
   return [
     {
       type: 'text',
@@ -202,15 +251,27 @@ function plainRichText(text) {
   ];
 }
 
-export function notionBlocksToTiptapDocument(blocks) {
+/**
+ * Converts supported Notion blocks to a Tiptap document, skipping unsupported blocks.
+ * @param blocks - Notion blocks to convert.
+ * @returns A Tiptap document.
+ */
+export function notionBlocksToTiptapDocument(blocks: NotionBlock[]): DocumentContent {
   return {
     type: 'doc',
-    content: blocks.map(notionBlockToTiptapNode).filter(Boolean),
+    content: blocks.map(notionBlockToTiptapNode).filter(
+      (node: DocumentContent | null): node is DocumentContent => node !== null,
+    ),
   };
 }
 
-export function notionBlocksToTiptapDocumentStrict(blocks) {
-  const content = [];
+/**
+ * Converts Notion blocks only when every block has a safe Tiptap representation.
+ * @param blocks - Notion blocks to convert.
+ * @returns A Tiptap document, or null when a block is unsupported.
+ */
+export function notionBlocksToTiptapDocumentStrict(blocks: NotionBlock[]): DocumentContent | null {
+  const content: DocumentContent[] = [];
 
   for (const block of blocks) {
     const node = notionBlockToTiptapNode(block);
@@ -228,14 +289,21 @@ export function notionBlocksToTiptapDocumentStrict(blocks) {
   };
 }
 
-function notionBlockToTiptapNode(block) {
+/**
+ * Converts one Notion block to a Tiptap node.
+ * @param block - Notion block to convert.
+ * @returns The converted node, or null for unsupported blocks.
+ */
+function notionBlockToTiptapNode(block: NotionBlock): DocumentContent | null {
   if (block.type?.startsWith('heading_')) {
     return {
       type: 'heading',
       attrs: {
         level: Number(block.type.replace('heading_', '')),
       },
-      content: richTextToTiptapInline(block[block.type].rich_text),
+      content: richTextToTiptapInline(
+        richTextProperty(objectProperty(block, block.type), 'rich_text'),
+      ),
     };
   }
 
@@ -313,14 +381,20 @@ function notionBlockToTiptapNode(block) {
   };
 }
 
-function youtubeUrlFromLinkedParagraph(richText = []) {
+/**
+ * Extracts a YouTube URL from a paragraph containing one self-linked URL.
+ * @param richText - Notion paragraph rich text.
+ * @returns A normalized watch URL or an empty string.
+ */
+function youtubeUrlFromLinkedParagraph(richText: NotionRichText[] = []): string {
   if (richText.length !== 1) {
     return '';
   }
 
   const item = richText[0];
-  const href = item?.href ?? item?.text?.link?.url;
-  const text = item?.plain_text ?? item?.text?.content;
+  const textObject = objectProperty(item, 'text');
+  const href = item.href ?? stringProperty(objectProperty(textObject, 'link'), 'url');
+  const text = item.plain_text || stringProperty(textObject, 'content');
 
   if (!href || text !== href) {
     return '';
@@ -329,8 +403,13 @@ function youtubeUrlFromLinkedParagraph(richText = []) {
   return normalizeYoutubeVideoUrl(href);
 }
 
-function richTextToTiptapInline(richText = []) {
-  const content = [];
+/**
+ * Converts Notion rich text into Tiptap inline nodes.
+ * @param richText - Notion rich-text array.
+ * @returns Tiptap inline nodes, or undefined for empty content.
+ */
+function richTextToTiptapInline(richText: NotionRichText[] = []): DocumentContent[] | undefined {
+  const content: DocumentContent[] = [];
 
   for (const item of richText) {
     const plainText = String(item.plain_text ?? '').replace(/\s*inkwell_capture_id:[\w-]+/g, '');
@@ -360,8 +439,13 @@ function richTextToTiptapInline(richText = []) {
   return content.length ? content : undefined;
 }
 
-function marksFromRichText(item) {
-  const marks = [];
+/**
+ * Converts Notion annotations and links to Tiptap marks.
+ * @param item - Notion rich-text item.
+ * @returns Tiptap marks in stable order.
+ */
+function marksFromRichText(item: NotionRichText): NonNullable<DocumentContent['marks']> {
+  const marks: NonNullable<DocumentContent['marks']> = [];
   const annotations = item.annotations ?? {};
 
   if (annotations.bold) marks.push({ type: 'bold' });
@@ -374,7 +458,12 @@ function marksFromRichText(item) {
   return marks;
 }
 
-function plainTiptapText(text) {
+/**
+ * Creates a plain Tiptap text node array.
+ * @param text - Text content.
+ * @returns A one-node array, or undefined for empty text.
+ */
+function plainTiptapText(text: string): DocumentContent[] | undefined {
   return text
     ? [
         {
@@ -385,7 +474,12 @@ function plainTiptapText(text) {
     : undefined;
 }
 
-function textFromNode(node) {
+/**
+ * Recursively extracts plain text from a Tiptap node.
+ * @param node - Tiptap node to traverse.
+ * @returns Concatenated plain text.
+ */
+function textFromNode(node: DocumentContent): string {
   if (node.text) {
     return node.text;
   }
@@ -397,11 +491,21 @@ function textFromNode(node) {
   return (node.content ?? []).map(textFromNode).join('');
 }
 
-function notionColor(color) {
+/**
+ * Maps an editor color to Notion's supported annotation color.
+ * @param color - Editor color attribute.
+ * @returns The safe Notion color value.
+ */
+function notionColor(color: unknown): 'default' {
   return typeof color === 'string' && color ? 'default' : 'default';
 }
 
-function normalizeYoutubeVideoUrl(src) {
+/**
+ * Normalizes supported YouTube URLs to a canonical watch URL.
+ * @param src - Candidate YouTube URL.
+ * @returns Canonical URL or an empty string when invalid.
+ */
+function normalizeYoutubeVideoUrl(src: string): string {
   try {
     const url = new URL(src);
     const host = url.hostname.toLowerCase();
@@ -433,7 +537,13 @@ function normalizeYoutubeVideoUrl(src) {
   }
 }
 
-function youtubeWatchUrl(id, sourceParams) {
+/**
+ * Builds a canonical YouTube watch URL and preserves its start time.
+ * @param id - YouTube video identifier.
+ * @param sourceParams - Query parameters from the source URL.
+ * @returns Canonical watch URL.
+ */
+function youtubeWatchUrl(id: string, sourceParams: URLSearchParams): string {
   const url = new URL('https://www.youtube.com/watch');
   url.searchParams.set('v', id);
 
@@ -445,9 +555,52 @@ function youtubeWatchUrl(id, sourceParams) {
   return url.toString();
 }
 
-export function kindFromNotionBlock(block) {
+/**
+ * Classifies a Notion block for mapping compatibility decisions.
+ * @param block - Notion block or outbound block payload.
+ * @returns Stable Inkwell block category.
+ */
+export function kindFromNotionBlock(block: Pick<NotionBlockPayload, 'type'>): string {
   if (block.type?.startsWith('heading_')) return 'heading';
   if (block.type === 'quote') return 'quote';
   if (['image', 'video', 'audio', 'embed', 'file'].includes(block.type)) return 'media';
   return block.type === 'paragraph' ? 'paragraph' : 'source';
+}
+
+/**
+ * Reads an object-valued property from an unknown record.
+ * @param value - Candidate record.
+ * @param key - Property name.
+ * @returns The nested object or an empty object.
+ */
+function objectProperty(value: unknown, key: string): JsonObject {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const property: unknown = (value as JsonObject)[key];
+  return property && typeof property === 'object' && !Array.isArray(property)
+    ? property as JsonObject
+    : {};
+}
+
+/**
+ * Reads a string property from an unknown record.
+ * @param value - Candidate record.
+ * @param key - Property name.
+ * @returns The string property or undefined.
+ */
+function stringProperty(value: unknown, key: string): string | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const property: unknown = (value as JsonObject)[key];
+  return typeof property === 'string' ? property : undefined;
+}
+
+/**
+ * Reads a rich-text array from an unknown record.
+ * @param value - Candidate record.
+ * @param key - Property name.
+ * @returns The rich-text array, or an empty array.
+ */
+function richTextProperty(value: unknown, key: string): NotionRichText[] {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
+  const property: unknown = (value as JsonObject)[key];
+  return Array.isArray(property) ? property as NotionRichText[] : [];
 }
