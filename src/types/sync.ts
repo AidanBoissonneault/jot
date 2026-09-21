@@ -83,6 +83,13 @@ export type SyncProjectRequest = {
   selectedParentPageId?: string;
 };
 
+export type SyncProjectSourceRequest = {
+  project?: Omit<Project, 'stateContent'>;
+  blockId?: string;
+  block?: DocumentContent;
+  selectedParentPageId?: string;
+};
+
 export type SyncProjectResponse = {
   message?: string;
   parentPage?: NotionParentPage;

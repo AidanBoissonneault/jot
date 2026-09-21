@@ -9,10 +9,12 @@ import type {
 } from '@/src/types/capture';
 import { idbGet, idbGetMany, idbSet, idbSetMany } from '@/src/services/idbStore';
 import { createInkwellBlockId, normalizeInkwellBlockIds } from '@/src/extensions/inkwellBlockIds';
+import { INKWELL_SOURCE_ATTR, storeInkwellSource } from '@/src/extensions/inkwellLink';
 import {
   addSourceToProjectState,
   capturedBlockId,
   migratePageSourcesToProjectState,
+  sourceEntryForProjectState,
 } from '@/src/extensions/sourceRegistry';
 import type {
   CaptureSelectionPayload,
@@ -35,6 +37,7 @@ import type {
 import { markUnrecoverableTransientMedia, sanitizeMediaForSync } from '@/src/extensions/mediaContent';
 import {
   addPendingProjectSyncEvent,
+  addPendingProjectSourceSyncEvent,
   addPendingSyncOps,
   buildPageSyncOps,
   compactStoredPendingSyncOps,
@@ -146,6 +149,8 @@ export function sourcePayloadFromCapture(payload: CaptureSelectionPayload): Sour
 }
 
 export function createCapturedContent(payload: CaptureSelectionPayload): DocumentContent[] {
+  const source = storeInkwellSource(sourcePayloadFromCapture(payload));
+
   if (payload.highlightMeta.isHeading) {
     return createLinkedHeadingContent(payload);
   }
@@ -157,6 +162,7 @@ export function createCapturedContent(payload: CaptureSelectionPayload): Documen
         attrs: {
           language: normalizeCodeLanguage(payload.highlightMeta.codeLanguage),
           inkwellBlockId: createInkwellBlockId(),
+          [INKWELL_SOURCE_ATTR]: source,
         },
         content: payload.text ? [{ type: 'text', text: payload.text }] : undefined,
       },
@@ -171,6 +177,7 @@ export function createCapturedContent(payload: CaptureSelectionPayload): Documen
       type: 'blockquote',
       attrs: {
         inkwellBlockId: createInkwellBlockId(),
+        [INKWELL_SOURCE_ATTR]: source,
       },
       content: [textParagraph(payload.text)],
     },
@@ -184,12 +191,14 @@ export function createLinkedHeadingContent(
   payload: CaptureSelectionPayload,
 ): DocumentContent[] {
   const level = payload.highlightMeta.headingLevel ?? 2;
+  const source = storeInkwellSource(sourcePayloadFromCapture(payload));
 
   return [
     {
       type: 'heading',
       attrs: {
         inkwellBlockId: createInkwellBlockId(),
+        [INKWELL_SOURCE_ATTR]: source,
         level,
       },
       content: [
@@ -474,6 +483,50 @@ async function syncProject(project: Project): Promise<Project | undefined> {
 
     await removePendingProjectSyncEvents([queuedEvent.eventId]);
     return response.project ?? withProjectSyncStatus(project, 'saved');
+  } catch {
+    return withProjectSyncStatus(
+      project,
+      'stale',
+      'Saved locally. Will sync when a connection is available.',
+    );
+  }
+}
+
+async function syncProjectSource(
+  project: Project,
+  blockId: string,
+  source: SourceOpenPayload,
+): Promise<Project> {
+  const { syncConfig } = await readStorage();
+  const block = sourceEntryForProjectState(blockId, source);
+  const queuedEvent = await addPendingProjectSourceSyncEvent(
+    project,
+    blockId,
+    block,
+    syncConfig.selectedParentPageId,
+  );
+  triggerQueueDelivery();
+
+  if (!syncConfig.connected || isBrowserOffline()) {
+    return withProjectSyncStatus(
+      project,
+      'stale',
+      syncConfig.connected
+        ? 'Saved locally. Will sync when a connection is available.'
+        : 'Saved locally. Connect Notion to sync this source.',
+    );
+  }
+
+  try {
+    const response = await requestServer<SyncProjectResponse>('/sync/project/source', {
+      method: 'POST',
+      body: JSON.stringify(queuedEvent.payload),
+    }, syncConfig);
+    if (response.status === 'error') {
+      throw new Error(response.message ?? 'Unable to sync this source.');
+    }
+    await removePendingProjectSyncEvents([queuedEvent.eventId]);
+    return withProjectSyncStatus(project, 'saved');
   } catch {
     return withProjectSyncStatus(
       project,
@@ -982,6 +1035,31 @@ async function saveProjectUpdate(projects: Project[], projectId: string, updated
   return savedProject;
 }
 
+async function saveProjectSourceUpdate(
+  projects: Project[],
+  projectId: string,
+  updatedProject: Project,
+  blockId: string,
+  source: SourceOpenPayload,
+): Promise<Project> {
+  await writeStorage({
+    projects: projects
+      .map((storedProject) => storedProject.id === projectId ? updatedProject : storedProject)
+      .sort(sortProjectsByUpdatedDesc),
+  });
+  const savedProject = await syncProjectSource(updatedProject, blockId, source);
+  const { projects: latestProjects } = await readStorage();
+  if (latestProjects.find((storedProject) => storedProject.id === projectId)?.updatedAt !== updatedProject.updatedAt) {
+    return latestProjects.find((storedProject) => storedProject.id === projectId) ?? savedProject;
+  }
+  await writeStorage({
+    projects: latestProjects.map((storedProject) =>
+      storedProject.id === projectId ? savedProject : storedProject,
+    ),
+  });
+  return savedProject;
+}
+
 async function requirePageWithProject(pageId: string) {
   const storage = await readStorage();
   const page = storage.pages.find((p) => p.id === pageId);
@@ -1200,12 +1278,11 @@ async function deliverPendingProjectSyncEvents(syncConfig: SyncConfig): Promise<
   const events = await listPendingProjectSyncEvents();
 
   for (const event of events) {
-    const response = await requestServer<SyncProjectResponse>('/sync/project', {
+    const isSourceEvent = event.type === 'project_source_upsert';
+    const response = await requestServer<SyncProjectResponse>(
+      isSourceEvent ? '/sync/project/source' : '/sync/project', {
       method: 'POST',
-      body: JSON.stringify({
-        project: event.payload.project,
-        selectedParentPageId: event.payload.selectedParentPageId,
-      }),
+      body: JSON.stringify(event.payload),
     }, syncConfig);
 
     if (response.status === 'error') {
@@ -1219,18 +1296,23 @@ async function deliverPendingProjectSyncEvents(syncConfig: SyncConfig): Promise<
       });
     }
 
-    await applySyncedProject(event.payload.project, response.project);
+    await applySyncedProject(event.payload.project, response.project, isSourceEvent);
     await removePendingProjectSyncEvents([event.eventId]);
   }
 }
 
-async function applySyncedProject(queuedProject: Project, responseProject?: Project): Promise<void> {
+async function applySyncedProject(
+  queuedProject: Omit<Project, 'stateContent'> | Project,
+  responseProject?: Project,
+  preserveLocalState = false,
+): Promise<void> {
   const { projects } = await readStorage();
   await writeStorage({
     projects: projects.map((project) =>
       project.id === queuedProject.id && project.updatedAt === queuedProject.updatedAt
         ? {
             ...(responseProject ?? project),
+            ...(preserveLocalState ? { stateContent: project.stateContent } : {}),
             syncState: 'saved' as const,
             syncMessage: undefined,
           }
@@ -1527,14 +1609,15 @@ export const notionClient = {
   ): Promise<Project> {
     const { projects } = await readStorage();
     const project = requireActiveProject(projects, projectId);
+    const source = sourcePayloadFromCapture(payload);
     const updatedProject = touchProject(project, {
       stateContent: addSourceToProjectState(
         project.stateContent,
         blockId,
-        sourcePayloadFromCapture(payload),
+        source,
       ),
     });
-    return saveProjectUpdate(projects, projectId, updatedProject);
+    return saveProjectSourceUpdate(projects, projectId, updatedProject, blockId, source);
   },
 
   async getSyncConfig(): Promise<SyncConfig> {
@@ -2027,7 +2110,13 @@ export const notionClient = {
         })
       : project;
     const savedProject = sourceBlockId
-      ? (await saveProjectUpdate(projects, project.id, updatedProject))
+      ? (await saveProjectSourceUpdate(
+          projects,
+          project.id,
+          updatedProject,
+          sourceBlockId,
+          sourcePayloadFromCapture(payload),
+        ))
       : project;
     const updatedPage = appendContent(page, capturedContent);
 

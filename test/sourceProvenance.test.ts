@@ -79,7 +79,7 @@ describe('captured source provenance', () => {
     const blockId = capturedBlockId(content);
     expect(blockId).toEqual(expect.any(String));
     expect(content).toHaveLength(2);
-    expect(content[0].attrs?.inkwellSource).toBeUndefined();
+    expect(content[0].attrs?.inkwellSource).toEqual(storeInkwellSource(source));
     expect(content[1]).toEqual({ type: 'paragraph' });
 
     const state = addSourceToProjectState(undefined, blockId!, source);
@@ -103,6 +103,28 @@ describe('captured source provenance', () => {
     expect(sourceFromProjectState(merged, 'block-1')).not.toBeNull();
     expect(visibleProjectStateContent(merged).content?.[0].content?.[0].text)
       .toBe('User notes');
+  });
+
+  it('stores each origin as its own stable state block and replaces retries', () => {
+    const first = addSourceToProjectState(undefined, 'block-1', source);
+    const retried = addSourceToProjectState(first, 'block-1', source);
+    const withSecond = addSourceToProjectState(retried, 'block-2', {
+      ...source,
+      highlightMeta: { ...source.highlightMeta, text: 'another selection' },
+    });
+
+    const sourceBlocks = withSecond.content?.filter((node) =>
+      String(node.content?.[0]?.text).startsWith('inkwell_source_v1:'),
+    );
+    expect(sourceBlocks).toHaveLength(2);
+    expect(sourceBlocks?.map((node) => node.attrs?.inkwellBlockId)).toEqual([
+      'source:block-1',
+      'source:block-2',
+    ]);
+    expect(sourceFromProjectState(withSecond, 'block-1')).toMatchObject({
+      sourceUrl: source.sourceUrl,
+      highlightMeta: source.highlightMeta,
+    });
   });
 
   it('round-trips the source registry through the generated Notion state page', () => {
@@ -155,7 +177,9 @@ describe('captured source provenance', () => {
 
     const migrated = migratePageSourcesToProjectState(normalized, undefined);
     expect(migrated.content.content).toHaveLength(1);
-    expect(migrated.content.content?.[0].attrs?.inkwellSource).toBeUndefined();
+    expect(migrated.content.content?.[0].attrs?.inkwellSource).toEqual(
+      storeInkwellSource(source),
+    );
     expect(sourceFromProjectState(migrated.stateContent, 'quote-1')).not.toBeNull();
   });
 

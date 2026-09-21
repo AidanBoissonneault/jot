@@ -1,5 +1,10 @@
 import { describe, expect, test } from 'vitest';
-import { buildPageSyncOps } from '@/src/services/syncQueue';
+import {
+  addPendingProjectSourceSyncEvent,
+  buildPageSyncOps,
+  listPendingProjectSyncEvents,
+} from '@/src/services/syncQueue';
+import { resetBrowserStorage } from './setup';
 import type { Project, ProjectPage } from '@/src/types/capture';
 
 const block = (id: string, text: string) => ({
@@ -47,6 +52,21 @@ describe('block sync queue payloads', () => {
     expect(ops[0].payload.page.content).toBeUndefined();
     expect(ops[0].payload.project.stateContent).toBeUndefined();
     expect(JSON.stringify(ops).length).toBeLessThan(5_000);
+  });
+
+  test('queues each source independently without copying project state or duplicate retries', async () => {
+    resetBrowserStorage();
+    const sourceBlock = block('source:capture-1', 'inkwell_source_v1:{}');
+
+    await addPendingProjectSourceSyncEvent(project, 'capture-1', sourceBlock);
+    await addPendingProjectSourceSyncEvent(project, 'capture-1', sourceBlock);
+
+    const events = await listPendingProjectSyncEvents();
+    expect(events).toHaveLength(1);
+    expect(events[0].type).toBe('project_source_upsert');
+    if (events[0].type !== 'project_source_upsert') throw new Error('Unexpected event');
+    expect(events[0].payload.block).toEqual(sourceBlock);
+    expect(events[0].payload.project).not.toHaveProperty('stateContent');
   });
 
   test('appending blocks emits one bounded create per block without a full reorder', () => {

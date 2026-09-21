@@ -11,11 +11,13 @@ const BUTTON_ID = 'inkwell-inline-save';
 const INKWELL_DRAG_MIME = 'application/x-inkwell-capture';
 const INKWELL_HEADING_DRAG_MIME = 'application/x-inkwell-heading-capture';
 const INKWELL_SOURCE_DATA_ATTR = 'data-inkwell-source';
+const INKWELL_CAPTURE_DATA_ATTR = 'data-inkwell-capture';
 const LARGE_TEXT_PX = 22;
 type HeadingLevel = 1 | 2 | 3 | 4 | 5 | 6;
 
 export default defineContentScript({
   matches: ['<all_urls>'],
+  allFrames: true,
   main() {
     let selectedPayload: CaptureSelectionMessage['payload'] | null = null;
     let removeTimer: number | undefined;
@@ -431,7 +433,13 @@ export default defineContentScript({
       const href = payload.highlightMeta.sourceLink || payload.sourceUrl;
       const sourcePayload = JSON.stringify(sourceOpenPayloadFromCapture(payload));
 
-      return `<h${level}><a href="${htmlEscape(href)}" ${INKWELL_SOURCE_DATA_ATTR}="${htmlEscape(sourcePayload)}">${htmlEscape(payload.text)}</a></h${level}>`;
+      return `<h${level} ${INKWELL_CAPTURE_DATA_ATTR}="${htmlEscape(JSON.stringify(payload))}" ${INKWELL_SOURCE_DATA_ATTR}="${htmlEscape(sourcePayload)}"><a href="${htmlEscape(href)}" ${INKWELL_SOURCE_DATA_ATTR}="${htmlEscape(sourcePayload)}">${htmlEscape(payload.text)}</a></h${level}>`;
+    }
+
+    function capturedTextHtml(payload: CaptureSelectionMessage['payload']) {
+      const text = htmlEscape(payload.text).replaceAll('\n', '<br>');
+      const sourcePayload = JSON.stringify(sourceOpenPayloadFromCapture(payload));
+      return `<blockquote ${INKWELL_CAPTURE_DATA_ATTR}="${htmlEscape(JSON.stringify(payload))}" ${INKWELL_SOURCE_DATA_ATTR}="${htmlEscape(sourcePayload)}">${text}</blockquote>`;
     }
 
     function showButton(selection: Selection, text: string) {
@@ -527,6 +535,7 @@ export default defineContentScript({
 
         const textPayload = buildCapturePayload(selection, selectedText);
         event.dataTransfer.setData(INKWELL_DRAG_MIME, JSON.stringify(textPayload));
+        event.dataTransfer.setData('text/html', capturedTextHtml(textPayload));
         void browser.runtime
           .sendMessage({
             type: 'inkwell.textDragStarted',

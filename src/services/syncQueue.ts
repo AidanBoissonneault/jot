@@ -11,7 +11,7 @@ const INKWELL_BLOCK_ID_ATTR = 'inkwellBlockId';
 const queueChangeListeners = new Set<() => void>();
 let queueMutation = Promise.resolve();
 
-export type ProjectSyncEvent = {
+export type ProjectUpsertSyncEvent = {
   eventId: string;
   type: 'project_upsert' | 'project_archive';
   projectId: string;
@@ -22,6 +22,22 @@ export type ProjectSyncEvent = {
     selectedParentPageId?: string;
   };
 };
+
+export type ProjectSourceSyncEvent = {
+  eventId: string;
+  type: 'project_source_upsert';
+  projectId: string;
+  sequence: number;
+  createdAt: string;
+  payload: {
+    project: Omit<Project, 'stateContent'>;
+    blockId: string;
+    block: DocumentContent;
+    selectedParentPageId?: string;
+  };
+};
+
+export type ProjectSyncEvent = ProjectUpsertSyncEvent | ProjectSourceSyncEvent;
 
 export async function addPendingSyncOps(ops: Omit<BlockSyncOp, 'opId' | 'sequence' | 'createdAt' | 'localVersion'>[]): Promise<BlockSyncOp[]> {
   if (!ops.length) return [];
@@ -243,6 +259,40 @@ export function buildPageSyncOps({
   }
 
   return ops;
+}
+
+export async function addPendingProjectSourceSyncEvent(
+  project: Project,
+  blockId: string,
+  block: DocumentContent,
+  selectedParentPageId?: string,
+): Promise<ProjectSourceSyncEvent> {
+  return mutateQueue(async () => {
+    const pending = await readPendingProjectSyncEvents();
+    const sequence = await nextSequence(1);
+    const { stateContent: _stateContent, ...projectContext } = project;
+    const event: ProjectSourceSyncEvent = {
+      eventId: crypto.randomUUID(),
+      type: 'project_source_upsert',
+      projectId: project.id,
+      sequence,
+      createdAt: new Date().toISOString(),
+      payload: {
+        project: projectContext,
+        blockId,
+        block,
+        selectedParentPageId,
+      },
+    };
+    const compacted = pending.filter((queued) =>
+      queued.type !== 'project_source_upsert' ||
+      queued.projectId !== project.id ||
+      queued.payload.blockId !== blockId,
+    );
+    await idbSet(PENDING_PROJECT_SYNC_EVENTS_KEY, [...compacted, event]);
+    notifyQueueChanged();
+    return event;
+  });
 }
 
 function fullPageReplacementOps(

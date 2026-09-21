@@ -69,6 +69,7 @@ import type {
 
 const INKWELL_DRAG_MIME = 'application/x-inkwell-capture';
 const INKWELL_HEADING_DRAG_MIME = 'application/x-inkwell-heading-capture';
+const INKWELL_CAPTURE_DATA_ATTR = 'data-inkwell-capture';
 const CATEGORY_COLORS_KEY = 'inkwellCategoryColors';
 const categoryColorOptions = [
   '#2563eb',
@@ -339,16 +340,18 @@ const editor = useEditor({
         void consumeTextDragPayload(fallbackText).then((dragPayload) => {
           if (dragPayload) {
             insertCapturedTextAtDrop(view, event, dragPayload);
-          } else if (fallbackText) {
-            moveEditorSelectionToDrop(view, event);
-            shouldSkipNextUpdateSave = true;
-            editor.value?.chain().focus().insertContent(fallbackText).run();
-            queueMicrotask(() => {
-              shouldSkipNextUpdateSave = false;
+            return;
+          }
+
+          if (fallbackText) {
+            void capturePayloadFromActiveTab(fallbackText).then((fallbackPayload) => {
+              if (fallbackPayload) {
+                insertCapturedTextAtDrop(view, event, fallbackPayload);
+                return;
+              }
+
+              insertPlainTextAtDrop(view, event, fallbackText);
             });
-            if (editor.value) {
-              void saveEditorContentOptimistically();
-            }
           }
         });
 
@@ -1320,7 +1323,9 @@ function showEditorContextMenu(view: EditorView, event: MouseEvent) {
     to: view.state.selection.to,
   };
   editorContextMenuHasSelection.value = !view.state.selection.empty;
-  editorContextMenuSource.value = sourceForEditorContext(view, pos?.pos);
+  editorContextMenuSource.value =
+    sourceForContextTarget(event.target) ??
+    sourceForEditorContext(view, pos?.pos);
   contextMenuLinkDraft.value = String(editor.value?.getAttributes('link').href ?? '');
   editorContextMenuPanel.value = 'main';
   editorContextMenu.value = {
@@ -1401,6 +1406,27 @@ function sourceForEditorContext(view: EditorView, clickedPosition?: number) {
   collectProjectStateSources(blockIds, sources);
 
   return sources.size === 1 ? sources.values().next().value ?? null : null;
+}
+
+function sourceForContextTarget(target: EventTarget | null) {
+  if (!(target instanceof Element)) return null;
+
+  const sourceElement = target.closest('[data-inkwell-source]');
+  const source = decodeInkwellSource(
+    sourceElement?.getAttribute('data-inkwell-source'),
+  );
+
+  if (isAccessibleInkwellSource(source)) return source;
+
+  const blockId = target
+    .closest('[data-inkwell-block-id]')
+    ?.getAttribute('data-inkwell-block-id');
+  const stateSource = sourceFromProjectState(
+    store.currentProject?.stateContent,
+    blockId,
+  );
+
+  return isAccessibleInkwellSource(stateSource) ? stateSource : null;
 }
 
 function collectNodeSources(
@@ -2133,12 +2159,23 @@ function isHttpAudioUrl(value: string) {
 function readInkwellDropPayload(event: DragEvent): CaptureSelectionPayload | null {
   const rawPayload = event.dataTransfer?.getData(INKWELL_DRAG_MIME);
 
-  if (!rawPayload) {
-    return null;
+  if (rawPayload) {
+    try {
+      return JSON.parse(rawPayload) as CaptureSelectionPayload;
+    } catch {
+      // Cross-origin drags can expose the standard HTML flavor while hiding
+      // or rewriting a custom MIME flavor. Try the embedded HTML payload.
+    }
   }
 
   try {
-    return JSON.parse(rawPayload) as CaptureSelectionPayload;
+    const html = event.dataTransfer?.getData('text/html');
+    if (!html) return null;
+    const document = new DOMParser().parseFromString(html, 'text/html');
+    const embedded = document
+      .querySelector(`[${INKWELL_CAPTURE_DATA_ATTR}]`)
+      ?.getAttribute(INKWELL_CAPTURE_DATA_ATTR);
+    return embedded ? JSON.parse(embedded) as CaptureSelectionPayload : null;
   } catch {
     return null;
   }
@@ -2166,12 +2203,20 @@ function insertCapturedTextAtDrop(
 }
 
 function isLikelyHeadingDrop(event: DragEvent) {
-  return event.dataTransfer?.types.includes(INKWELL_HEADING_DRAG_MIME) ?? false;
+  return Array.from(event.dataTransfer?.types ?? []).includes(
+    INKWELL_HEADING_DRAG_MIME,
+  );
 }
 
 function isLikelyTextCaptureDrop(event: DragEvent) {
-  const types = event.dataTransfer?.types ?? [];
-  return types.includes(INKWELL_DRAG_MIME) && !types.includes(INKWELL_HEADING_DRAG_MIME);
+  const types = Array.from(event.dataTransfer?.types ?? []);
+  return !types.includes(INKWELL_HEADING_DRAG_MIME) && (
+    types.includes(INKWELL_DRAG_MIME) ||
+    (!types.includes('text/uri-list') && (
+      types.includes('text/plain') ||
+      types.includes('text/html')
+    ))
+  );
 }
 
 async function consumeTextDragPayload(text: string) {
@@ -2279,6 +2324,57 @@ function textFromNode(node: DocumentContent): string {
   }
 
   return (node.content ?? []).map((child) => textFromNode(child)).join('');
+}
+
+async function capturePayloadFromActiveTab(
+  text: string,
+): Promise<CaptureSelectionPayload | null> {
+  const normalizedText = text.replace(/\r\n/g, '\n').trimEnd();
+  if (!normalizedText.trim()) return null;
+
+  try {
+    const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+    const sourceUrl = safeHttpUrl(tab?.url);
+    if (!sourceUrl) return null;
+
+    return {
+      text: normalizedText,
+      sourceUrl,
+      pageTitle: tab?.title ?? '',
+      highlightMeta: { text: normalizedText },
+    };
+  } catch {
+    return null;
+  }
+}
+
+function insertPlainTextAtDrop(
+  view: EditorView,
+  event: DragEvent,
+  text: string,
+) {
+  moveEditorSelectionToDrop(view, event);
+  shouldSkipNextUpdateSave = true;
+  editor.value?.chain().focus().insertContent(text).run();
+  queueMicrotask(() => {
+    shouldSkipNextUpdateSave = false;
+  });
+  if (editor.value) {
+    void saveEditorContentOptimistically();
+  }
+}
+
+function safeHttpUrl(value: unknown) {
+  if (typeof value !== 'string') return null;
+
+  try {
+    const url = new URL(value);
+    return url.protocol === 'http:' || url.protocol === 'https:'
+      ? url.toString()
+      : null;
+  } catch {
+    return null;
+  }
 }
 </script>
 
@@ -3154,12 +3250,12 @@ function textFromNode(node: DocumentContent): string {
             <button
               type="button"
               class="context-menu-button source-action"
-              :title="`Open the original text on ${editorContextMenuSourceHost}`"
-              aria-label="Go to source"
+              :title="`View the original text on ${editorContextMenuSourceHost}`"
+              :aria-label="`View Source: ${editorContextMenuSourceHost}`"
               @mousedown.prevent
               @click="openEditorContextSource"
             >
-              <span>Go to source</span>
+              <span>View Source:</span>
               <span v-if="editorContextMenuSourceHost" class="source-action-host">
                 {{ editorContextMenuSourceHost }}
               </span>

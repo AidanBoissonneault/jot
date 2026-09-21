@@ -12,6 +12,7 @@ import type { DocumentContent, Project, ProjectPage, SyncConfig } from '@/src/ty
 import type { SyncBlockOperation } from '@/src/types/sync';
 import { readBrowserStorage, resetBrowserStorage } from './setup';
 import { doc, paragraph, image } from './helpers/docBuilders';
+import { sourceFromProjectState } from '@/src/extensions/sourceRegistry';
 
 type Deferred<T> = {
   promise: Promise<T>;
@@ -125,6 +126,31 @@ describe('optimistic project creation', () => {
 });
 
 describe('project metadata', () => {
+  test('makes a captured origin available before its network sync finishes', async () => {
+    const sourceSync = deferred<Response>();
+    vi.stubGlobal('fetch', vi.fn(() => sourceSync.promise));
+    const store = useInkwellStore();
+    await seedStore(store);
+
+    const registration = store.registerCurrentProjectSource('capture-block', {
+      text: 'Dragged text',
+      sourceUrl: 'https://example.com/article',
+      pageTitle: 'Article',
+      highlightMeta: {
+        text: 'Dragged text',
+        sourceLink: 'https://example.com/article#:~:text=Dragged%20text',
+      },
+    });
+
+    expect(sourceFromProjectState(
+      store.currentProject?.stateContent,
+      'capture-block',
+    )).toMatchObject({ sourceUrl: 'https://example.com/article' });
+
+    sourceSync.resolve(jsonResponse({ status: 'saved' }));
+    await registration;
+  });
+
   test('validateNotionCache uncaches missing Notion project and page metadata', async () => {
     const fetchMock = vi.fn(async () =>
       jsonResponse({

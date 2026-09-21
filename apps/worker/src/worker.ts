@@ -30,6 +30,7 @@ import type {
   MediaUploadRequest,
   SyncPageRequest,
   SyncProjectRequest,
+  SyncProjectSourceRequest,
   SyncReloadRequest,
   SyncValidationRequest,
 } from '../../../src/types/sync.js';
@@ -419,6 +420,56 @@ app.post('/sync/project', async (c) => {
   }
 });
 
+app.post('/sync/project/source', async (c) => {
+  const body = await c.req.json<SyncProjectSourceRequest>().catch(() => ({}));
+  const { project, blockId, block, selectedParentPageId } = body ?? {};
+
+  if (!project?.id || !blockId || !block) {
+    return c.json({ status: 'error', message: 'Missing project source.' }, 400);
+  }
+
+  try {
+    const store = await requireConnectedStore(c);
+    return c.json(await withFreshInstallationStore(store, async (freshStore) => {
+      const projectPage = await ensureProjectPage(freshStore, project, {
+        selectedParentPageId,
+        syncState: false,
+      });
+      const container = await ensureProjectStateContainer(
+        freshStore,
+        projectPage.id,
+        project.id,
+      );
+      await applyManagedBlockOps(
+        freshStore,
+        projectStateKey(project.id),
+        container.id,
+        [{
+          type: 'block_update',
+          inkwellBlockId: block.attrs?.inkwellBlockId ?? `source:${encodeURIComponent(blockId)}`,
+          payload: { block },
+        }],
+        { type: 'doc', content: [block] },
+      );
+      const refreshed = await notionRequest(freshStore, `/blocks/${container.id}`)
+        .catch(() => container);
+      freshStore.projectBlocks[projectStateKey(project.id)] = {
+        ...freshStore.projectBlocks[projectStateKey(project.id)],
+        blockId: container.id,
+        lastEditedTime: refreshed.last_edited_time,
+        parentPageId: projectPage.id,
+        title: 'Project State',
+      };
+      await writeStore(freshStore);
+      return { status: 'saved', project };
+    }));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error('[sync/project/source] failed:', message, error);
+    return c.json({ status: 'error', message }, 500);
+  }
+});
+
 app.get('/sync/status', async (c) => {
   const pageId = c.req.query('pageId');
 
@@ -742,7 +793,7 @@ let supabase;
 let auth;
 let notionRequest;
 let ensureInkwellRootPage, ensureProjectRootPage, pageSummary;
-let archiveThreadToggle, ensureProjectDatabase, ensureProjectPage, ensureThreadToggle,
+let archiveThreadToggle, ensureProjectDatabase, ensureProjectPage, ensureProjectStateContainer, ensureThreadToggle,
     reloadProjectDatabaseFromNotion, updateThreadToggleTitle;
 
 function initSingletons(env) {
@@ -783,6 +834,7 @@ function initSingletons(env) {
   archiveThreadToggle = dbHelpers.archiveThreadToggle;
   ensureProjectDatabase = dbHelpers.ensureProjectDatabase;
   ensureProjectPage = dbHelpers.ensureProjectPage;
+  ensureProjectStateContainer = dbHelpers.ensureProjectStateContainer;
   ensureThreadToggle = dbHelpers.ensureThreadToggle;
   reloadProjectDatabaseFromNotion = dbHelpers.reloadProjectDatabaseFromNotion;
   updateThreadToggleTitle = dbHelpers.updateThreadToggleTitle;

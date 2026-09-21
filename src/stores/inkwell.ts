@@ -1,8 +1,17 @@
 import { computed, ref } from 'vue';
 import { defineStore } from 'pinia';
 import { mergeSyncedMediaContent } from '@/src/extensions/mediaContent';
-import { mergeVisibleProjectState } from '@/src/extensions/sourceRegistry';
-import { notionClient, connectSyncEvents, applySyncResult, clearStalePages } from '@/src/services/notionClient';
+import {
+  addSourceToProjectState,
+  mergeVisibleProjectState,
+} from '@/src/extensions/sourceRegistry';
+import {
+  notionClient,
+  connectSyncEvents,
+  applySyncResult,
+  clearStalePages,
+  sourcePayloadFromCapture,
+} from '@/src/services/notionClient';
 import { onSyncQueueChange } from '@/src/services/syncQueue';
 import type { SyncEventMessage } from '@/src/types/sync';
 import type {
@@ -226,6 +235,21 @@ export const useInkwellStore = defineStore('inkwell', () => {
   ) {
     if (!currentProjectId.value || !blockId) {
       return;
+    }
+
+    const activeProject = currentProject.value;
+    if (activeProject) {
+      const optimisticProject = {
+        ...activeProject,
+        stateContent: addSourceToProjectState(
+          activeProject.stateContent,
+          blockId,
+          sourcePayloadFromCapture(payload),
+        ),
+      };
+      projects.value = projects.value.map((storedProject) =>
+        storedProject.id === optimisticProject.id ? optimisticProject : storedProject,
+      );
     }
 
     const project = await notionClient.addProjectSource(

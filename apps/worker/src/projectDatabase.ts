@@ -772,6 +772,13 @@ export function createProjectDatabaseHelpers({
     };
   }
 
+  async function ensureProjectStateContainer(store, notionPageId, projectId) {
+    return ensureToggleBlock(store, notionPageId, 'Project State', {
+      key: projectStateKey(projectId),
+      mappings: store.projectBlocks,
+    });
+  }
+
   async function ensureThreadToggle(store, projectPageId, page) {
     return ensureToggleBlock(store, projectPageId, page.title || 'Untitled Page', {
       key: threadKey(page.id),
@@ -881,6 +888,7 @@ export function createProjectDatabaseHelpers({
     archiveThreadToggle,
     ensureProjectDatabase,
     ensureProjectPage,
+    ensureProjectStateContainer,
     ensureThreadToggle,
     importThreadContent,
     reloadProjectDatabaseFromNotion,
