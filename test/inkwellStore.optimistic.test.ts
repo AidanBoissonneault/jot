@@ -686,7 +686,7 @@ describe('page title and content saves', () => {
     const creates = compacted.filter((op) => op.type === 'block_create');
     expect(creates).toHaveLength(1);
     expect(creates[0].payload.block).toEqual(blockWithId('new-block', 'updated'));
-    expect(creates[0].payload.page.content).toEqual(docWithBlock('new-block', 'updated'));
+    expect(creates[0].payload.page.content).toBeUndefined();
   });
 
   test('a create followed by delete before delivery drops both redundant block ops', async () => {
@@ -742,7 +742,8 @@ describe('page title and content saves', () => {
 
     const requestBody = await flushAndReadRequest(fetchMock);
     expect(requestBody.ops).toHaveLength(1);
-    expect(requestBody.ops[0].payload.page.content).toEqual(docWithBlock('force-block', 'third'));
+    expect(requestBody.ops[0].payload.page.content).toBeUndefined();
+    expect(requestBody.ops[0].payload.block).toEqual(blockWithId('force-block', 'third'));
     expect(requestBody.ops[0].localVersion).toBeGreaterThan(1);
   });
 
@@ -830,10 +831,12 @@ describe('offline queue lifecycle', () => {
       'page-inkwell',
       'page-local-two',
     ]));
-    expect(pageOps).toHaveLength(2);
-    expect(pageOps.every((op) =>
-      op.type === 'block_reorder' && op.payload.replaceAll === true,
-    )).toBe(true);
+    expect(pageOps).toHaveLength(4);
+    for (const pageId of ['page-inkwell', 'page-local-two']) {
+      const ops = pageOps.filter((op) => op.pageId === pageId);
+      expect(ops.map((op) => op.type)).toEqual(['blocks_reset', 'block_create']);
+      expect(ops.every((op) => op.payload.page.content === undefined)).toBe(true);
+    }
     expect(readBrowserStorage().notionHydrationSource).toBe(
       'http://localhost:8787::workspace-first-sync',
     );
@@ -876,16 +879,22 @@ describe('offline queue lifecycle', () => {
 
     const compacted = compactPendingSyncOps(legacyOps);
 
-    expect(compacted).toHaveLength(1);
+    expect(compacted).toHaveLength(2);
+    expect(compacted.map((op) => op.type)).toEqual(['blocks_reset', 'block_create']);
     expect(compacted[0]).toMatchObject({
       opId: 'legacy-page-upsert',
-      type: 'block_reorder',
+      localVersion: 2,
+    });
+    expect(compacted[1]).toMatchObject({
+      opId: 'legacy-page-upsert:block:legacy-block',
+      inkwellBlockId: 'legacy-block',
       localVersion: 2,
       payload: {
-        order: ['legacy-block'],
-        replaceAll: true,
+        block: blockWithId('legacy-block', 'only once'),
+        index: 0,
       },
     });
+    expect(compacted.every((op) => op.payload.page.content === undefined)).toBe(true);
   });
 
   test('restores local edits and their queue after an offline reload', async () => {

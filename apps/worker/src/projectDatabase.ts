@@ -412,14 +412,14 @@ export function createProjectDatabaseHelpers({
     return results;
   }
 
-  async function ensureProjectPage(store, project, { selectedParentPageId } = {}) {
-    return ensureProjectPageAttempt(store, project, { selectedParentPageId });
+  async function ensureProjectPage(store, project, { selectedParentPageId, syncState = true } = {}) {
+    return ensureProjectPageAttempt(store, project, { selectedParentPageId, syncState });
   }
 
   async function ensureProjectPageAttempt(
     store,
     project,
-    { selectedParentPageId, retryOnArchivedAncestor = true } = {},
+    { selectedParentPageId, retryOnArchivedAncestor = true, syncState = true } = {},
   ) {
     const database = await ensureProjectDatabase(store, { selectedParentPageId });
     const stored = store.projectPages?.[project.id];
@@ -440,7 +440,7 @@ export function createProjectDatabaseHelpers({
         page = await updateProjectDatabasePage(store, page.id, project);
       }
 
-      const stateSync = await syncProjectState(store, page.id, project);
+      const stateSync = syncState ? await syncProjectState(store, page.id, project) : undefined;
       storeProjectPage(store, database, project, page);
       return {
         ...pageSummaryFromNotionPage(page, database),
@@ -465,6 +465,7 @@ export function createProjectDatabaseHelpers({
       return ensureProjectPageAttempt(store, project, {
         selectedParentPageId,
         retryOnArchivedAncestor: false,
+        syncState,
       });
     }
   }

@@ -40,6 +40,7 @@ export type SyncPageRequest = {
 export type SyncBlockOperationType =
   | 'page_upsert'
   | 'page_archive'
+  | 'blocks_reset'
   | 'block_create'
   | 'block_update'
   | 'block_delete'
@@ -56,11 +57,15 @@ export type SyncBlockOperation = {
   localVersion: number;
   baseKnownSyncVersion?: number;
   payload: {
-    page: ProjectPage;
-    project: Project;
+    // content/stateContent remain optional for compatibility with queues made
+    // by older extension versions. New operations only carry small metadata.
+    page: Omit<ProjectPage, 'content'> & { content?: DocumentContent };
+    project: Omit<Project, 'stateContent'> & { stateContent?: DocumentContent };
     block?: DocumentContent;
     previousBlock?: DocumentContent;
     order?: string[];
+    index?: number;
+    afterInkwellBlockId?: string;
     replaceAll?: boolean;
     selectedParentPageId?: string;
   };

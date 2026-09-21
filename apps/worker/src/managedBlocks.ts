@@ -133,6 +133,41 @@ export async function applyManagedBlockOps({
     return replaceManagedBlocks(store, localPageId, notionPageId, content);
   }
 
+  // New queue messages carry a single block rather than a copy of the entire
+  // page. Apply a bounded batch directly so unrelated mappings are never
+  // discarded while still minimizing Queue messages.
+  const isGranularBatch = ops.every((op) => [
+    'page_upsert',
+    'blocks_reset',
+    'block_create',
+    'block_update',
+    'block_delete',
+  ].includes(op.type));
+  if (isGranularBatch) {
+    const createdBlocks = [];
+    if (ops.some((op) => op.type === 'blocks_reset')) {
+      store.blockMappings[localPageId] = [];
+      await replaceManagedBlocks(store, localPageId, notionPageId, { type: 'doc', content: [] });
+    }
+    for (const op of ops) {
+      if (!['block_create', 'block_update', 'block_delete'].includes(op.type)) continue;
+      const result = await applySingleManagedBlockOp({
+        store,
+        localPageId,
+        notionPageId,
+        op,
+        appendManagedBlocks,
+        deleteManagedBlock,
+        updateManagedBlock,
+        tiptapDocumentToNotionBlocks,
+        kindFromNotionBlock,
+        hash,
+      });
+      createdBlocks.push(...(result?.createdBlocks ?? []));
+    }
+    return { createdBlocks };
+  }
+
   const notionBlocks = tiptapDocumentToNotionBlocks(content);
   const desiredBlocks = desiredManagedBlocks({
     content,
@@ -198,6 +233,109 @@ export async function applyManagedBlockOps({
     createdBlocks: createdByOrder,
     notionBlocks,
   };
+}
+
+async function applySingleManagedBlockOp({
+  store,
+  localPageId,
+  notionPageId,
+  op,
+  appendManagedBlocks,
+  deleteManagedBlock,
+  updateManagedBlock,
+  tiptapDocumentToNotionBlocks,
+  kindFromNotionBlock,
+  hash,
+}) {
+  const mappings = [...(store.blockMappings[localPageId] ?? [])];
+  const existingIndex = mappings.findIndex((mapping) => mappingKey(mapping) === op.inkwellBlockId);
+  const existing = existingIndex >= 0 ? mappings[existingIndex] : undefined;
+
+  if (op.type === 'block_delete') {
+    if (existing?.notionBlockId) {
+      await deleteManagedBlock(store, existing.notionBlockId);
+    }
+    if (existingIndex >= 0) mappings.splice(existingIndex, 1);
+    store.blockMappings[localPageId] = normalizeMappingOrder(mappings);
+    return { createdBlocks: [] };
+  }
+
+  if (!op.inkwellBlockId || !op.payload?.block) {
+    return { createdBlocks: [] };
+  }
+
+  const [notionBlock] = tiptapDocumentToNotionBlocks({
+    type: 'doc',
+    content: [op.payload.block],
+  });
+  if (!notionBlock) return { createdBlocks: [] };
+
+  const desired = {
+    inkwellBlockId: op.inkwellBlockId,
+    localNodeId: op.inkwellBlockId,
+    localPageId,
+    notionBlock,
+    kind: kindFromNotionBlock(notionBlock),
+    lastSyncedHash: hash(JSON.stringify(notionBlock ?? {})),
+    order: Number.isFinite(op.payload.index) ? op.payload.index : mappings.length,
+  };
+  let nextMapping;
+  let createdBlock;
+
+  if (!existing?.notionBlockId) {
+    const previous = mappings.find((mapping) =>
+      mappingKey(mapping) === op.payload.afterInkwellBlockId && mapping.notionBlockId,
+    );
+    createdBlock = await appendAndTrackBlock(
+      appendManagedBlocks,
+      store,
+      notionPageId,
+      notionBlock,
+      positionAfter(previous?.notionBlockId),
+      [],
+      0,
+    );
+    nextMapping = mappingFromDesired(desired, createdBlock?.id);
+  } else if (existing.lastSyncedHash === desired.lastSyncedHash) {
+    nextMapping = mappingFromDesired(desired, existing.notionBlockId, existing);
+  } else if (isUpdateCompatible(existing, desired)) {
+    await updateManagedBlock(store, existing.notionBlockId, notionBlock);
+    nextMapping = mappingFromDesired(desired, existing.notionBlockId, existing);
+  } else {
+    await deleteManagedBlock(store, existing.notionBlockId);
+    const previous = mappings.find((mapping) =>
+      mappingKey(mapping) === op.payload.afterInkwellBlockId && mapping.notionBlockId,
+    );
+    createdBlock = await appendAndTrackBlock(
+      appendManagedBlocks,
+      store,
+      notionPageId,
+      notionBlock,
+      positionAfter(previous?.notionBlockId),
+      [],
+      0,
+    );
+    nextMapping = mappingFromDesired(desired, createdBlock?.id, existing);
+  }
+
+  if (existingIndex >= 0) mappings.splice(existingIndex, 1);
+  const previousIndex = mappings.findIndex((mapping) =>
+    mappingKey(mapping) === op.payload.afterInkwellBlockId,
+  );
+  const insertionIndex = existingIndex >= 0
+    ? Math.min(existingIndex, mappings.length)
+    : previousIndex >= 0
+      ? previousIndex + 1
+      : Math.min(Math.max(op.payload.index ?? mappings.length, 0), mappings.length);
+  mappings.splice(insertionIndex, 0, nextMapping);
+  store.blockMappings[localPageId] = normalizeMappingOrder(mappings);
+  return { createdBlocks: createdBlock ? [createdBlock] : [], notionBlocks: [notionBlock] };
+}
+
+function normalizeMappingOrder(mappings) {
+  return mappings
+    .filter((mapping) => mapping?.notionBlockId)
+    .map((mapping, order) => ({ ...mapping, order }));
 }
 
 async function reconcileManagedBlocks({

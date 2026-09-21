@@ -163,11 +163,13 @@ export function buildPageSyncOps({
   project: Project;
   selectedParentPageId?: string;
 }): Omit<BlockSyncOp, 'opId' | 'sequence' | 'createdAt' | 'localVersion'>[] {
+  const { content: _pageContent, ...pageContext } = page;
+  const { stateContent: _projectStateContent, ...projectContext } = project;
   const base = {
     pageId: page.id,
     projectId: project.id,
     baseKnownSyncVersion: page.knownSyncVersion,
-    payload: { page, project, selectedParentPageId },
+    payload: { page: pageContext, project: projectContext, selectedParentPageId },
   };
 
   if (page.status === 'archived') {
@@ -179,16 +181,11 @@ export function buildPageSyncOps({
   const previousOrder = Array.from(previousBlocks.keys());
   const nextOrder = Array.from(nextBlocks.keys());
 
-  // A page without a previous local snapshot is a complete snapshot, not a
-  // series of new blocks. Replacing the managed contents is both smaller and
-  // prevents an existing Notion page from receiving every block a second time
-  // when its local block mappings are missing or stale.
+  // Full snapshots are represented as a reset followed by one message per
+  // top-level block. This keeps the Cloudflare Queue payload bounded even for
+  // large pages and makes every block create independently retryable.
   if (!previousPage) {
-    return [{
-      ...base,
-      type: 'block_reorder',
-      payload: { ...base.payload, order: nextOrder, replaceAll: true },
-    }];
+    return fullPageReplacementOps(base, nextBlocks, nextOrder);
   }
 
   const ops: Omit<BlockSyncOp, 'opId' | 'sequence' | 'createdAt' | 'localVersion'>[] = [];
@@ -198,20 +195,32 @@ export function buildPageSyncOps({
   }
 
   for (const [inkwellBlockId, block] of nextBlocks) {
+    const index = nextOrder.indexOf(inkwellBlockId);
     const previousBlock = previousBlocks.get(inkwellBlockId);
     if (!previousBlock) {
       ops.push({
         ...base,
         type: 'block_create',
         inkwellBlockId,
-        payload: { ...base.payload, block },
+        payload: {
+          ...base.payload,
+          block,
+          index,
+          afterInkwellBlockId: nextOrder[index - 1],
+        },
       });
     } else if (stableJson(previousBlock) !== stableJson(block)) {
       ops.push({
         ...base,
         type: 'block_update',
         inkwellBlockId,
-        payload: { ...base.payload, block, previousBlock },
+        payload: {
+          ...base.payload,
+          block,
+          previousBlock,
+          index,
+          afterInkwellBlockId: nextOrder[index - 1],
+        },
       });
     }
   }
@@ -227,22 +236,43 @@ export function buildPageSyncOps({
     }
   }
 
-  if (previousOrder.length && nextOrder.length && previousOrder.join('\n') !== nextOrder.join('\n')) {
-    ops.push({
-      ...base,
-      type: 'block_reorder',
-      payload: { ...base.payload, order: nextOrder },
-    });
+  const previousCommonOrder = previousOrder.filter((id) => nextBlocks.has(id));
+  const nextCommonOrder = nextOrder.filter((id) => previousBlocks.has(id));
+  if (previousCommonOrder.join('\n') !== nextCommonOrder.join('\n')) {
+    return fullPageReplacementOps(base, nextBlocks, nextOrder);
   }
 
   return ops;
 }
 
+function fullPageReplacementOps(
+  base: Omit<BlockSyncOp, 'opId' | 'sequence' | 'createdAt' | 'localVersion' | 'type'>,
+  blocks: Map<string, DocumentContent>,
+  order: string[],
+): Omit<BlockSyncOp, 'opId' | 'sequence' | 'createdAt' | 'localVersion'>[] {
+  return [
+    { ...base, type: 'blocks_reset' },
+    ...order.map((inkwellBlockId, index) => ({
+      ...base,
+      type: 'block_create' as const,
+      inkwellBlockId,
+      payload: {
+        ...base.payload,
+        block: blocks.get(inkwellBlockId),
+        index,
+        afterInkwellBlockId: order[index - 1],
+      },
+    })),
+  ];
+}
+
 export function compactPendingSyncOps(ops: BlockSyncOp[]): BlockSyncOp[] {
   const sorted = removeOpsSupersededByFullSnapshots(
-    collapseLegacyFullPageSnapshots(ops
-      .map((op) => ({ ...op, payload: { ...op.payload } }))
-      .sort((first, second) => first.sequence - second.sequence)),
+    expandLegacyFullPageSnapshots(
+      collapseLegacyFullPageSnapshots(ops
+        .map((op) => ({ ...op, payload: { ...op.payload } }))
+        .sort((first, second) => first.sequence - second.sequence)),
+    ).map(stripLegacySyncContext),
   );
   const keep = new Set(sorted.map((op) => op.opId));
   const latestUpdateByBlock = new Map<string, string>();
@@ -311,11 +341,49 @@ export function compactPendingSyncOps(ops: BlockSyncOp[]): BlockSyncOp[] {
   return sorted.filter((op) => keep.has(op.opId));
 }
 
+function expandLegacyFullPageSnapshots(ops: BlockSyncOp[]): BlockSyncOp[] {
+  return ops.flatMap((op) => {
+    if (op.type !== 'block_reorder' || !op.payload.page.content) return [op];
+    const blocks = blocksById(op.payload.page.content);
+    const order = op.payload.order?.filter((id) => blocks.has(id)) ?? Array.from(blocks.keys());
+    const reset: BlockSyncOp = {
+      ...op,
+      type: 'blocks_reset',
+      payload: { ...op.payload, order: undefined, replaceAll: undefined },
+    };
+    const creates = order.map((inkwellBlockId, index): BlockSyncOp => ({
+      ...op,
+      opId: `${op.opId}:block:${inkwellBlockId}`,
+      type: 'block_create',
+      inkwellBlockId,
+      sequence: op.sequence + ((index + 1) / (order.length + 1)),
+      payload: {
+        ...op.payload,
+        block: blocks.get(inkwellBlockId),
+        order: undefined,
+        replaceAll: undefined,
+        index,
+        afterInkwellBlockId: order[index - 1],
+      },
+    }));
+    return [reset, ...creates];
+  });
+}
+
+function stripLegacySyncContext(op: BlockSyncOp): BlockSyncOp {
+  const { content: _content, ...page } = op.payload.page;
+  const { stateContent: _stateContent, ...project } = op.payload.project;
+  return {
+    ...op,
+    payload: { ...op.payload, page, project },
+  };
+}
+
 function removeOpsSupersededByFullSnapshots(ops: BlockSyncOp[]): BlockSyncOp[] {
   const latestSnapshotByPage = new Map<string, BlockSyncOp>();
 
   for (const op of ops) {
-    if (op.type !== 'block_reorder' || !op.payload.replaceAll) continue;
+    if (op.type !== 'blocks_reset' && (op.type !== 'block_reorder' || !op.payload.replaceAll)) continue;
     const previous = latestSnapshotByPage.get(op.pageId);
     if (!previous || previous.sequence < op.sequence) {
       latestSnapshotByPage.set(op.pageId, op);

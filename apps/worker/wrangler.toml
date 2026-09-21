@@ -26,6 +26,7 @@ queue             = "inkwell-sync-queue"
 max_batch_size    = 1
 max_batch_timeout = 30
 max_retries       = 3
+max_concurrency   = 1
 dead_letter_queue = "inkwell-sync-dlq"
 
 [vars]

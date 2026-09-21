@@ -40,6 +40,7 @@ const INKWELL_SESSION_COOKIE = 'inkwell_session';
 const INKWELL_OAUTH_STATE_COOKIE = 'inkwell_notion_oauth_state';
 const SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 30;
 const MAX_MEDIA_UPLOAD_BYTES = 20 * 1024 * 1024;
+const MAX_SYNC_QUEUE_MESSAGE_BYTES = 120 * 1024;
 
 // TODO: replace with Durable Objects for cross-instance distributed locking
 const installationMutationLocks = new Map();
@@ -271,20 +272,47 @@ app.post('/sync/push', async (c) => {
         return c.json({ status: 'error', message: 'Invalid sync operation.' }, 400);
       }
 
-      const version = await enqueueSync(c.env, {
+      const queuedOps = group.ops.map(syncOpWithoutRepeatedContext);
+      const jobBase = {
         type: 'block_op',
         localId: latestOp.pageId,
         pageId: latestOp.pageId,
         projectId: latestOp.projectId,
         installationId: store.installationId,
+        batchId: `${latestOp.pageId}:${group.version}`,
         payload: {
-          op: latestOp,
-          ops: group.ops,
           page: latestOp.payload.page,
           project: latestOp.payload.project,
           selectedParentPageId: latestOp.payload.selectedParentPageId,
         },
-      }, group.version);
+      };
+      const chunks = chunkSyncOpsForQueue(jobBase, queuedOps, group.version);
+      if (!chunks) {
+        const oversized = queuedOps.find((op) =>
+          queueMessageBytes({
+            ...jobBase,
+            queuedVersion: group.version,
+            batchIndex: 0,
+            batchSize: 1,
+            payload: { ...jobBase.payload, ops: [op] },
+          }) > MAX_SYNC_QUEUE_MESSAGE_BYTES,
+        );
+        return c.json({
+          status: 'error',
+          message: `A single block is too large to queue (${oversized?.inkwellBlockId ?? oversized?.type ?? 'unknown block'}).`,
+        }, 413);
+      }
+      const jobs = chunks.map((chunk, batchIndex) => ({
+        ...jobBase,
+        batchIndex,
+        batchSize: chunks.length,
+        payload: { ...jobBase.payload, ops: chunk },
+      }));
+
+      let version = group.version;
+      for (const job of jobs) {
+        version = await enqueueSync(c.env, job, group.version);
+      }
       versions[latestOp.pageId] = version;
       for (const op of group.ops) {
         opVersions[op.opId] = version;
@@ -324,6 +352,49 @@ function syncOpGroupsByPage(ops) {
     };
   }).filter((group) => group.ops.length)
     .sort((first, second) => first.version - second.version);
+}
+
+function syncOpWithoutRepeatedContext(op) {
+  const { page: _page, project: _project, selectedParentPageId: _parent, ...payload } = op.payload ?? {};
+  return { ...op, payload };
+}
+
+function queueMessageBytes(value) {
+  return new TextEncoder().encode(JSON.stringify(value)).byteLength;
+}
+
+function chunkSyncOpsForQueue(jobBase, ops, queuedVersion) {
+  const chunks = [];
+  let current = [];
+
+  for (const op of ops) {
+    const singleJob = {
+      ...jobBase,
+      queuedVersion,
+      batchIndex: chunks.length,
+      batchSize: ops.length,
+      payload: { ...jobBase.payload, ops: [op] },
+    };
+    if (queueMessageBytes(singleJob) > MAX_SYNC_QUEUE_MESSAGE_BYTES) return null;
+
+    const candidate = [...current, op];
+    const candidateJob = {
+      ...jobBase,
+      queuedVersion,
+      batchIndex: chunks.length,
+      batchSize: ops.length,
+      payload: { ...jobBase.payload, ops: candidate },
+    };
+    if (queueMessageBytes(candidateJob) <= MAX_SYNC_QUEUE_MESSAGE_BYTES) {
+      current = candidate;
+      continue;
+    }
+    chunks.push(current);
+    current = [op];
+  }
+
+  if (current.length) chunks.push(current);
+  return chunks;
 }
 
 
@@ -856,22 +927,28 @@ async function applyBlockOpsToNotionForInstallation(installationId, { ops, page,
   const store = await freshConnectedStoreForInstallation(installationId);
 
   return withFreshInstallationStore(store, async (freshStore) => {
-    if (page.status === 'archived' || ops.some((op) => op.type === 'page_archive')) {
-      return pushPageToNotionForInstallation(installationId, { page, project, selectedParentPageId });
-    }
-
     let notionPageId;
     let parentPageId;
     let refreshed;
 
     if (ensureProjectPage && ensureThreadToggle) {
-      const projectPage = await ensureProjectPage(freshStore, project, { selectedParentPageId });
+      const projectPage = await ensureProjectPage(freshStore, project, {
+        selectedParentPageId,
+        syncState: false,
+      });
+      if (page.status === 'archived' || ops.some((op) => op.type === 'page_archive')) {
+        await archiveThreadToggle?.(freshStore, page);
+        appendLog(freshStore, 'sync_thread_archived', page.title);
+        await writeStore(freshStore);
+        return { page: { ...page, notionParentPageId: projectPage.id, syncState: 'saved' } };
+      }
       const toggle = await ensureThreadToggle(freshStore, projectPage.id, page);
       await updateThreadToggleTitle?.(freshStore, page);
       notionPageId = toggle.id;
       parentPageId = projectPage.id;
-      const replacement = await applyManagedBlockOps(freshStore, page.id, notionPageId, ops, page.content);
-      page.content = normalizeSyncedMediaContent(page.content, replacement?.createdBlocks ?? []);
+      const content = syncContentForOps(ops, page.content);
+      const replacement = await applyManagedBlockOps(freshStore, page.id, notionPageId, ops, content);
+      page.content = normalizeSyncedMediaContent(content, replacement?.createdBlocks ?? []);
       refreshed = await notionRequest(freshStore, `/blocks/${notionPageId}`).catch(() => toggle);
       freshStore.notePages[page.id] = {
         notionPageId,
@@ -893,8 +970,9 @@ async function applyBlockOpsToNotionForInstallation(installationId, { ops, page,
       await updateChildNotePage(freshStore, notePage.id, page);
       notionPageId = notePage.id;
       parentPageId = projectRootPage.id;
-      const replacement = await applyManagedBlockOps(freshStore, page.id, notionPageId, ops, page.content);
-      page.content = normalizeSyncedMediaContent(page.content, replacement?.createdBlocks ?? []);
+      const content = syncContentForOps(ops, page.content);
+      const replacement = await applyManagedBlockOps(freshStore, page.id, notionPageId, ops, content);
+      page.content = normalizeSyncedMediaContent(content, replacement?.createdBlocks ?? []);
       refreshed = await notionRequest(freshStore, `/pages/${notionPageId}`).catch(() => notePage);
       freshStore.notePages[page.id] = {
         notionPageId,
@@ -922,6 +1000,12 @@ async function applyBlockOpsToNotionForInstallation(installationId, { ops, page,
       message: 'Synced block changes to Notion.',
     };
   });
+}
+
+function syncContentForOps(ops, legacyContent) {
+  if (legacyContent?.content) return legacyContent;
+  const blocks = ops.map((op) => op.payload?.block).filter(Boolean);
+  return { type: 'doc', content: blocks };
 }
 
 async function syncProjectToNotionForInstallation(installationId, { project, selectedParentPageId }) {
@@ -1810,6 +1894,7 @@ export default {
 
     for (const msg of batch.messages) {
       const job = msg.body;
+      let syncRow;
       console.log('[queue] processing', job.type, job.localId, 'v', job.queuedVersion);
       try {
         const { data: row } = await supabase
@@ -1818,9 +1903,12 @@ export default {
           .eq('installation_id', job.installationId)
           .eq('local_id', job.localId)
           .maybeSingle();
+        syncRow = row;
 
         // Stale check — a newer edit was enqueued after this one
-        if (row && row.local_version > job.queuedVersion) {
+        // A block batch may span multiple Queue messages. Every chunk must run
+        // or the remote page would be left only partially applied.
+        if (job.type !== 'block_op' && row && row.local_version > job.queuedVersion) {
           console.log('[queue] skipped stale', job.type, job.localId, 'v', job.queuedVersion, 'latest', row.local_version);
           msg.ack();
           continue;
@@ -1856,22 +1944,26 @@ export default {
           });
         }
 
-        await supabase
-          .from('notion_block_sync')
-          .update({
-            status: 'synced',
-            synced_version: job.queuedVersion,
-            notion_block_id: notionBlockId,
-            updated_at: new Date().toISOString(),
-          })
-          .eq('installation_id', job.installationId)
-          .eq('local_id', job.localId);
+        const isFinalBatchMessage = job.batchSize == null || job.batchIndex === job.batchSize - 1;
+        const isCurrentVersion = !row || row.local_version <= job.queuedVersion;
+        if (isFinalBatchMessage && isCurrentVersion) {
+          await supabase
+            .from('notion_block_sync')
+            .update({
+              status: 'synced',
+              synced_version: job.queuedVersion,
+              notion_block_id: notionBlockId,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('installation_id', job.installationId)
+            .eq('local_id', job.localId);
 
-        const doStub = env.SYNC_EVENTS.get(env.SYNC_EVENTS.idFromName(job.installationId));
-        await doStub.fetch(new Request('http://do/notify', {
-          method: 'POST',
-          body: JSON.stringify({ status: 'synced', pageId: job.localId, notionBlockId, version: job.queuedVersion }),
-        })).catch(() => undefined);
+          const doStub = env.SYNC_EVENTS.get(env.SYNC_EVENTS.idFromName(job.installationId));
+          await doStub.fetch(new Request('http://do/notify', {
+            method: 'POST',
+            body: JSON.stringify({ status: 'synced', pageId: job.localId, notionBlockId, version: job.queuedVersion }),
+          })).catch(() => undefined);
+        }
 
         console.log('[queue] done', job.type, job.localId);
         msg.ack();
@@ -1882,13 +1974,16 @@ export default {
           .update({ status: 'failed', updated_at: new Date().toISOString() })
           .eq('installation_id', job.installationId)
           .eq('local_id', job.localId)
+          .eq('local_version', job.queuedVersion)
           .then(() => {}).catch(() => {});
 
-        const doStub = env.SYNC_EVENTS.get(env.SYNC_EVENTS.idFromName(job.installationId));
-        await doStub.fetch(new Request('http://do/notify', {
-          method: 'POST',
-          body: JSON.stringify({ status: 'failed', pageId: job.localId }),
-        })).catch(() => undefined);
+        if (!syncRow || syncRow.local_version <= job.queuedVersion) {
+          const doStub = env.SYNC_EVENTS.get(env.SYNC_EVENTS.idFromName(job.installationId));
+          await doStub.fetch(new Request('http://do/notify', {
+            method: 'POST',
+            body: JSON.stringify({ status: 'failed', pageId: job.localId }),
+          })).catch(() => undefined);
+        }
 
         msg.retry();
       }
