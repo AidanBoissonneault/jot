@@ -6,6 +6,7 @@
 
 import type { Identifier, JsonObject, WorkerEnv, WorkerSupabaseClient } from './types.js';
 
+/** Describes the notion oauth tokens contract used by this API feature. */
 export interface NotionOAuthTokens {
   access_token: string;
   bot_id: string | undefined;
@@ -15,6 +16,7 @@ export interface NotionOAuthTokens {
   workspace_name: string | undefined;
 }
 
+/** Describes the notion oauth owner contract used by this API feature. */
 interface NotionOAuthOwner {
   avatar_url: string | null;
   id: string;
@@ -22,6 +24,7 @@ interface NotionOAuthOwner {
   person: { email: string | undefined } | undefined;
 }
 
+/** Describes the notion oauth user contract used by this API feature. */
 export interface NotionOAuthUser {
   email: string;
   id: string;

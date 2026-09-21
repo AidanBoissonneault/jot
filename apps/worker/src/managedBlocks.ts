@@ -18,22 +18,29 @@ import type {
 
 const INKWELL_BLOCK_ID_ATTR = 'inkwellBlockId';
 
+/** Describes a Notion child insertion position. */
 interface BlockPosition {
   after_block?: { id: string };
   type: 'after_block' | 'start';
 }
 
+/** Describes the append managed blocks contract used by this API feature. */
 type AppendManagedBlocks = (
   store: WorkerStore,
   notionPageId: string,
   blocks: NotionBlockPayload[],
   position?: BlockPosition,
 ) => Promise<NotionBlock[]>;
+/** Describes the delete managed block contract used by this API feature. */
 type DeleteManagedBlock = (store: WorkerStore, blockId: string) => Promise<unknown>;
+/** Describes the update managed block contract used by this API feature. */
 type UpdateManagedBlock = (store: WorkerStore, blockId: string, block: NotionBlockPayload) => Promise<unknown>;
+/** Describes the convert document contract used by this API feature. */
 type ConvertDocument = (content: DocumentContent) => NotionBlockPayload[];
+/** Describes the classify block contract used by this API feature. */
 type ClassifyBlock = (block: Pick<NotionBlockPayload, 'type'>) => string;
 
+/** Describes the desired managed block contract used by this API feature. */
 interface DesiredManagedBlock {
   inkwellBlockId: string;
   kind: string;
@@ -44,6 +51,7 @@ interface DesiredManagedBlock {
   order: number;
 }
 
+/** Describes the managed block dependencies contract used by this API feature. */
 interface ManagedBlockDependencies {
   appendManagedBlocks: AppendManagedBlocks;
   deleteManagedBlock: DeleteManagedBlock;
@@ -53,6 +61,7 @@ interface ManagedBlockDependencies {
   updateManagedBlock: UpdateManagedBlock;
 }
 
+/** Describes the replace managed blocks options contract used by this API feature. */
 interface ReplaceManagedBlocksOptions extends ManagedBlockDependencies {
   content: DocumentContent;
   listAllBlockChildren: ListAllBlockChildren;
@@ -61,6 +70,7 @@ interface ReplaceManagedBlocksOptions extends ManagedBlockDependencies {
   store: WorkerStore;
 }
 
+/** Describes the apply managed block ops options contract used by this API feature. */
 interface ApplyManagedBlockOpsOptions extends ManagedBlockDependencies {
   content: DocumentContent;
   localPageId: string;
@@ -75,6 +85,7 @@ interface ApplyManagedBlockOpsOptions extends ManagedBlockDependencies {
   store: WorkerStore;
 }
 
+/** Describes the reconcile options contract used by this API feature. */
 interface ReconcileOptions {
   appendManagedBlocks: AppendManagedBlocks;
   deleteManagedBlock: DeleteManagedBlock;
@@ -87,6 +98,7 @@ interface ReconcileOptions {
   updateManagedBlock: UpdateManagedBlock;
 }
 
+/** Describes the desired managed blocks options contract used by this API feature. */
 interface DesiredManagedBlocksOptions {
   content: DocumentContent;
   hash: HashValue;

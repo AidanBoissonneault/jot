@@ -13,6 +13,7 @@ import type {
   WorkerStore,
 } from './types.js';
 
+/** Describes the project page result contract used by this API feature. */
 interface ProjectPageResult {
   id: string;
   project: Project;
@@ -20,6 +21,7 @@ interface ProjectPageResult {
   url?: string;
 }
 
+/** Describes the page sync dependencies contract used by this API feature. */
 interface PageSyncDependencies {
   appendLog: AppendLog;
   archiveThreadToggle: ((store: WorkerStore, page: ProjectPage) => Promise<void>) | undefined;
@@ -57,6 +59,7 @@ interface PageSyncDependencies {
   writeStore: (store: WorkerStore) => Promise<void>;
 }
 
+/** Describes the push page options contract used by this API feature. */
 interface PushPageOptions {
   dependencies: PageSyncDependencies;
   page: ProjectPage;
@@ -65,6 +68,7 @@ interface PushPageOptions {
   selectedParentPageId: string | undefined;
 }
 
+/** Describes the project database push options contract used by this API feature. */
 interface ProjectDatabasePushOptions {
   appendLog: AppendLog;
   archiveThreadToggle: ((store: WorkerStore, page: ProjectPage) => Promise<void>) | undefined;

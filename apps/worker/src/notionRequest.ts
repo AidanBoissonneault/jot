@@ -17,6 +17,7 @@ const DEFAULT_MAX_RETRIES = 3;
 const DEFAULT_BASE_BACKOFF_MS = 250;
 const DEFAULT_MAX_BACKOFF_MS = 2_000;
 
+/** Describes the requester options contract used by this API feature. */
 interface RequesterOptions {
   baseBackoffMs: number;
   baseUrl: string;
@@ -29,29 +30,34 @@ interface RequesterOptions {
   sleep: (milliseconds: number) => Promise<void>;
 }
 
+/** Describes the file upload contract used by this API feature. */
 interface FileUpload {
   data: Uint8Array<ArrayBuffer>;
   filename: string;
   mimeType: string;
 }
 
+/** Describes the file upload options contract used by this API feature. */
 interface FileUploadOptions {
   baseUrl: string;
   fetchImpl: typeof fetch;
   notionVersion: string | undefined;
 }
 
+/** Describes the rate limiter options contract used by this API feature. */
 interface RateLimiterOptions {
   now: () => number;
   requestsPerSecond: number;
   sleep: (milliseconds: number) => Promise<void>;
 }
 
+/** Describes the backoff options contract used by this API feature. */
 interface BackoffOptions {
   baseBackoffMs: number;
   maxBackoffMs: number;
 }
 
+/** Describes the notion api error contract used by this API feature. */
 class NotionApiError extends Error {
   readonly code: string | undefined;
   readonly isNotionApiError = true;

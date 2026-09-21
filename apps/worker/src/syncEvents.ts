@@ -9,6 +9,7 @@ interface SyncEventSession {
   writer: WritableStreamDefaultWriter<Uint8Array>;
 }
 
+/** Describes the durable event-stream coordinator for synchronization updates. */
 export class SyncEventsDO {
   private readonly sessions = new Map<string, SyncEventSession>();
 

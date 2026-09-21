@@ -53,9 +53,12 @@ import type {
   WorkerStore,
 } from './types.js';
 
+/** Describes the document to blocks contract used by this API feature. */
 type DocumentToBlocks = (document: DocumentContent) => NotionBlockPayload[];
+/** Describes the blocks to document contract used by this API feature. */
 type BlocksToDocument = (blocks: NotionBlock[]) => DocumentContent;
 
+/** Describes the project database dependencies contract used by this API feature. */
 interface ProjectDatabaseDependencies {
   appendLog: AppendLog;
   createWorkspacePage: (store: WorkerStore, title: string) => Promise<NotionObject>;
@@ -68,20 +71,24 @@ interface ProjectDatabaseDependencies {
   tiptapDocumentToNotionBlocks: DocumentToBlocks;
 }
 
+/** Describes the parent selection contract used by this API feature. */
 interface ParentSelection {
   selectedParentPageId: string | undefined;
 }
 
+/** Describes the database search options contract used by this API feature. */
 interface DatabaseSearchOptions {
   ignoredDatabaseIds: Set<string>;
   parentPageId: string | undefined;
 }
 
+/** Describes the ensure project page options contract used by this API feature. */
 interface EnsureProjectPageOptions extends ParentSelection {
   retryOnArchivedAncestor: boolean;
   syncState: boolean;
 }
 
+/** Describes the database candidate contract used by this API feature. */
 interface DatabaseCandidate {
   dataSourceId: string;
   database: NotionObject;
@@ -89,6 +96,7 @@ interface DatabaseCandidate {
   mappedProjects: number;
 }
 
+/** Describes the project page result contract used by this API feature. */
 interface ProjectPageResult {
   id: string;
   parentPageId?: string;
@@ -97,6 +105,7 @@ interface ProjectPageResult {
   url?: string;
 }
 
+/** Describes the toggle options contract used by this API feature. */
 interface ToggleOptions {
   key: string;
   mappings: Record<string, StoredBlock>;

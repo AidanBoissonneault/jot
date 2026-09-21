@@ -10,17 +10,20 @@ import type { Identifier } from './types.js';
 
 export const MAX_SYNC_QUEUE_MESSAGE_BYTES = 120 * 1024;
 
+/** Describes a queue operation with repeated page context removed. */
 export type ContextFreeSyncOperation = Omit<SyncBlockOperation, 'payload'> & {
   inkwellBlockId: string | undefined;
   payload: Omit<SyncBlockOperation['payload'], 'page' | 'project' | 'selectedParentPageId'>;
 };
 
+/** Describes compacted operations and version information for one page. */
 export interface SyncOperationGroup {
   ops: SyncBlockOperation[];
   pageId: string;
   version: number;
 }
 
+/** Describes the shared envelope used while chunking block queue messages. */
 export interface QueueJobBase {
   batchId: string;
   installationId: Identifier;

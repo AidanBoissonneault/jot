@@ -14,6 +14,7 @@ import type {
   WorkerStore,
 } from './types.js';
 
+/** Describes the root page dependencies contract used by this API feature. */
 interface RootPageDependencies {
   appendLog: AppendLog;
   createChildPage: (store: WorkerStore, parentPageId: string, title: string) => Promise<NotionObject>;
@@ -26,10 +27,12 @@ interface RootPageDependencies {
   updatePageTitle: (store: WorkerStore, pageId: string, title: string) => Promise<unknown>;
 }
 
+/** Describes the project page candidate contract used by this API feature. */
 interface ProjectPageCandidate extends NotionParentPage {
   last_edited_time: string | undefined;
 }
 
+/** Describes the root page helpers contract used by this API feature. */
 export interface RootPageHelpers {
   ensureInkwellRootPage: (
     store: WorkerStore,

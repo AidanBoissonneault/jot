@@ -7,6 +7,7 @@
 import type { NotionParentPage, Project } from '../../../src/types/capture.js';
 import type { StoredPage, WorkerStore } from './types.js';
 
+/** Describes the project page result contract used by this API feature. */
 interface ProjectPageResult {
   id: string;
   project: Project;
@@ -14,6 +15,7 @@ interface ProjectPageResult {
   url?: string;
 }
 
+/** Describes the sync project folder options contract used by this API feature. */
 interface SyncProjectFolderOptions {
   archiveProjectRootPage: (store: WorkerStore, pageId: string) => Promise<unknown>;
   ensureInkwellRootPage: (

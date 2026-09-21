@@ -21,6 +21,7 @@ import type {
 
 const INKWELL_BLOCK_ID_ATTR = 'inkwellBlockId';
 
+/** Describes the import managed blocks options contract used by this API feature. */
 interface ImportManagedBlocksOptions {
   hash: HashValue;
   listAllBlockChildren: ListAllBlockChildren;
@@ -28,6 +29,7 @@ interface ImportManagedBlocksOptions {
   store: WorkerStore;
 }
 
+/** Describes the rebuild mappings options contract used by this API feature. */
 interface RebuildMappingsOptions {
   hash: HashValue;
   imported: DocumentContent;

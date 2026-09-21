@@ -2,12 +2,16 @@
  * @file Defines capture, page, project, and Notion parent contracts shared by the application and API.
  * @author Aidan Boissonneault
  * @lastModified September 2026
- */
+*/
 
+/** Identifies the semantic kind of a captured item. */
 export type CaptureType = 'quote' | 'task' | 'idea' | 'link';
+/** Describes the lifecycle states used while a local save is pending. */
 export type OptimisticStatus = 'creating' | 'saving' | 'saved' | 'stale' | 'error';
+/** Describes all idle, optimistic, and terminal save states. */
 export type SaveStatus = 'idle' | OptimisticStatus;
 
+/** Describes source location and semantic metadata for captured text. */
 export type HighlightMeta = {
   text: string;
   sourceLink?: string;
@@ -21,6 +25,7 @@ export type HighlightMeta = {
   codeLanguage?: string;
 };
 
+/** Describes one captured item stored inside a page. */
 export type Capture = {
   id: string;
   projectId: string;
@@ -33,6 +38,7 @@ export type Capture = {
   createdAt: string;
 };
 
+/** Describes a local project and its synchronized project-level state. */
 export type Project = {
   id: string;
   name: string;
@@ -47,6 +53,7 @@ export type Project = {
   syncState?: OptimisticStatus;
 };
 
+/** Describes a serializable Tiptap document node. */
 export type DocumentContent = {
   type?: string;
   attrs?: Record<string, unknown>;
@@ -58,6 +65,7 @@ export type DocumentContent = {
   text?: string;
 };
 
+/** Describes a local page plus its Notion synchronization metadata. */
 export type ProjectPage = {
   id: string;
   projectId: string;
@@ -82,6 +90,7 @@ export type ProjectPage = {
 };
 
 
+/** Describes persisted client configuration for Notion synchronization. */
 export type SyncConfig = {
   serverUrl: string;
   authenticated?: boolean;
@@ -97,6 +106,7 @@ export type SyncConfig = {
   connected: boolean;
 };
 
+/** Describes a concise selectable or synchronized Notion parent page. */
 export type NotionParentPage = {
   id: string;
   parentPageId?: string;

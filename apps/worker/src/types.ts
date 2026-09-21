@@ -8,10 +8,14 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import type { DocumentContent, NotionParentPage, Project, ProjectPage } from '../../../src/types/capture.js';
 import type { SyncBlockOperation } from '../../../src/types/sync.js';
 
+/** Describes an identifier accepted by persistence and external service boundaries. */
 export type Identifier = string | number;
+/** Describes a JSON-compatible object whose property values require runtime narrowing. */
 export type JsonObject = Record<string, unknown>;
+/** Describes the privileged Supabase client used by worker services. */
 export type WorkerSupabaseClient = SupabaseClient;
 
+/** Describes normalized rich-text data returned by Notion. */
 export interface NotionRichText extends JsonObject {
   annotations: JsonObject;
   href: string | null;
@@ -20,11 +24,13 @@ export interface NotionRichText extends JsonObject {
   type: string | undefined;
 }
 
+/** Describes outbound text content accepted by Notion block mutations. */
 export interface NotionRichTextPayload extends JsonObject {
   text: JsonObject;
   type: 'text';
 }
 
+/** Describes normalized content shared by supported Notion block variants. */
 export interface NotionBlockContent extends JsonObject {
   external: JsonObject | undefined;
   file: JsonObject | undefined;
@@ -35,6 +41,7 @@ export interface NotionBlockContent extends JsonObject {
   url: string | undefined;
 }
 
+/** Describes the parent descriptor attached to a Notion object. */
 export interface NotionParent extends JsonObject {
   block_id: string | undefined;
   database_id: string | undefined;
@@ -43,6 +50,7 @@ export interface NotionParent extends JsonObject {
   workspace: boolean | undefined;
 }
 
+/** Describes the normalized fields shared by Notion API responses. */
 export interface NotionObject extends JsonObject {
   archived: boolean;
   created_time: string;
@@ -60,6 +68,7 @@ export interface NotionObject extends JsonObject {
   url: string;
 }
 
+/** Describes a normalized Notion block with supported content containers. */
 export interface NotionBlock extends NotionObject {
   audio: NotionBlockContent;
   code: NotionBlockContent;
@@ -74,24 +83,29 @@ export interface NotionBlock extends NotionObject {
   video: NotionBlockContent;
 }
 
+/** Describes an outbound Notion block mutation payload. */
 export interface NotionBlockPayload extends JsonObject {
   object: 'block';
   type: string;
 }
 
+/** Describes the complete transport options for a Notion request. */
 export interface NotionRequestInit {
   body: unknown;
   headers: HeadersInit;
   method: string;
 }
 
+/** Describes caller-provided overrides for a Notion request. */
 export type PartialNotionRequestInit = Partial<NotionRequestInit>;
 
+/** Describes the overloaded authenticated Notion request function. */
 export interface NotionRequester {
   (store: WorkerStore, endpoint: string): Promise<NotionObject>;
   (store: WorkerStore, endpoint: string, init: PartialNotionRequestInit): Promise<NotionObject>;
 }
 
+/** Describes the durable identity and synchronization state for one managed block. */
 export interface BlockMapping {
   inkwellBlockId: string;
   kind: string;
@@ -104,6 +118,7 @@ export interface BlockMapping {
   order: number;
 }
 
+/** Describes cached metadata for a page managed by the worker. */
 export interface StoredPage {
   archived: boolean;
   dataSourceId: string | undefined;
@@ -114,6 +129,7 @@ export interface StoredPage {
   title: string;
 }
 
+/** Describes cached metadata for a managed Notion block. */
 export interface StoredBlock {
   blockId: string;
   lastEditedTime: string | undefined;
@@ -121,6 +137,7 @@ export interface StoredBlock {
   title: string;
 }
 
+/** Describes the discovered or created Inkwell project database. */
 export interface InkwellDatabase {
   dataSourceId: string;
   databaseId: string;
@@ -131,12 +148,14 @@ export interface InkwellDatabase {
   views: Record<string, string>;
 }
 
+/** Describes one bounded diagnostic event recorded in worker state. */
 export interface WorkerLog {
   at: string;
   event: string;
   message: string;
 }
 
+/** Describes the fully normalized persisted state for an installation. */
 export interface WorkerStore {
   blockMappings: Record<string, BlockMapping[]>;
   ignoredInkwellDatabaseIds: Set<string>;
@@ -152,17 +171,20 @@ export interface WorkerStore {
   tokens: { access_token: string } | undefined;
 }
 
+/** Describes worker state proven to contain installation credentials. */
 export interface ConnectedWorkerStore extends WorkerStore {
   installationId: Identifier;
   tokens: { access_token: string };
 }
 
+/** Describes the normalized subset of a local block operation consumed by the worker. */
 export interface ManagedBlockOperation {
   inkwellBlockId: string | undefined;
   payload: Partial<SyncBlockOperation['payload']>;
   type: SyncBlockOperation['type'];
 }
 
+/** Describes the complete context carried by an incremental block queue message. */
 export interface BlockQueuePayload {
   ops: ManagedBlockOperation[];
   page: SyncBlockOperation['payload']['page'];
@@ -170,23 +192,27 @@ export interface BlockQueuePayload {
   selectedParentPageId: string | undefined;
 }
 
+/** Describes the complete context carried by a full-page queue message. */
 export interface PageQueuePayload {
   page: SyncBlockOperation['payload']['page'];
   project: SyncBlockOperation['payload']['project'];
   selectedParentPageId: string | undefined;
 }
 
+/** Describes the complete context carried by a project queue message. */
 export interface ProjectQueuePayload {
   project: SyncBlockOperation['payload']['project'];
   selectedParentPageId: string | undefined;
 }
 
+/** Describes fields shared by every synchronization queue message. */
 interface SyncQueueMessageBase {
   installationId: Identifier;
   localId: string;
   queuedVersion: number;
 }
 
+/** Describes a versioned incremental block queue message. */
 export interface BlockQueueMessage extends SyncQueueMessageBase {
   batchId: string;
   batchIndex: number;
@@ -197,6 +223,7 @@ export interface BlockQueueMessage extends SyncQueueMessageBase {
   type: 'block_op';
 }
 
+/** Describes a versioned full-page queue message. */
 export interface PageQueueMessage extends SyncQueueMessageBase {
   pageId: string;
   payload: PageQueuePayload;
@@ -204,14 +231,17 @@ export interface PageQueueMessage extends SyncQueueMessageBase {
   type: 'page';
 }
 
+/** Describes a versioned project queue message. */
 export interface ProjectQueueMessage extends SyncQueueMessageBase {
   payload: ProjectQueuePayload;
   projectId: string;
   type: 'project';
 }
 
+/** Describes the discriminated union of synchronization queue messages. */
 export type SyncQueueMessage = BlockQueueMessage | PageQueueMessage | ProjectQueueMessage;
 
+/** Describes Cloudflare bindings and configuration required by the API worker. */
 export interface WorkerEnv {
   INKWELL_EXTENSION_ORIGIN: string | undefined;
   INKWELL_ROOT_PAGE_TITLE: string | undefined;
@@ -227,13 +257,18 @@ export interface WorkerEnv {
   WORKER_URL: string | undefined;
 }
 
+/** Describes created remote blocks returned by a managed mutation. */
 export interface ManagedBlockResult {
   createdBlocks: Array<NotionObject | undefined>;
 }
 
+/** Describes the dependency signature for recording a worker diagnostic. */
 export type AppendLog = (store: WorkerStore, event: string, message: string) => void;
+/** Describes the dependency signature for stable content hashing. */
 export type HashValue = (value: string) => string;
+/** Describes the dependency signature for loading paginated Notion children. */
 export type ListAllBlockChildren = (store: WorkerStore, blockId: string) => Promise<NotionBlock[]>;
+/** Describes the dependency signature for replacing managed page content. */
 export type ReplaceManagedBlocks = (
   store: WorkerStore,
   localPageId: string,

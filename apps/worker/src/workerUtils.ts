@@ -8,6 +8,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import type { NotionParentPage } from '../../../src/types/capture.js';
 import type { JsonObject, NotionBlock, NotionBlockPayload, NotionObject, WorkerEnv, WorkerStore } from './types.js';
 
+/** Describes a Notion child insertion position. */
 export interface BlockPosition {
   after_block?: { id: string };
   type: 'after_block' | 'start';

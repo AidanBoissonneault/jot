@@ -6,6 +6,7 @@
 
 import type { Identifier, WorkerSupabaseClient } from './types.js';
 
+/** Describes an authenticated Inkwell user. */
 export interface AuthUser {
   email: string;
   emailVerified: boolean;
@@ -14,6 +15,7 @@ export interface AuthUser {
   name: string;
 }
 
+/** Describes a persisted custom application session. */
 export interface AuthSession {
   expiresAt: string;
   id: string;
@@ -21,21 +23,25 @@ export interface AuthSession {
   userId: string;
 }
 
+/** Describes a validated session paired with its user. */
 export interface AuthSessionResult {
   session: AuthSession;
   user: AuthUser;
 }
 
+/** Describes the notion installation contract used by this API feature. */
 export interface NotionInstallation {
   id: Identifier;
   workspace_id: string | null;
   workspace_name: string | null;
 }
 
+/** Describes the connected notion installation contract used by this API feature. */
 export interface ConnectedNotionInstallation extends NotionInstallation {
   tokens: { access_token: string };
 }
 
+/** Describes the notion oauth user contract used by this API feature. */
 interface NotionOAuthUser {
   email: string;
   id: string;
@@ -43,6 +49,7 @@ interface NotionOAuthUser {
   name: string;
 }
 
+/** Describes the create notion session options contract used by this API feature. */
 interface CreateNotionSessionOptions {
   SESSION_MAX_AGE_SECONDS: number;
   accessToken: string;
@@ -58,6 +65,7 @@ interface CreateNotionSessionOptions {
   workspaceName: string | null | undefined;
 }
 
+/** Describes the complete authentication and installation service. */
 export interface AuthService {
   createNotionSession: (options: CreateNotionSessionOptions) => Promise<{
     installationId: Identifier | null;
