@@ -21,6 +21,9 @@ interface SidepanelLifecycleOptions {
   loadLegalAcceptance: () => Promise<void> | void;
   loadPreferences: () => Promise<void> | void;
   parentPageSearchDraft: Ref<string>;
+  isProjectNameEditing: Ref<boolean>;
+  isProjectNameDraftDirty: Ref<boolean>;
+  projectNameDraftRevision: Ref<number>;
   projectNameDraft: Ref<string>;
   saveTimer: Ref<number | undefined>;
   stopAudioStream: () => void;
@@ -42,6 +45,9 @@ export function useSidepanelLifecycle({
   loadLegalAcceptance,
   loadPreferences,
   parentPageSearchDraft,
+  isProjectNameEditing,
+  isProjectNameDraftDirty,
+  projectNameDraftRevision,
   projectNameDraft,
   saveTimer,
   stopAudioStream,
@@ -79,10 +85,22 @@ export function useSidepanelLifecycle({
     editor.value?.destroy();
   });
 
+  let projectNameProjectId = '';
   watch(
-    () => store.currentProject?.name,
-    (name) => {
-      projectNameDraft.value = name ?? '';
+    () => [store.currentProject?.id, store.currentProject?.name] as const,
+    ([projectId, name]) => {
+      const nextProjectId = projectId ?? '';
+      const nextName = name ?? '';
+
+      if (nextProjectId !== projectNameProjectId) {
+        projectNameDraft.value = nextName;
+        isProjectNameDraftDirty.value = false;
+        projectNameDraftRevision.value = 0;
+      } else if (!isProjectNameDraftDirty.value && !isProjectNameEditing.value) {
+        projectNameDraft.value = nextName;
+      }
+
+      projectNameProjectId = nextProjectId;
     },
     { immediate: true },
   );

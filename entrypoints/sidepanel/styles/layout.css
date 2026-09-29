@@ -65,15 +65,17 @@
   text-align: left;
   text-overflow: ellipsis;
   white-space: nowrap;
+  transition: background-color 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
 }
 
-.project-name-display:hover {
+.project-name-display:hover,
+.page-title-display:hover {
   background: var(--inkwell-surface-muted);
 }
 
 .project-name-input {
-  border-color: var(--inkwell-border);
-  background: var(--inkwell-surface);
+  border-color: transparent;
+  background: transparent;
 }
 
 .category-pill {

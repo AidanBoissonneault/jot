@@ -8,8 +8,12 @@ export interface EditorPageTitleContext {
   store: InkwellStore;
   activeTitleMenu: Ref<'project' | 'page' | 'category' | null>;
   pageTitleDraft: Ref<string>;
-  renamePage: () => Promise<void>;
-  blurTitleInput: (event: Event) => void;
+  isPageTitleEditing: Ref<boolean>;
+  pageTitleInputRef: Ref<HTMLInputElement | null>;
+  markPageTitleDraftEdited: () => void;
+  beginPageTitleEdit: () => Promise<void>;
+  finishPageTitleEdit: () => Promise<void>;
+  cancelPageTitleEdit: () => void;
   toggleTitleMenu: (menu: 'project' | 'page' | 'category') => void;
   selectPage: (pageId: string) => Promise<void>;
   createPage: () => Promise<void>;

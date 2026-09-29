@@ -38,51 +38,51 @@ export function useWorkspaceActions(options: WorkspaceActionOptions) {
 
   async function selectPage(pageId: string) {
     if (!pageId || pageId === store.currentPage?.id) return;
+    activeTitleMenu.value = null;
     await saveEditorContentInBackground();
     void notionClient.flushPendingSyncOps({ force: true }).catch(() => undefined);
     await store.selectPage(pageId);
-    activeTitleMenu.value = null;
   }
 
   async function selectProject(projectId: string) {
     if (!projectId || projectId === store.currentProjectId) return;
+    activeTitleMenu.value = null;
     await saveEditorContentInBackground();
     void notionClient.flushPendingSyncOps({ force: true }).catch(() => undefined);
     await store.selectProject(projectId);
-    activeTitleMenu.value = null;
   }
 
   async function createProject() {
+    activeTitleMenu.value = null;
     await flushEditorContent();
     const name = newProjectNameDraft.value.trim() || 'Untitled Project';
     await store.createProject(name);
     newProjectNameDraft.value = '';
-    activeTitleMenu.value = null;
     activeTab.value = 'editor';
   }
 
-  async function renameProject() {
-    if (!store.currentProject || projectNameDraft.value === store.currentProject.name) return;
-    await flushEditorContent();
-    await store.renameCurrentProject(projectNameDraft.value);
+  async function renameProject(name = projectNameDraft.value) {
+    if (!store.currentProject) return;
+    await store.renameCurrentProject(name);
   }
 
   async function createPage() {
+    activeTitleMenu.value = null;
     await flushEditorContent();
     await store.createPage();
-    activeTitleMenu.value = null;
   }
 
-  async function renamePage() {
-    if (!store.currentPage) return;
-    const title = pageTitleDraft.value;
+  async function renamePage(title = pageTitleDraft.value) {
+    const page = store.currentPage;
+    if (!page) return;
     await flushEditorContent();
-    if (!store.currentPage || title === store.currentPage.title) return;
+    if (store.currentPage?.id !== page.id || title === store.currentPage.title) return;
     await store.renameCurrentPage(title);
   }
 
   async function archiveProject() {
     if (!store.currentProject) return;
+    activeTitleMenu.value = null;
     archiveTarget.value = {
       kind: 'project',
       id: store.currentProject.id,
@@ -92,6 +92,7 @@ export function useWorkspaceActions(options: WorkspaceActionOptions) {
 
   async function archivePage() {
     if (!store.currentPage) return;
+    activeTitleMenu.value = null;
     archiveTarget.value = {
       kind: 'page',
       id: store.currentPage.id,

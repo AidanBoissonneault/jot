@@ -75,6 +75,9 @@ const {
 } = useInterfaceScale();
 const {
   projectCategoryDraft,
+  isProjectCategoryDraftDirty,
+  projectCategoryDraftRevision,
+  markCategoryDraftEdited,
   categoryColorOptions,
   knownCategories,
   currentCategoryColor,
@@ -86,11 +89,29 @@ const {
   commitCategory,
 } = useProjectCategories(activeTitleMenu, saveProjectMetadata);
 let projectSettings: ReturnType<typeof useProjectSettings> | undefined;
-projectSettings = useProjectSettings(store, projectCategoryDraft, flushEditorContent);
+projectSettings = useProjectSettings(
+  store,
+  projectCategoryDraft,
+  isProjectCategoryDraftDirty,
+  projectCategoryDraftRevision,
+  flushEditorContent,
+);
 const projectStateDraft = projectSettings.projectStateDraft;
 const saveTimer = ref<number | undefined>();
 const pageTitleDraft = ref('');
+const isPageTitleEditing = ref(false);
+const isPageTitleDraftDirty = ref(false);
+const pageTitleDraftRevision = ref(0);
+const pageTitleInputRef = ref<HTMLInputElement | null>(null);
 const projectNameDraft = ref('');
+const isProjectNameDraftDirty = ref(false);
+const projectNameDraftRevision = ref(0);
+let projectNameEditOriginal = '';
+let pageTitleEditOriginal = '';
+let projectNameEditOriginalRevision = 0;
+let pageTitleEditOriginalRevision = 0;
+let projectNameEditOriginalDirty = false;
+let pageTitleEditOriginalDirty = false;
 const newProjectNameDraft = ref('');
 const uiMessage = ref('');
 const activeTab = ref<'editor' | 'settings'>('editor');
@@ -178,6 +199,9 @@ editorPersistence = useEditorPersistence(
   editor,
   store,
   pageTitleDraft,
+  isPageTitleEditing,
+  isPageTitleDraftDirty,
+  pageTitleDraftRevision,
   isApplyingStoredContent,
   saveTimer,
 );
@@ -289,6 +313,9 @@ useSidepanelLifecycle({
   loadLegalAcceptance,
   loadPreferences,
   parentPageSearchDraft,
+  isProjectNameEditing,
+  isProjectNameDraftDirty,
+  projectNameDraftRevision,
   projectNameDraft,
   saveTimer,
   stopAudioStream,
@@ -301,6 +328,13 @@ async function beginProjectNameEdit() {
     return;
   }
 
+  closeActiveTitleMenu();
+  if (!projectNameDraft.value) {
+    projectNameDraft.value = store.currentProject.name;
+  }
+  projectNameEditOriginal = projectNameDraft.value;
+  projectNameEditOriginalRevision = projectNameDraftRevision.value;
+  projectNameEditOriginalDirty = isProjectNameDraftDirty.value;
   isProjectNameEditing.value = true;
   await nextTick();
   projectNameInputRef.value?.focus();
@@ -312,8 +346,111 @@ async function finishProjectNameEdit() {
     return;
   }
 
-  await renameProject();
+  const name = projectNameDraft.value.trim();
+  const project = store.currentProject;
   isProjectNameEditing.value = false;
+
+  if (!isProjectNameDraftDirty.value) {
+    projectNameDraft.value = project?.name ?? '';
+    return;
+  }
+
+  if (!name) {
+    projectNameDraft.value = projectNameEditOriginal;
+    projectNameDraftRevision.value = projectNameEditOriginalRevision;
+    isProjectNameDraftDirty.value = projectNameEditOriginalDirty;
+    return;
+  }
+
+  projectNameDraft.value = name;
+  const submittedRevision = projectNameDraftRevision.value;
+  await renameProject(name);
+  if (
+    project &&
+    store.currentProject?.id === project.id &&
+    store.currentProject?.name === name &&
+    projectNameDraft.value === name &&
+    projectNameDraftRevision.value === submittedRevision
+  ) {
+    isProjectNameDraftDirty.value = false;
+  }
+}
+
+function cancelProjectNameEdit() {
+  isProjectNameEditing.value = false;
+  projectNameDraft.value = projectNameEditOriginal;
+  projectNameDraftRevision.value = projectNameEditOriginalRevision;
+  isProjectNameDraftDirty.value = projectNameEditOriginalDirty;
+}
+
+function markProjectNameDraftEdited() {
+  isProjectNameDraftDirty.value = true;
+  projectNameDraftRevision.value += 1;
+}
+
+async function beginPageTitleEdit() {
+  if (!store.currentPage || store.isLoading) {
+    return;
+  }
+
+  closeActiveTitleMenu();
+  if (!pageTitleDraft.value) {
+    pageTitleDraft.value = store.currentPage.title;
+  }
+  pageTitleEditOriginal = pageTitleDraft.value;
+  pageTitleEditOriginalRevision = pageTitleDraftRevision.value;
+  pageTitleEditOriginalDirty = isPageTitleDraftDirty.value;
+  isPageTitleEditing.value = true;
+  await nextTick();
+  pageTitleInputRef.value?.focus();
+  pageTitleInputRef.value?.select();
+}
+
+async function finishPageTitleEdit() {
+  if (!isPageTitleEditing.value) {
+    return;
+  }
+
+  const title = pageTitleDraft.value.trim();
+  const page = store.currentPage;
+  isPageTitleEditing.value = false;
+
+  if (!isPageTitleDraftDirty.value) {
+    pageTitleDraft.value = page?.title ?? '';
+    return;
+  }
+
+  if (!title) {
+    pageTitleDraft.value = pageTitleEditOriginal;
+    pageTitleDraftRevision.value = pageTitleEditOriginalRevision;
+    isPageTitleDraftDirty.value = pageTitleEditOriginalDirty;
+    return;
+  }
+
+  pageTitleDraft.value = title;
+  const submittedRevision = pageTitleDraftRevision.value;
+  await renamePage(title);
+  if (
+    page &&
+    store.currentPage?.id === page.id &&
+    store.currentPage?.title === title &&
+    pageTitleDraft.value === title &&
+    pageTitleDraftRevision.value === submittedRevision
+  ) {
+    isPageTitleDraftDirty.value = false;
+  }
+}
+
+function cancelPageTitleEdit() {
+  isPageTitleEditing.value = false;
+  pageTitleDraft.value = pageTitleEditOriginal;
+  pageTitleDraftRevision.value = pageTitleEditOriginalRevision;
+  isPageTitleDraftDirty.value = pageTitleEditOriginalDirty;
+}
+
+function markPageTitleDraftEdited() {
+  isPageTitleDraftDirty.value = true;
+  pageTitleDraftRevision.value += 1;
 }
 
 function insertCaptureAtCursor(payload: CaptureSelectionPayload) {
@@ -339,11 +476,28 @@ async function resync() {
 }
 
 function toggleTitleMenu(menu: 'project' | 'page' | 'category') {
-  activeTitleMenu.value = activeTitleMenu.value === menu ? null : menu;
+  if (activeTitleMenu.value === menu) {
+    if (menu === 'category') {
+      void commitCategory();
+    } else {
+      activeTitleMenu.value = null;
+    }
+    return;
+  }
+
+  if (activeTitleMenu.value === 'category') {
+    void commitCategory();
+  }
+  activeTitleMenu.value = menu;
 }
 
-function blurTitleInput(event: Event) {
-  (event.target as HTMLInputElement).blur();
+function closeActiveTitleMenu() {
+  if (activeTitleMenu.value === 'category') {
+    void commitCategory();
+    return;
+  }
+
+  activeTitleMenu.value = null;
 }
 
 function flushEditorContent() {
@@ -374,13 +528,16 @@ const topBarContext: TopBarContext = {
   isProjectNameEditing,
   projectNameInputRef,
   projectNameDraft,
+  markProjectNameDraftEdited,
   finishProjectNameEdit,
+  cancelProjectNameEdit,
   beginProjectNameEdit,
   contextLabel,
   currentCategoryStyle,
   activeTitleMenu,
   toggleTitleMenu,
   projectCategoryDraft,
+  markCategoryDraftEdited,
   commitCategory,
   knownCategories,
   selectCategory,
@@ -506,8 +663,12 @@ const editorPageTitleContext: EditorPageTitleContext = {
   store,
   activeTitleMenu,
   pageTitleDraft,
-  renamePage,
-  blurTitleInput,
+  isPageTitleEditing,
+  pageTitleInputRef,
+  markPageTitleDraftEdited,
+  beginPageTitleEdit,
+  finishPageTitleEdit,
+  cancelPageTitleEdit,
   toggleTitleMenu,
   selectPage,
   createPage,

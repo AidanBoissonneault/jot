@@ -22,7 +22,14 @@ export function useProjectCategories(
 ) {
   const store = useInkwellStore();
   const projectCategoryDraft = ref('');
+  const isProjectCategoryDraftDirty = ref(false);
+  const projectCategoryDraftRevision = ref(0);
   const categoryColors = ref<Record<string, string>>({});
+
+  function markCategoryDraftEdited() {
+    isProjectCategoryDraftDirty.value = true;
+    projectCategoryDraftRevision.value += 1;
+  }
 
   function normalizeCategoryName(value: string) {
     return value.trim().toLocaleLowerCase();
@@ -84,18 +91,25 @@ export function useProjectCategories(
 
   async function selectCategory(category: string) {
     projectCategoryDraft.value = category;
-    await saveProjectMetadata();
+    markCategoryDraftEdited();
     activeTitleMenu.value = null;
+    await saveProjectMetadata();
   }
 
   async function commitCategory() {
     projectCategoryDraft.value = projectCategoryDraft.value.trim();
-    await saveProjectMetadata();
+    if (projectCategoryDraft.value !== (store.currentProject?.category ?? '')) {
+      markCategoryDraftEdited();
+    }
     activeTitleMenu.value = null;
+    await saveProjectMetadata();
   }
 
   return {
     projectCategoryDraft,
+    isProjectCategoryDraftDirty,
+    projectCategoryDraftRevision,
+    markCategoryDraftEdited,
     categoryColorOptions,
     knownCategories,
     currentCategoryColor,

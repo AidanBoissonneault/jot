@@ -1,5 +1,6 @@
 ﻿<script setup lang="ts">
 /** Shows remote-change status and controls for the current page and page list. */
+import { onBeforeUnmount, onMounted, ref } from 'vue';
 import type { EditorPageTitleContext } from './editorPageTitleContext';
 import PageMenuList from '../lists/PageMenuList.vue';
 
@@ -8,13 +9,31 @@ const {
   store,
   activeTitleMenu,
   pageTitleDraft,
-  renamePage,
-  blurTitleInput,
+  isPageTitleEditing,
+  pageTitleInputRef,
+  markPageTitleDraftEdited,
+  beginPageTitleEdit,
+  finishPageTitleEdit,
+  cancelPageTitleEdit,
   toggleTitleMenu,
   selectPage,
   createPage,
   archivePage,
 } = props.context;
+
+const titleSelectorRef = ref<HTMLElement | null>(null);
+
+function handleOutsidePointerDown(event: PointerEvent) {
+  if (titleSelectorRef.value?.contains(event.target as Node)) return;
+  if (activeTitleMenu.value === 'page') toggleTitleMenu('page');
+}
+
+function blurTitleInput(event: Event) {
+  (event.target as HTMLInputElement).blur();
+}
+
+onMounted(() => document.addEventListener('pointerdown', handleOutsidePointerDown));
+onBeforeUnmount(() => document.removeEventListener('pointerdown', handleOutsidePointerDown));
 </script>
 
 <template>
@@ -65,15 +84,30 @@ const {
     </div>
   </div>
   <div class="editor-title-row">
-    <div class="title-selector page-title-selector">
+    <div ref="titleSelectorRef" class="title-selector page-title-selector">
       <div class="title-input-row">
         <input
+          v-if="isPageTitleEditing"
+          ref="pageTitleInputRef"
           v-model="pageTitleDraft"
+          class="page-title-input inline-title-input"
           aria-label="Page title"
           :disabled="store.isLoading || !store.currentPage"
-          @blur="renamePage"
-          @keydown.enter="blurTitleInput"
+          @input="markPageTitleDraftEdited"
+          @blur="finishPageTitleEdit"
+          @keydown.enter.prevent="blurTitleInput"
+          @keydown.escape.prevent.stop="cancelPageTitleEdit"
         />
+        <button
+          v-else
+          type="button"
+          class="page-title-display"
+          :disabled="store.isLoading || !store.currentPage"
+          title="Click to rename page"
+          @click="beginPageTitleEdit"
+        >
+          {{ pageTitleDraft || store.currentPage?.title || 'Untitled Page' }}
+        </button>
         <button
           type="button"
           class="title-menu-trigger"
@@ -87,28 +121,30 @@ const {
           <font-awesome-icon :icon="['fas', 'chevron-down']" fixed-width />
         </button>
       </div>
-      <div v-if="activeTitleMenu === 'page'" class="title-dropdown page-dropdown">
-        <PageMenuList
-          :pages="store.pages"
-          :selected-page-id="store.currentPage?.id"
-          @select="selectPage"
-        />
-        <div class="title-dropdown-actions">
-          <button type="button" :disabled="!store.currentProjectId" @click="createPage">
-            <font-awesome-icon :icon="['fas', 'file-circle-plus']" fixed-width />
-            New page
-          </button>
-          <button
-            type="button"
-            class="danger-button"
-            :disabled="!store.currentPage"
-            @click="archivePage"
-          >
-            <font-awesome-icon :icon="['fas', 'trash-can']" fixed-width />
-            Delete page
-          </button>
+      <Transition name="popover">
+        <div v-if="activeTitleMenu === 'page'" class="title-dropdown page-dropdown">
+          <PageMenuList
+            :pages="store.pages"
+            :selected-page-id="store.currentPage?.id"
+            @select="selectPage"
+          />
+          <div class="title-dropdown-actions">
+            <button type="button" :disabled="!store.currentProjectId" @click="createPage">
+              <font-awesome-icon :icon="['fas', 'file-circle-plus']" fixed-width />
+              New page
+            </button>
+            <button
+              type="button"
+              class="danger-button"
+              :disabled="!store.currentPage"
+              @click="archivePage"
+            >
+              <font-awesome-icon :icon="['fas', 'trash-can']" fixed-width />
+              Delete page
+            </button>
+          </div>
         </div>
-      </div>
+      </Transition>
     </div>
   </div>
 </template>

@@ -22,13 +22,16 @@ export interface TopBarContext {
   isProjectNameEditing: Ref<boolean>;
   projectNameInputRef: Ref<HTMLInputElement | null>;
   projectNameDraft: Ref<string>;
+  markProjectNameDraftEdited: () => void;
   finishProjectNameEdit: () => Promise<void>;
+  cancelProjectNameEdit: () => void;
   beginProjectNameEdit: () => Promise<void>;
   contextLabel: ComputedRef<string>;
   currentCategoryStyle: ComputedRef<CSSProperties>;
   activeTitleMenu: Ref<'project' | 'page' | 'category' | null>;
   toggleTitleMenu: (menu: 'project' | 'page' | 'category') => void;
   projectCategoryDraft: Ref<string>;
+  markCategoryDraftEdited: () => void;
   commitCategory: () => Promise<void>;
   knownCategories: ComputedRef<Array<{ name: string; color: string }>>;
   selectCategory: (category: string) => Promise<void>;

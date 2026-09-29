@@ -6,13 +6,16 @@ import type { Editor } from '@tiptap/core';
 import type { useInkwellStore } from '@/src/stores/inkwell';
 import { normalizeInkwellBlockIds } from '@/src/extensions/inkwellBlockIds';
 import { notionClient } from '@/src/services/notionClient';
-import type { DocumentContent } from '@/src/types/capture';
+import type { DocumentContent, ProjectPage } from '@/src/types/capture';
 
 /** Owns page hydration, serialized editor saves, and exit-time persistence. */
 export function useEditorPersistence(
   editor: ShallowRef<Editor | undefined>,
   store: ReturnType<typeof useInkwellStore>,
   pageTitleDraft: Ref<string>,
+  isPageTitleEditing: Ref<boolean>,
+  isPageTitleDraftDirty: Ref<boolean>,
+  pageTitleDraftRevision: Ref<number>,
   isApplyingStoredContent: Ref<boolean>,
   saveTimer: Ref<number | undefined>,
 ) {
@@ -22,10 +25,27 @@ export function useEditorPersistence(
   let isEditorSaveInFlight = false;
   let editorSavePromise: Promise<void> | undefined;
   let shouldSaveAgainAfterCurrentSave = false;
+  let titleDraftPageId = '';
+
+  function synchronizePageTitleDraft(page: ProjectPage | undefined) {
+    const nextPageId = page?.id ?? '';
+    const nextTitle = page?.title ?? '';
+
+    if (nextPageId !== titleDraftPageId) {
+      pageTitleDraft.value = nextTitle;
+      isPageTitleDraftDirty.value = false;
+      pageTitleDraftRevision.value = 0;
+    } else if (!isPageTitleDraftDirty.value && !isPageTitleEditing.value) {
+      pageTitleDraft.value = nextTitle;
+    }
+
+    titleDraftPageId = nextPageId;
+  }
 
   watch(
     () => store.currentPage,
     (page) => {
+      synchronizePageTitleDraft(page);
       if (!editor.value || !page) {
         return;
       }
@@ -39,17 +59,14 @@ export function useEditorPersistence(
         shouldSaveAgainAfterCurrentSave;
 
       if (!isPageChange && editorContent === storedContent) {
-        pageTitleDraft.value = page.title;
         return;
       }
 
       if (!isPageChange && hasUnsavedEditorContent) {
-        pageTitleDraft.value = page.title;
         return;
       }
 
       activePageId = page.id;
-      pageTitleDraft.value = page.title;
       lastAppliedContent = storedContent;
       isApplyingStoredContent.value = true;
       editor.value.commands.setContent(page.content, { emitUpdate: false });
@@ -59,9 +76,7 @@ export function useEditorPersistence(
 
   watch(
     () => store.currentPage?.title,
-    (title) => {
-      pageTitleDraft.value = title ?? '';
-    },
+    () => synchronizePageTitleDraft(store.currentPage),
   );
 
   /** Saves the latest editor snapshot while coalescing concurrent requests. */

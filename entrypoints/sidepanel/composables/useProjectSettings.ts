@@ -8,14 +8,28 @@ import type { useInkwellStore } from '@/src/stores/inkwell';
 export function useProjectSettings(
   store: ReturnType<typeof useInkwellStore>,
   projectCategoryDraft: Ref<string>,
+  isProjectCategoryDraftDirty: Ref<boolean>,
+  projectCategoryDraftRevision: Ref<number>,
   flushEditorContent: () => Promise<void>,
 ) {
   const projectStateDraft = ref('');
+  let categoryProjectId = '';
 
   watch(
     () => store.currentProject,
     (project) => {
-      projectCategoryDraft.value = project?.category ?? '';
+      const nextProjectId = project?.id ?? '';
+      const nextCategory = project?.category ?? '';
+
+      if (nextProjectId !== categoryProjectId) {
+        projectCategoryDraft.value = nextCategory;
+        isProjectCategoryDraftDirty.value = false;
+        projectCategoryDraftRevision.value = 0;
+      } else if (!isProjectCategoryDraftDirty.value) {
+        projectCategoryDraft.value = nextCategory;
+      }
+
+      categoryProjectId = nextProjectId;
       projectStateDraft.value = plainTextFromDocument(
         visibleProjectStateContent(project?.stateContent),
       );
@@ -32,18 +46,30 @@ export function useProjectSettings(
     }
 
     const stateText = projectStateDraft.value;
+    const category = projectCategoryDraft.value;
+    const categoryRevision = projectCategoryDraftRevision.value;
     if (
-      projectCategoryDraft.value === (project.category ?? '') &&
-      stateText === plainTextFromDocument(visibleProjectStateContent(project.stateContent))
+      category === (project.category ?? '') &&
+      stateText === plainTextFromDocument(visibleProjectStateContent(project.stateContent)) &&
+      !isProjectCategoryDraftDirty.value
     ) {
       return;
     }
 
     await flushEditorContent();
     await store.updateCurrentProjectMetadata({
-      category: projectCategoryDraft.value,
+      category,
       stateText,
     });
+
+    if (
+      store.currentProject?.id === project.id &&
+      store.currentProject.category === category &&
+      projectCategoryDraft.value === category &&
+      projectCategoryDraftRevision.value === categoryRevision
+    ) {
+      isProjectCategoryDraftDirty.value = false;
+    }
   }
 
   return { projectStateDraft, saveProjectMetadata };
