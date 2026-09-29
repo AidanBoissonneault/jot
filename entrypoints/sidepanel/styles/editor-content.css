@@ -1,0 +1,380 @@
+﻿/* Tiptap content, code cells, images, audio, and video embeds. */
+.editor {
+  min-height: 0;
+  overflow: auto;
+}
+
+.editor .tiptap {
+  min-height: calc(100vh - 190px);
+  padding: 16px;
+}
+
+.editor .tiptap:focus {
+  outline: none;
+}
+
+.editor .tiptap > *:first-child {
+  margin-top: 0;
+}
+
+.editor .tiptap p,
+.editor .tiptap blockquote,
+.editor .tiptap ul,
+.editor .tiptap ol,
+.editor .tiptap pre {
+  margin: 0 0 0.85rem;
+}
+
+.editor .tiptap h1,
+.editor .tiptap h2,
+.editor .tiptap h3,
+.editor .tiptap h4,
+.editor .tiptap h5,
+.editor .tiptap h6 {
+  margin: 0 0 0.75rem;
+  line-height: 1.22;
+}
+
+.editor .tiptap h1 {
+  font-size: 1.8rem;
+}
+
+.editor .tiptap h2 {
+  font-size: 1.55rem;
+}
+
+.editor .tiptap h3 {
+  font-size: 1.32rem;
+}
+
+.editor .tiptap h4 {
+  font-size: 1.14rem;
+}
+
+.editor .tiptap h5 {
+  font-size: 1rem;
+}
+
+.editor .tiptap h6 {
+  color: var(--inkwell-muted);
+  font-size: 0.9rem;
+  text-transform: uppercase;
+}
+
+.editor .tiptap ul,
+.editor .tiptap ol {
+  padding-left: 1.35rem;
+}
+
+.editor .tiptap ul[data-type='taskList'] {
+  padding-left: 0;
+  list-style: none;
+}
+
+.editor .tiptap li[data-type='taskItem'] {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: 4px;
+  align-items: start;
+}
+
+.editor .tiptap li[data-type='taskItem'] > label {
+  display: grid;
+  place-items: center;
+  min-height: 1.45em;
+}
+
+.editor .tiptap li[data-type='taskItem'] input {
+  margin: 0;
+}
+
+.editor .tiptap code {
+  border-radius: 4px;
+  background: var(--inkwell-surface-muted);
+  padding: 0.1em 0.28em;
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+  font-size: 0.9em;
+}
+
+.editor .tiptap pre {
+  overflow: auto;
+  border-radius: 6px;
+  background: #111113;
+  color: #f4f4f5;
+  padding: 12px;
+}
+
+.editor .tiptap pre code {
+  background: transparent;
+  color: inherit;
+  padding: 0;
+}
+
+.editor .inkwell-code-cell {
+  overflow: hidden;
+  margin: 0 0 0.85rem;
+  border: 1px solid var(--inkwell-border-strong);
+  border-radius: 8px;
+  background: #111113;
+}
+
+.editor .inkwell-code-toolbar {
+  display: flex;
+  min-height: 36px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border-bottom: 1px solid rgb(255 255 255 / 12%);
+  background: #202024;
+  padding: 5px 7px 5px 10px;
+}
+
+.editor .inkwell-code-language {
+  min-width: 0;
+  max-width: 170px;
+  border: 0;
+  background: transparent;
+  color: #e4e4e7;
+  font: 600 0.78rem/1.2 inherit;
+  outline: none;
+}
+
+.editor .inkwell-code-language option {
+  background: #ffffff;
+  color: #18181b;
+}
+
+.editor .inkwell-code-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.editor .inkwell-code-run,
+.editor .inkwell-code-clear {
+  min-height: 25px;
+  border: 1px solid rgb(255 255 255 / 18%);
+  border-radius: 5px;
+  background: rgb(255 255 255 / 8%);
+  color: #f4f4f5;
+  padding: 0 8px;
+  font: 600 0.72rem/1 inherit;
+  cursor: pointer;
+}
+
+.editor .inkwell-code-run::before {
+  content: 'â–¶';
+  margin-right: 5px;
+  font-size: 0.65em;
+}
+
+.editor .inkwell-code-run:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.editor .inkwell-code-cell pre {
+  margin: 0;
+  border-radius: 0;
+  padding: 12px;
+}
+
+.editor .inkwell-code-cell .hljs-comment,
+.editor .inkwell-code-cell .hljs-quote {
+  color: #8b949e;
+  font-style: italic;
+}
+
+.editor .inkwell-code-cell .hljs-keyword,
+.editor .inkwell-code-cell .hljs-selector-tag,
+.editor .inkwell-code-cell .hljs-doctag {
+  color: #ff7b72;
+}
+
+.editor .inkwell-code-cell .hljs-title,
+.editor .inkwell-code-cell .hljs-title.function_,
+.editor .inkwell-code-cell .hljs-section,
+.editor .inkwell-code-cell .hljs-type,
+.editor .inkwell-code-cell .hljs-built_in {
+  color: #d2a8ff;
+}
+
+.editor .inkwell-code-cell .hljs-string,
+.editor .inkwell-code-cell .hljs-regexp,
+.editor .inkwell-code-cell .hljs-addition,
+.editor .inkwell-code-cell .hljs-attribute {
+  color: #a5d6ff;
+}
+
+.editor .inkwell-code-cell .hljs-number,
+.editor .inkwell-code-cell .hljs-literal,
+.editor .inkwell-code-cell .hljs-symbol,
+.editor .inkwell-code-cell .hljs-bullet {
+  color: #79c0ff;
+}
+
+.editor .inkwell-code-cell .hljs-variable,
+.editor .inkwell-code-cell .hljs-template-variable,
+.editor .inkwell-code-cell .hljs-params,
+.editor .inkwell-code-cell .hljs-meta {
+  color: #ffa657;
+}
+
+.editor .inkwell-code-cell .hljs-attr,
+.editor .inkwell-code-cell .hljs-property,
+.editor .inkwell-code-cell .hljs-selector-class,
+.editor .inkwell-code-cell .hljs-selector-id {
+  color: #7ee787;
+}
+
+.editor .inkwell-code-cell .hljs-deletion {
+  color: #ffa198;
+  background: rgb(248 81 73 / 15%);
+}
+
+.editor .inkwell-code-cell .hljs-emphasis {
+  font-style: italic;
+}
+
+.editor .inkwell-code-cell .hljs-strong {
+  font-weight: 700;
+}
+
+.editor .inkwell-code-output {
+  border-top: 1px solid var(--inkwell-border-strong);
+  background: #fafafa;
+}
+
+.editor .inkwell-code-runner {
+  display: block;
+  width: 100%;
+  height: 72px;
+  border: 0;
+  background: transparent;
+}
+
+.editor .tiptap hr {
+  margin: 1.1rem 0;
+  border: 0;
+  border-top: 1px solid var(--inkwell-border-strong);
+}
+
+.editor .tiptap blockquote {
+  padding-left: 12px;
+  border-left: 3px solid var(--inkwell-accent);
+  color: var(--inkwell-text);
+}
+
+.editor .tiptap a {
+  color: var(--inkwell-accent-strong);
+  overflow-wrap: anywhere;
+}
+
+.editor .tiptap img {
+  max-width: 100%;
+  height: auto;
+  display: block;
+  border-radius: 4px;
+}
+
+.editor .tiptap .inkwell-image-wrapper {
+  margin: 0 0 0.85rem;
+  max-width: 100%;
+  position: relative;
+  width: fit-content;
+}
+
+.editor .tiptap .inkwell-image-wrapper.is-selected {
+  outline: 2px solid var(--inkwell-accent);
+  outline-offset: 3px;
+}
+
+.editor .tiptap .inkwell-image-wrapper.is-selected[data-inkwell-block-id]::before {
+  background: var(--inkwell-accent);
+  border-radius: 4px;
+  color: var(--inkwell-surface);
+  content: attr(data-inkwell-block-id);
+  font-size: 0.68rem;
+  left: 0;
+  line-height: 1.25;
+  max-width: min(100%, 28ch);
+  overflow: hidden;
+  padding: 2px 5px;
+  position: absolute;
+  text-overflow: ellipsis;
+  top: -1.45rem;
+  white-space: nowrap;
+}
+
+.editor .tiptap .inkwell-image-wrapper .inkwell-image-resize-handle {
+  background: var(--inkwell-accent);
+  border: 2px solid var(--inkwell-surface);
+  border-radius: 999px;
+  bottom: -7px;
+  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.22);
+  cursor: nwse-resize;
+  display: none;
+  height: 12px;
+  position: absolute;
+  right: -7px;
+  width: 12px;
+}
+
+.editor .tiptap .inkwell-image-wrapper.is-selected .inkwell-image-resize-handle {
+  display: block;
+}
+
+.editor .tiptap .inkwell-image-wrapper.is-error,
+.editor .tiptap .inkwell-image-wrapper.is-uploading {
+  border: 1px solid var(--inkwell-border);
+  border-radius: 4px;
+  background: var(--inkwell-surface-muted);
+  color: var(--inkwell-muted);
+  padding: 10px;
+  font-size: 0.86rem;
+}
+
+.editor .tiptap .inkwell-image-wrapper a {
+  word-break: break-all;
+}
+
+.editor .tiptap .inkwell-audio-wrapper {
+  max-width: 640px;
+  margin: 0 0 0.85rem;
+}
+
+.editor .tiptap .inkwell-audio-wrapper audio {
+  display: block;
+  width: 100%;
+}
+
+.editor .tiptap .inkwell-audio-wrapper.is-error,
+.editor .tiptap .inkwell-audio-wrapper.is-uploading {
+  border: 1px solid var(--inkwell-border);
+  border-radius: 4px;
+  background: var(--inkwell-surface-muted);
+  color: var(--inkwell-muted);
+  padding: 10px;
+  font-size: 0.86rem;
+}
+
+.editor .tiptap .inkwell-audio-wrapper a {
+  word-break: break-all;
+}
+
+.editor .tiptap div[data-youtube-video] {
+  width: 100%;
+  max-width: 640px;
+  aspect-ratio: 16 / 9;
+  margin: 0 0 0.85rem;
+  overflow: hidden;
+  border-radius: 4px;
+  background: #111113;
+}
+
+.editor .tiptap div[data-youtube-video] iframe {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+  border: 0;
+}

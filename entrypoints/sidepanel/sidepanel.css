@@ -1,0 +1,6 @@
+﻿/* Sidepanel stylesheet entrypoint; keep imports in cascade order. */
+@import './styles/layout.css';
+@import './styles/editor-header.css';
+@import './styles/settings.css';
+@import './styles/editor-controls.css';
+@import './styles/editor-content.css';

@@ -1,0 +1,343 @@
+﻿/* Toolbar, popovers, context menu, and inline editing controls. */
+.editor-tools {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+  align-items: center;
+}
+
+.editor-tool-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 2px;
+  width: 100%;
+  padding: 3px;
+  border: 1px solid var(--inkwell-border);
+  border-radius: var(--inkwell-radius);
+  background: var(--inkwell-surface-muted);
+}
+
+.editor-tool-tabs button {
+  min-width: 0;
+  min-height: 32px;
+  padding: 0 5px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--inkwell-muted);
+  font-size: 0.8rem;
+  font-weight: 800;
+}
+
+.editor-tool-tabs .icon-label-button {
+  justify-self: stretch;
+}
+
+.editor-tool-tabs button.active {
+  border-color: var(--inkwell-border);
+  background: var(--inkwell-surface);
+  color: var(--inkwell-text);
+}
+
+.editor-quickbar {
+  display: flex;
+  gap: 2px;
+  align-items: center;
+  padding: 3px;
+  border: 1px solid var(--inkwell-border);
+  border-radius: var(--inkwell-radius);
+  background: var(--inkwell-surface-muted);
+}
+
+.tool-icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 32px;
+  width: 32px;
+  min-width: 32px;
+  min-height: 32px;
+  padding: 0;
+  border-color: transparent;
+  background: transparent;
+  color: var(--inkwell-text);
+  font-weight: 800;
+}
+
+.tool-icon-button > span {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.tool-icon-button.active {
+  border-color: var(--inkwell-accent);
+  background: var(--inkwell-accent-soft);
+  color: var(--inkwell-accent-strong);
+}
+
+.tool-popover {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 6px);
+  right: 0;
+  left: 0;
+  display: grid;
+  max-height: min(280px, calc(100vh - 190px));
+  overflow: auto;
+  padding: 10px;
+  border: 1px solid var(--inkwell-border);
+  border-radius: var(--inkwell-radius);
+  background: var(--inkwell-surface);
+  box-shadow: var(--inkwell-shadow);
+}
+
+.tool-panel {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(124px, 1fr));
+  gap: 8px;
+  align-items: end;
+}
+
+.tool-panel .field-label {
+  min-width: 0;
+}
+
+.tool-panel input,
+.toolbar-select {
+  width: 100%;
+  min-width: 0;
+}
+
+.tool-panel button {
+  min-height: 32px;
+  padding: 0 10px;
+  border-color: var(--inkwell-border);
+  background: var(--inkwell-surface-muted);
+  color: var(--inkwell-text);
+  font-weight: 750;
+}
+
+.media-tool-panel {
+  display: grid;
+  gap: 7px;
+}
+
+.media-tool-panel form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 34px;
+  gap: 6px;
+}
+
+.media-tool-panel input {
+  min-width: 0;
+}
+
+.media-tool-panel button {
+  display: grid;
+  place-items: center;
+  min-width: 34px;
+  min-height: 32px;
+  padding: 0;
+}
+
+.media-tool-panel small {
+  color: var(--inkwell-muted);
+}
+
+.button-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(36px, 1fr));
+  width: 100%;
+}
+
+.button-grid button.active,
+.tool-panel button.active {
+  border-color: var(--inkwell-accent);
+  background: var(--inkwell-accent);
+  color: white;
+}
+
+.link-form input {
+  min-width: 0;
+}
+
+.editor-context-menu {
+  position: fixed;
+  z-index: 50;
+  width: max-content;
+  max-width: min(352px, calc(100vw - 16px));
+  padding: 6px;
+  border: 1px solid rgb(55 53 47 / 12%);
+  border-radius: 7px;
+  background: var(--inkwell-surface);
+  box-shadow:
+    0 8px 24px rgb(15 23 42 / 12%),
+    0 1px 4px rgb(15 23 42 / 8%);
+  color: var(--inkwell-text);
+}
+
+.context-menu-stack {
+  display: grid;
+  gap: 6px;
+}
+
+.context-menu-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.context-menu-divider {
+  height: 1px;
+  margin: 1px 0;
+  background: var(--inkwell-border);
+}
+
+.context-menu-button {
+  display: inline-grid;
+  place-items: center;
+  min-width: 28px;
+  width: 28px;
+  height: 28px;
+  min-height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--inkwell-text);
+  font-size: 0.82rem;
+  font-weight: 750;
+}
+
+.context-menu-button:hover,
+.context-menu-button:focus-visible,
+.context-menu-button.active {
+  background: var(--inkwell-surface-muted);
+  color: var(--inkwell-text);
+}
+
+.context-menu-button:disabled {
+  background: transparent;
+  color: var(--inkwell-muted);
+  opacity: 0.45;
+}
+
+.context-menu-button.text-action {
+  width: auto;
+  min-width: 48px;
+  padding: 0 8px;
+}
+
+.context-menu-button.source-action {
+  display: flex;
+  justify-content: space-between;
+  width: 100%;
+  min-width: 220px;
+  padding: 0 8px;
+  text-align: left;
+}
+
+.source-action-host {
+  max-width: 150px;
+  margin-left: 16px;
+  overflow: hidden;
+  color: var(--inkwell-muted);
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.context-color-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-bottom: 2px solid var(--inkwell-accent);
+  font-weight: 850;
+  line-height: 1;
+}
+
+.context-menu-select,
+.context-menu-input {
+  height: 28px;
+  min-height: 28px;
+  padding: 0 7px;
+  border-color: transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--inkwell-text);
+  font-size: 0.82rem;
+}
+
+.context-menu-select {
+  width: 88px;
+}
+
+.context-menu-select.wide {
+  width: 132px;
+}
+
+.context-menu-input {
+  width: min(290px, calc(100vw - 42px));
+  border-color: var(--inkwell-border);
+  background: var(--inkwell-surface);
+}
+
+.context-menu-select:hover,
+.context-menu-select:focus {
+  background: var(--inkwell-surface-muted);
+  outline: none;
+}
+
+.context-menu-section-label {
+  padding: 2px 4px 0;
+  color: var(--inkwell-muted);
+  font-size: 0.72rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.context-color-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 2px;
+  min-width: 230px;
+}
+
+.context-swatch {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 7px;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--inkwell-text);
+  font-size: 0.82rem;
+  font-weight: 650;
+  text-align: left;
+}
+
+.context-swatch:hover,
+.context-swatch:focus-visible,
+.context-swatch.active {
+  background: var(--inkwell-surface-muted);
+}
+
+.context-swatch-chip {
+  display: block;
+  width: 14px;
+  height: 14px;
+  border: 1px solid var(--inkwell-border-strong);
+  border-radius: 4px;
+}

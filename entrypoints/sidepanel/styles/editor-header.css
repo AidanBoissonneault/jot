@@ -1,0 +1,244 @@
+﻿/* Page title, sync notices, and editor header controls. */
+.editor-shell {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 0;
+  margin-top: 12px;
+  border: 1px solid var(--inkwell-border);
+  border-radius: var(--inkwell-radius);
+  background: var(--inkwell-surface);
+  box-shadow: var(--inkwell-shadow);
+}
+
+.record-panel {
+  display: flex;
+  align-items: center;
+  padding: 4px 2px;
+}
+
+.tab-panel {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  min-height: 0;
+  margin-top: 12px;
+  overflow: auto;
+}
+
+.editor-header {
+  display: grid;
+  gap: 8px;
+  padding: 8px;
+  border-bottom: 1px solid var(--inkwell-border);
+}
+
+.editor-title-row,
+.section-heading,
+.manage-row,
+.inline-form,
+.recording-row,
+.modal-actions {
+  display: grid;
+  gap: 8px;
+  align-items: center;
+}
+
+.editor-title-row {
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+}
+
+.title-selector {
+  position: relative;
+  min-width: 0;
+}
+
+.title-input-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 28px;
+  align-items: center;
+  border-radius: 6px;
+}
+
+.title-input-row input {
+  min-width: 0;
+  min-height: 30px;
+  padding: 0 4px;
+  border: 0;
+  border-radius: 4px 0 0 4px;
+  background: transparent;
+}
+
+.page-title-selector input {
+  color: var(--inkwell-text);
+  font-size: 1.05rem;
+  font-weight: 800;
+}
+
+.title-menu-trigger {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  min-width: 28px;
+  min-height: 28px;
+  padding: 0;
+  border-color: transparent;
+  background: transparent;
+  color: var(--inkwell-muted);
+}
+
+.title-menu-trigger:hover,
+.title-menu-trigger.active {
+  border-color: var(--inkwell-border);
+  background: var(--inkwell-surface-muted);
+  color: var(--inkwell-text);
+}
+
+.title-dropdown {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 5px);
+  display: grid;
+  width: min(280px, calc(100vw - 38px));
+  max-height: min(340px, calc(100vh - 180px));
+  overflow: auto;
+  padding: 6px;
+  border: 1px solid var(--inkwell-border);
+  border-radius: var(--inkwell-radius);
+  background: var(--inkwell-surface);
+  box-shadow: var(--inkwell-shadow);
+}
+
+.project-dropdown {
+  left: 0;
+}
+
+.page-dropdown {
+  right: 0;
+}
+
+.title-dropdown-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  justify-content: flex-start;
+  min-height: 32px;
+  padding: 0 9px;
+  overflow: hidden;
+  border-color: transparent;
+  background: transparent;
+  color: var(--inkwell-text);
+  font-weight: 650;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.title-dropdown-item > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.project-list-category {
+  flex: 0 0 auto;
+  max-width: 92px;
+  padding: 2px 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  color: white;
+  font-size: 0.68rem;
+  text-overflow: ellipsis;
+}
+
+.title-dropdown-item:hover,
+.title-dropdown-item.active {
+  background: var(--inkwell-surface-muted);
+}
+
+.title-dropdown-item.active {
+  color: var(--inkwell-accent-strong);
+  font-weight: 800;
+}
+
+.title-dropdown-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  margin-top: 5px;
+  padding-top: 6px;
+  border-top: 1px solid var(--inkwell-border);
+}
+
+.title-dropdown-actions button {
+  min-width: 0;
+  min-height: 34px;
+  padding: 0 7px;
+  border-color: var(--inkwell-border);
+  background: var(--inkwell-surface-muted);
+  color: var(--inkwell-text);
+  font-size: 0.76rem;
+  font-weight: 750;
+}
+
+.title-dropdown-actions .danger-button {
+  color: #991b1b;
+}
+
+.section-heading {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.manage-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.modal-actions {
+  grid-template-columns: repeat(2, minmax(96px, 1fr));
+}
+
+.recording-row {
+  grid-template-columns: auto minmax(0, 1fr);
+}
+
+.inline-form {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.inline-form input,
+.manage-row select {
+  min-width: 0;
+}
+
+.inline-form button,
+.manage-row button,
+.section-heading button,
+.recording-row button {
+  min-height: 32px;
+  padding: 0 10px;
+  font-weight: 750;
+}
+
+.page-title {
+  display: grid;
+  gap: 3px;
+}
+
+.page-title input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--inkwell-text);
+}
+
+.page-title input {
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.page-title input:focus {
+  outline: 2px solid color-mix(in srgb, var(--inkwell-accent) 34%, transparent);
+  outline-offset: 2px;
+}

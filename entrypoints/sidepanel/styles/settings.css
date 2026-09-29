@@ -1,0 +1,260 @@
+﻿/* Settings sections, forms, parent lists, and archive dialog. */
+.panel-section {
+  display: grid;
+  gap: 10px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--inkwell-border);
+}
+
+.panel-section:first-child {
+  padding-top: 0;
+}
+
+.panel-section:last-child {
+  border-bottom: 0;
+}
+
+.panel-section h2,
+.section-heading h2,
+.panel-section h3 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.settings-panel {
+  overflow: auto;
+}
+
+.settings-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.settings-heading h2,
+.settings-heading p,
+.setting-copy p {
+  margin: 0;
+}
+
+.settings-heading p,
+.setting-copy p {
+  margin-top: 3px;
+  color: var(--inkwell-muted);
+}
+
+.setting-value {
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: var(--inkwell-accent-soft);
+  color: var(--inkwell-accent-strong);
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.setting-card {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--inkwell-border);
+  border-radius: var(--inkwell-radius);
+  background: var(--inkwell-surface);
+  box-shadow: var(--inkwell-shadow);
+}
+
+.setting-copy label {
+  font-size: 0.95rem;
+  font-weight: 800;
+}
+
+.scale-slider {
+  min-height: 24px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  accent-color: var(--inkwell-accent);
+  cursor: pointer;
+}
+
+.scale-bounds {
+  display: flex;
+  justify-content: space-between;
+  margin-top: -10px;
+  color: var(--inkwell-muted);
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.scale-presets {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.scale-presets button {
+  min-width: 0;
+  min-height: 34px;
+  padding: 0 6px;
+  font-weight: 750;
+}
+
+.scale-presets button.active {
+  border-color: var(--inkwell-accent);
+  background: var(--inkwell-accent);
+  color: white;
+}
+
+.scale-preview {
+  display: grid;
+  gap: 3px;
+  padding: 12px;
+  border-radius: var(--inkwell-radius);
+  background: var(--inkwell-surface-muted);
+}
+
+.scale-preview small,
+.scale-preview span {
+  color: var(--inkwell-muted);
+}
+
+.field-label,
+.stack-form {
+  display: grid;
+  gap: 6px;
+}
+
+.field-label {
+  color: var(--inkwell-muted);
+  font-size: 0.78rem;
+  font-weight: 750;
+}
+
+.field-label input {
+  color: var(--inkwell-text);
+  font-size: 1rem;
+  font-weight: 500;
+}
+
+.field-label textarea {
+  min-width: 0;
+  resize: vertical;
+  color: var(--inkwell-text);
+  font: inherit;
+}
+
+.stack-form {
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--inkwell-border);
+}
+
+.stack-form:last-of-type {
+  border-bottom: 0;
+}
+
+.item-list {
+  display: grid;
+  gap: 6px;
+}
+
+.item-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+  min-height: 38px;
+  padding: 7px 9px;
+  border-color: var(--inkwell-border);
+  background: var(--inkwell-surface);
+  color: var(--inkwell-text);
+  text-align: left;
+}
+
+.item-row span,
+.item-row small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.item-row small {
+  color: var(--inkwell-muted);
+  font-size: 0.76rem;
+}
+
+.item-row.active {
+  border-color: var(--inkwell-accent);
+  background: var(--inkwell-accent-soft);
+}
+
+.status-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+.status-list div {
+  display: grid;
+  grid-template-columns: 86px minmax(0, 1fr);
+  gap: 8px;
+}
+
+.status-list dt {
+  color: var(--inkwell-muted);
+  font-weight: 750;
+}
+
+.status-list dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.recording-row {
+  align-items: start;
+}
+
+.recording-row small {
+  color: var(--inkwell-muted);
+}
+
+.danger-button {
+  color: #991b1b;
+}
+
+.danger-primary {
+  border-color: #dc2626;
+  background: #dc2626;
+  color: white;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: rgb(17 17 19 / 36%);
+}
+
+.modal {
+  display: grid;
+  width: min(100%, 320px);
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--inkwell-border);
+  border-radius: var(--inkwell-radius);
+  background: var(--inkwell-surface);
+  box-shadow: var(--inkwell-shadow);
+}
+
+.modal h2,
+.modal p {
+  margin: 0;
+}
+
+.modal p {
+  overflow-wrap: anywhere;
+}

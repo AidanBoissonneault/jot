@@ -1,3 +1,4 @@
+﻿/** @file Sidepanel application bootstrap and shared icon registration. */
 import { createApp } from 'vue';
 import { createPinia } from 'pinia';
 import { library } from '@fortawesome/fontawesome-svg-core';
@@ -45,6 +46,7 @@ import {
 } from '@fortawesome/free-solid-svg-icons';
 import App from './App.vue';
 import '@/src/styles/global.css';
+import './sidepanel.css';
 
 library.add(
   faBold,

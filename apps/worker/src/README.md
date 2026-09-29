@@ -14,11 +14,25 @@ This directory contains the Cloudflare Worker API and separates transport, featu
 - `routes/webhookRoutes.ts` — Notion webhook verification and remote-change notifications.
 - `routes/mediaRoutes.ts` — validated media upload and signed Notion URL refresh.
 - `queues/syncQueueConsumer.ts` — background synchronization execution, acknowledgement, retry, and status events.
-- `services/workerRuntime.ts` — initialized service graph, installation state, locking, and Notion mutation orchestration shared by routes and queues.
+- `services/workerRuntime.ts` — initializes shared services and exposes the runtime facade used by routes and queues.
+- `services/workerInstallationState.ts` — resolves sessions and connected installations, then locks state updates per installation.
+- `services/workerNotionOperations.ts` — composes Notion cache, block transport, managed-block sync, and page mutation helpers.
+- `services/notionBlockOperations.ts` — paginated child reads and focused Notion page/block create, update, delete, and append operations.
+- `services/workerStorePersistence.ts` — normalized worker state, diagnostic logs, and Supabase installation-state persistence.
+- `services/notionObjectCache.ts` — validates cached Notion pages, databases, and thread blocks, then clears stale local mappings.
 - `auth.ts` and `notionAuth.ts` — application authentication persistence and Notion OAuth/webhook lifecycle behavior.
 - `notionRequest.ts` — authenticated Notion transport, retry, backoff, rate limiting, and file upload.
-- `blockConversion.ts`, `managedBlocks.ts`, and `importManagedBlocks.ts` — Tiptap/Notion conversion and stable managed-block identity.
-- `projectDatabase.ts`, `projectDatabaseValues.ts`, `projectSync.ts`, and `rootPages.ts` — project database and legacy page-tree synchronization.
+- `services/workerSyncOperations.ts` — authenticated HTTP page and project synchronization.
+- `services/workerQueueOperations.ts` — Queue publication, installation lookup, and background page, block, and project synchronization.
+- `blockConversion.ts` — stable exports for the focused converters in `blockConversion/`.
+- `blockConversion/tiptapToNotion.ts` and `blockConversion/notionToTiptap.ts` — separate outbound and inbound conversion; `valueReaders.ts` and `youtubeUrls.ts` contain shared helpers.
+- `managedBlocks.ts`, `managedBlockOperations.ts`, and `importManagedBlocks.ts` — full-document replacement, granular operations, and remote import.
+- `managedBlockIdentity.ts` and `managedBlockReconciliation.ts` — stable local identity, order analysis, and remote reconciliation.
+- `projectDatabase.ts` — project row lifecycle, composed around discovery, row, and state helpers.
+- `projectDatabaseDiscovery.ts` — database discovery, parent creation, schema upgrades, managed views, and candidate ranking.
+- `projectDatabaseRows.ts` and `projectDatabaseValues.ts` — managed-row queries, Notion row mapping, and database schema/value shaping.
+- `projectDatabaseState.ts` — project state containers and nested thread toggle import, update, and archive operations.
+- `projectSync.ts` and `rootPages.ts` — project folder and legacy page-tree synchronization.
 - `syncEvents.ts`, `syncQueueMessages.ts`, and `types.ts` — durable event delivery, queue shaping, and shared domain contracts.
 - `htmlPages.ts` and `workerUtils.ts` — isolated HTML rendering and stateless worker helpers.
 
