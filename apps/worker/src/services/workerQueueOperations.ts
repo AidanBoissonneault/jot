@@ -289,11 +289,13 @@ function syncContentForOps(
   ops: ManagedBlockOperation[],
   legacyContent: DocumentContent,
 ): DocumentContent {
-  if (legacyContent?.content) return legacyContent;
+  if (legacyContent?.content?.length) return legacyContent;
   const blocks = ops
+    .filter((op) => op.type === 'block_create' && op.payload?.block)
+    .sort((first, second) => (first.payload.index ?? 0) - (second.payload.index ?? 0))
     .map((op) => op.payload.block)
     .filter((block): block is DocumentContent => Boolean(block));
-  return { type: 'doc', content: blocks };
+  return blocks.length ? { type: 'doc', content: blocks } : legacyContent;
 }
 
 /** Reads the single-operation property from legacy Queue messages. */

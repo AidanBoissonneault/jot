@@ -46,6 +46,11 @@ type BlocksToDocument = (blocks: NotionBlock[]) => DocumentContent;
 interface ProjectDatabaseDependencies {
   appendLog: AppendLog;
   createWorkspacePage: (store: WorkerStore, title: string) => Promise<NotionObject>;
+  importManagedBlocks: (
+    store: WorkerStore,
+    page: { id: string; notionPageId: string },
+    notionBlocks: NotionBlock[],
+  ) => Promise<DocumentContent | null>;
   isNotionObjectNotFound: (error: unknown) => boolean;
   listAllBlockChildren: ListAllBlockChildren;
   notionBlocksToTiptapDocument: BlocksToDocument;
@@ -83,6 +88,7 @@ interface ProjectPageResult {
 export function createProjectDatabaseHelpers({
   appendLog,
   createWorkspacePage,
+  importManagedBlocks,
   isNotionObjectNotFound,
   listAllBlockChildren,
   notionBlocksToTiptapDocument,
@@ -112,6 +118,7 @@ export function createProjectDatabaseHelpers({
     syncProjectState,
     updateThreadToggleTitle,
   } = createProjectDatabaseStateHelpers({
+    importManagedBlocks,
     listAllBlockChildren,
     notionBlocksToTiptapDocument,
     notionRequest,
@@ -194,7 +201,7 @@ export function createProjectDatabaseHelpers({
     store: WorkerStore,
     { selectedParentPageId }: ParentSelection = { selectedParentPageId: undefined },
   ) {
-    clearSyncMappings(store);
+    clearSyncMappings(store, { preserveBlockMappings: true });
     const requestedParentPageId = selectedParentPageId;
     const database = await ensureProjectDatabase(store, { selectedParentPageId });
     const clearSelectedParentPage = Boolean(

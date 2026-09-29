@@ -3,6 +3,7 @@ import type { DocumentContent } from '../../../src/types/capture.js';
 import type {
   BlockMapping,
   HashValue,
+  ListAllBlockChildren,
   ManagedBlockOperation,
   ManagedBlockResult,
   NotionBlock,
@@ -19,6 +20,7 @@ import {
   previousMappedBlockId,
 } from './managedBlockIdentity.js';
 import type { BlockPosition, DesiredManagedBlock } from './managedBlockIdentity.js';
+import { managedBlockSignature } from './managedBlockSignatures.js';
 import { appendAndTrackBlock } from './managedBlockReconciliation.js';
 
 type AppendManagedBlocks = (
@@ -43,6 +45,7 @@ interface ApplyManagedBlockOpsOptions {
   deleteManagedBlock: DeleteManagedBlock;
   hash: HashValue;
   kindFromNotionBlock: ClassifyBlock;
+  listAllBlockChildren: ListAllBlockChildren;
   localPageId: string;
   notionPageId: string;
   ops: ManagedBlockOperation[];
@@ -70,15 +73,14 @@ export async function applyManagedBlockOps({
   replaceManagedBlocks,
   tiptapDocumentToNotionBlocks,
   kindFromNotionBlock,
+  listAllBlockChildren,
   hash,
 }: ApplyManagedBlockOpsOptions) {
   const replacementOp = ops.find((op) => op.type === 'block_reorder');
   if (replacementOp) {
-    if (replacementOp.payload?.replaceAll) {
-      // A full local snapshot is authoritative. Clearing the mappings makes
-      // replaceManagedBlocks remove untracked blocks left by an interrupted first sync.
-      store.blockMappings[localPageId] = [];
-    }
+    // Keep known remote identities. replaceManagedBlocks can reconcile a
+    // non-empty snapshot; an empty queue envelope must never clear the note.
+    if (!content.content?.length) return { createdBlocks: [] };
     return replaceManagedBlocks(store, localPageId, notionPageId, content);
   }
 
@@ -90,8 +92,29 @@ export async function applyManagedBlockOps({
   if (isGranularBatch) {
     const createdBlocks: Array<NotionBlock | undefined> = [];
     if (ops.some((op) => op.type === 'blocks_reset')) {
-      store.blockMappings[localPageId] = [];
-      await replaceManagedBlocks(store, localPageId, notionPageId, { type: 'doc', content: [] });
+      const snapshotBlocks = ops
+        .filter((op) => op.type === 'block_create' && op.payload?.block)
+        .sort((first, second) => (first.payload.index ?? 0) - (second.payload.index ?? 0));
+      const snapshot = content.content?.length
+        ? content
+        : { type: 'doc', content: snapshotBlocks.map((op) => op.payload.block!) };
+      const knownMappings = store.blockMappings[localPageId] ?? [];
+      const snapshotIds = new Set(
+        (snapshot.content ?? [])
+          .map((node) => node.attrs?.inkwellBlockId)
+          .filter((id): id is string => typeof id === 'string' && Boolean(id)),
+      );
+
+      // Queue payloads can split a full snapshot across messages. Only treat
+      // this chunk as a complete replacement when it covers every known block.
+      // Otherwise the per-block path below applies its creates without erasing
+      // blocks carried by a later message.
+      if (
+        snapshot.content?.length &&
+        knownMappings.every((mapping) => snapshotIds.has(mappingKey(mapping)))
+      ) {
+        return replaceManagedBlocks(store, localPageId, notionPageId, snapshot);
+      }
     }
     for (const op of ops) {
       if (!['block_create', 'block_update', 'block_delete'].includes(op.type)) continue;
@@ -105,6 +128,7 @@ export async function applyManagedBlockOps({
         updateManagedBlock,
         tiptapDocumentToNotionBlocks,
         kindFromNotionBlock,
+        listAllBlockChildren,
         hash,
       });
       createdBlocks.push(...(result?.createdBlocks ?? []));
@@ -200,6 +224,7 @@ async function applySingleManagedBlockOp({
   updateManagedBlock,
   tiptapDocumentToNotionBlocks,
   kindFromNotionBlock,
+  listAllBlockChildren,
   hash,
 }: Pick<
   ApplyManagedBlockOpsOptions,
@@ -207,6 +232,7 @@ async function applySingleManagedBlockOp({
   | 'deleteManagedBlock'
   | 'hash'
   | 'kindFromNotionBlock'
+  | 'listAllBlockChildren'
   | 'localPageId'
   | 'notionPageId'
   | 'store'
@@ -250,15 +276,28 @@ async function applySingleManagedBlockOp({
     const previous = mappings.find(
       (mapping) => mappingKey(mapping) === op.payload.afterInkwellBlockId && mapping.notionBlockId,
     );
-    createdBlock = await appendAndTrackBlock(
-      appendManagedBlocks,
-      store,
-      notionPageId,
+    createdBlock = await findRetryCreatedBlock({
+      listAllBlockChildren,
+      localPageId,
       notionBlock,
-      positionAfter(previous?.notionBlockId),
-      [],
-      0,
-    );
+      notionPageId,
+      previousBlockId: previous?.notionBlockId,
+      store,
+    });
+    if (!createdBlock) {
+      createdBlock = await appendAndTrackBlock(
+        appendManagedBlocks,
+        store,
+        notionPageId,
+        notionBlock,
+        positionAfter(previous?.notionBlockId),
+        [],
+        0,
+      );
+    }
+    if (!createdBlock?.id) {
+      throw new Error('Notion did not confirm the new block; existing content was preserved.');
+    }
     nextMapping = mappingFromDesired(desired, createdBlock?.id);
   } else if (existing.lastSyncedHash === desired.lastSyncedHash) {
     nextMapping = mappingFromDesired(desired, existing.notionBlockId, existing);
@@ -266,19 +305,34 @@ async function applySingleManagedBlockOp({
     await updateManagedBlock(store, existing.notionBlockId, notionBlock);
     nextMapping = mappingFromDesired(desired, existing.notionBlockId, existing);
   } else {
-    await deleteManagedBlock(store, existing.notionBlockId);
     const previous = mappings.find(
       (mapping) => mappingKey(mapping) === op.payload.afterInkwellBlockId && mapping.notionBlockId,
     );
-    createdBlock = await appendAndTrackBlock(
-      appendManagedBlocks,
-      store,
-      notionPageId,
+    createdBlock = await findRetryCreatedBlock({
+      listAllBlockChildren,
+      localPageId,
       notionBlock,
-      positionAfter(previous?.notionBlockId),
-      [],
-      0,
-    );
+      notionPageId,
+      previousBlockId: previous?.notionBlockId,
+      store,
+    });
+    if (!createdBlock) {
+      createdBlock = await appendAndTrackBlock(
+        appendManagedBlocks,
+        store,
+        notionPageId,
+        notionBlock,
+        positionAfter(previous?.notionBlockId),
+        [],
+        0,
+      );
+    }
+    if (createdBlock?.id && createdBlock.id !== existing.notionBlockId) {
+      await deleteManagedBlock(store, existing.notionBlockId);
+    }
+    if (!createdBlock?.id) {
+      throw new Error('Notion did not confirm the replacement block; existing content was preserved.');
+    }
     nextMapping = mappingFromDesired(desired, createdBlock?.id, existing);
   }
 
@@ -302,4 +356,37 @@ function normalizeMappingOrder(mappings: BlockMapping[]): BlockMapping[] {
   return mappings
     .filter((mapping) => mapping?.notionBlockId)
     .map((mapping, order) => ({ ...mapping, order }));
+}
+
+/** Recovers a block written before a queue retry without appending a duplicate. */
+async function findRetryCreatedBlock({
+  listAllBlockChildren,
+  localPageId,
+  notionBlock,
+  notionPageId,
+  previousBlockId,
+  store,
+}: {
+  listAllBlockChildren: ListAllBlockChildren;
+  localPageId: string;
+  notionBlock: NotionBlockPayload;
+  notionPageId: string;
+  previousBlockId: string | undefined;
+  store: WorkerStore;
+}): Promise<NotionBlock | undefined> {
+  const children = await listAllBlockChildren(store, notionPageId);
+  const previousIndex = previousBlockId
+    ? children.findIndex((block) => block.id === previousBlockId)
+    : -1;
+  const candidate = children[previousIndex + 1];
+  const mappedIds = new Set(
+    (store.blockMappings[localPageId] ?? [])
+      .map((mapping) => mapping.notionBlockId)
+      .filter((id): id is string => Boolean(id)),
+  );
+
+  return candidate && !mappedIds.has(candidate.id) &&
+    managedBlockSignature(candidate) === managedBlockSignature(notionBlock)
+    ? candidate
+    : undefined;
 }

@@ -28,6 +28,7 @@ function helpers(notionRequest: ReturnType<typeof vi.fn>) {
     appendLog: vi.fn(),
     createWorkspacePage: vi.fn(),
     hash: vi.fn(),
+    importManagedBlocks: vi.fn(async () => null),
     isNotionObjectNotFound: (error: { status?: number; code?: string }) =>
       error?.status === 404 || error?.code === 'object_not_found',
     listAllBlockChildren: vi.fn(),

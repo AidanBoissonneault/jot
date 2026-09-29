@@ -22,13 +22,16 @@ import type {
   WorkerStore,
 } from './types.js';
 
-/** Clears mappings that point into a project database. */
-export function clearSyncMappings(store: WorkerStore): void {
+/** Clears derived database mappings, optionally retaining stable note block identities. */
+export function clearSyncMappings(
+  store: WorkerStore,
+  { preserveBlockMappings = false }: { preserveBlockMappings?: boolean } = {},
+): void {
   store.projectPages = {};
   store.projectBlocks = {};
   store.threadBlocks = {};
   store.notePages = {};
-  store.blockMappings = {};
+  if (!preserveBlockMappings) store.blockMappings = {};
 }
 
 /** Marks an unusable database and clears its derived local mappings. */

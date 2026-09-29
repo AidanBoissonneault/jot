@@ -24,6 +24,11 @@ import type {
 
 /** Dependencies used to read and write nested project state and thread blocks. */
 interface ProjectDatabaseStateDependencies {
+  importManagedBlocks: (
+    store: WorkerStore,
+    page: { id: string; notionPageId: string },
+    notionBlocks: NotionBlock[],
+  ) => Promise<DocumentContent | null>;
   listAllBlockChildren: ListAllBlockChildren;
   notionBlocksToTiptapDocument: (blocks: NotionBlock[]) => DocumentContent;
   notionRequest: NotionRequester;
@@ -38,6 +43,7 @@ interface ToggleOptions {
 
 /** Creates operations for project state containers and page thread toggles. */
 export function createProjectDatabaseStateHelpers({
+  importManagedBlocks,
   listAllBlockChildren,
   notionBlocksToTiptapDocument,
   notionRequest,
@@ -76,9 +82,13 @@ export function createProjectDatabaseStateHelpers({
     const id = `page-${project.id}-${threadBlock.id}`;
     const title = toggleTitle(threadBlock) || 'Untitled Page';
     const contentBlocks = await listAllBlockChildren(store, threadBlock.id).catch(() => []);
-    const content = contentBlocks.length
+    const importedContent = contentBlocks.length
+      ? await importManagedBlocks(store, { id, notionPageId: threadBlock.id }, contentBlocks)
+      : null;
+    const content = importedContent ?? (contentBlocks.length
       ? notionBlocksToTiptapDocument(contentBlocks)
-      : emptyDocument();
+      : emptyDocument());
+    if (!contentBlocks.length) store.blockMappings[id] = [];
     const timestamp = threadBlock.last_edited_time ?? project.updatedAt;
 
     store.threadBlocks[threadKey(id)] = {

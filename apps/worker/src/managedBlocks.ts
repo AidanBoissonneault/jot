@@ -19,6 +19,7 @@ import {
   hasReorderedManagedBlocks,
   mappingFromDesired,
 } from './managedBlockIdentity.js';
+import { managedBlockSignature } from './managedBlockSignatures.js';
 import type { BlockPosition, DesiredManagedBlock } from './managedBlockIdentity.js';
 import { rebuildReorderedRange, reconcileManagedBlocks } from './managedBlockReconciliation.js';
 
@@ -89,10 +90,15 @@ export async function replaceManagedBlocks({
   });
   const existingMappings = store.blockMappings[localPageId] ?? [];
 
+  // An empty document may be a partial queue envelope. Never interpret it as
+  // permission to erase the remote note.
+  if (!desiredBlocks.length) {
+    return { createdBlocks: [], notionBlocks };
+  }
+
   if (!existingMappings.length) {
     return replaceAllManagedBlocks({
       appendManagedBlocks,
-      deleteManagedBlock,
       desiredBlocks,
       listAllBlockChildren,
       localPageId,
@@ -108,6 +114,7 @@ export async function replaceManagedBlocks({
       deleteManagedBlock,
       desiredBlocks,
       existingMappings,
+      listAllBlockChildren,
       localPageId,
       notionBlocks,
       notionPageId,
@@ -120,6 +127,7 @@ export async function replaceManagedBlocks({
     deleteManagedBlock,
     desiredBlocks,
     existingMappings,
+    listAllBlockChildren,
     localPageId,
     notionBlocks,
     notionPageId,
@@ -129,13 +137,12 @@ export async function replaceManagedBlocks({
 }
 
 /**
- * Replaces every remote child when no reliable local mapping exists.
+ * Reconciles an unmapped page without deleting untracked remote children.
  * @param options - Prepared desired state and Notion mutation dependencies.
  * @returns Newly created and outbound blocks.
  */
 async function replaceAllManagedBlocks({
   appendManagedBlocks,
-  deleteManagedBlock,
   desiredBlocks,
   listAllBlockChildren,
   localPageId,
@@ -145,7 +152,6 @@ async function replaceAllManagedBlocks({
 }: Pick<
   ReplaceManagedBlocksOptions,
   | 'appendManagedBlocks'
-  | 'deleteManagedBlock'
   | 'listAllBlockChildren'
   | 'localPageId'
   | 'notionPageId'
@@ -153,11 +159,22 @@ async function replaceAllManagedBlocks({
 > & { desiredBlocks: DesiredManagedBlock[]; notionBlocks: NotionBlockPayload[] }) {
   const existingBlocks = await listAllBlockChildren(store, notionPageId);
 
-  for (const block of existingBlocks) {
-    await deleteManagedBlock(store, block.id);
+  if (existingBlocks.length) {
+    return reconcileUnmappedChildren({
+      appendManagedBlocks,
+      desiredBlocks,
+      existingBlocks,
+      localPageId,
+      notionBlocks,
+      notionPageId,
+      store,
+    });
   }
 
   const createdBlocks = await appendManagedBlocks(store, notionPageId, notionBlocks);
+  if (createdBlocks.length !== notionBlocks.length) {
+    throw new Error('Notion did not confirm every block; the note remains available for retry.');
+  }
   const createdByOrder: Array<NotionBlock | undefined> = [];
 
   store.blockMappings[localPageId] = desiredBlocks
@@ -172,4 +189,75 @@ async function replaceAllManagedBlocks({
     createdBlocks: createdByOrder,
     notionBlocks,
   };
+}
+
+/**
+ * Adopts a matching remote snapshot without deleting untracked children.
+ * If a remote child cannot be paired with the requested snapshot in order,
+ * synchronization stops so the note can be reloaded or reviewed safely.
+ */
+async function reconcileUnmappedChildren({
+  appendManagedBlocks,
+  desiredBlocks,
+  existingBlocks,
+  localPageId,
+  notionBlocks,
+  notionPageId,
+  store,
+}: {
+  appendManagedBlocks: AppendManagedBlocks;
+  desiredBlocks: DesiredManagedBlock[];
+  existingBlocks: NotionBlock[];
+  localPageId: string;
+  notionBlocks: NotionBlockPayload[];
+  notionPageId: string;
+  store: WorkerStore;
+}) {
+  const matchedByOrder = new Map<number, NotionBlock>();
+  let nextDesiredIndex = 0;
+
+  for (const existingBlock of existingBlocks) {
+    const signature = managedBlockSignature(existingBlock);
+    const matchIndex = desiredBlocks.findIndex((desired, index) =>
+      index >= nextDesiredIndex && managedBlockSignature(desired.notionBlock) === signature,
+    );
+
+    if (matchIndex < 0) {
+      throw new Error(
+        'Notion has content without matching Inkwell block mappings. Existing content was preserved; reload the note before syncing again.',
+      );
+    }
+
+    matchedByOrder.set(matchIndex, existingBlock);
+    nextDesiredIndex = matchIndex + 1;
+  }
+
+  const createdByOrder: Array<NotionBlock | undefined> = [];
+  const mappings: BlockMapping[] = [];
+  let previousBlockId: string | undefined;
+
+  for (const desired of desiredBlocks) {
+    let notionBlock = matchedByOrder.get(desired.order);
+    if (!notionBlock) {
+      [notionBlock] = await appendManagedBlocks(
+        store,
+        notionPageId,
+        [desired.notionBlock],
+        previousBlockId
+          ? { type: 'after_block', after_block: { id: previousBlockId } }
+          : { type: 'start' },
+      );
+    }
+
+    if (!notionBlock?.id) {
+      throw new Error('Notion did not confirm the new block; existing content was preserved.');
+    }
+
+    createdByOrder[desired.order] = notionBlock;
+    mappings.push(mappingFromDesired(desired, notionBlock.id));
+    previousBlockId = notionBlock.id;
+  }
+
+  store.blockMappings[localPageId] = mappings;
+  return { createdBlocks: createdByOrder, notionBlocks };
 }

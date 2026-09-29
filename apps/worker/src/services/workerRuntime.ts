@@ -111,6 +111,8 @@ function initSingletons(env: WorkerEnv): void {
   const dbHelpers = createProjectDatabaseHelpers({
     appendLog,
     createWorkspacePage,
+    importManagedBlocks: (store, page, blocks) =>
+      workerNotionOperations.importManagedBlocks(store, page, blocks),
     isNotionObjectNotFound,
     listAllBlockChildren,
     notionBlocksToTiptapDocument,

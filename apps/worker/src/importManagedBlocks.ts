@@ -25,6 +25,7 @@ const INKWELL_BLOCK_ID_ATTR = 'inkwellBlockId';
 interface ImportManagedBlocksOptions {
   hash: HashValue;
   listAllBlockChildren: ListAllBlockChildren;
+  notionBlocks?: NotionBlock[];
   page: { id: string; notionPageId: string };
   store: WorkerStore;
 }
@@ -47,9 +48,10 @@ export async function importManagedBlocks({
   store,
   page,
   listAllBlockChildren,
+  notionBlocks,
   hash = defaultHash,
 }: Omit<ImportManagedBlocksOptions, 'hash'> & Partial<Pick<ImportManagedBlocksOptions, 'hash'>>): Promise<DocumentContent | null> {
-  const children = await listAllBlockChildren(store, page.notionPageId);
+  const children = notionBlocks ?? await listAllBlockChildren(store, page.notionPageId);
   const imported = notionBlocksToTiptapDocumentStrict(children);
 
   if (!imported) {

@@ -146,8 +146,12 @@ export function createNotionBlockOperations({
           method: 'PATCH',
           body: { children: batch, ...(position ? { position } : {}) },
         });
-        results = response.results as NotionBlock[];
-      } catch {
+        results = confirmedCreatedBlocks(response, batch.length);
+      } catch (error) {
+        // Only a deterministic payload rejection proves that the batch was not
+        // applied. A timeout or server error has an ambiguous outcome; replaying
+        // it block-by-block could duplicate content that Notion already stored.
+        if (!isBlockValidationError(error)) throw error;
         results = await appendBlocksWithFallback(store, notionPageId, batch, position);
       }
 
@@ -173,7 +177,7 @@ export function createNotionBlockOperations({
           method: 'PATCH',
           body: { children: [block], ...(position ? { position } : {}) },
         });
-        const created = response.results as NotionBlock[];
+        const created = confirmedCreatedBlocks(response, 1);
         results.push(...created);
         position = positionAfterCreatedBlocks(position, created);
       } catch (error) {
@@ -183,19 +187,16 @@ export function createNotionBlockOperations({
         if (isNotionFileUploadBlock(block)) {
           throw error;
         }
+        if (!isBlockValidationError(error)) throw error;
 
         const fallback = mediaFallbackBlock(block);
-        try {
-          const response = await notionRequest(store, `/blocks/${notionPageId}/children`, {
-            method: 'PATCH',
-            body: { children: [fallback], ...(position ? { position } : {}) },
-          });
-          const created = response.results as NotionBlock[];
-          results.push(...created);
-          position = positionAfterCreatedBlocks(position, created);
-        } catch {
-          // Skip a non-durable block rather than aborting the whole page.
-        }
+        const response = await notionRequest(store, `/blocks/${notionPageId}/children`, {
+          method: 'PATCH',
+          body: { children: [fallback], ...(position ? { position } : {}) },
+        });
+        const created = confirmedCreatedBlocks(response, 1);
+        results.push(...created);
+        position = positionAfterCreatedBlocks(position, created);
       }
     }
 
@@ -214,4 +215,20 @@ export function createNotionBlockOperations({
     updateManagedBlock,
     updatePageTitle,
   };
+}
+
+/** Confirms a rejected block payload can safely use the durable text fallback. */
+function isBlockValidationError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const detail = error as { code?: unknown; status?: unknown };
+  return detail.status === 400 && detail.code === 'validation_error';
+}
+
+/** Rejects success responses that do not confirm every requested block. */
+function confirmedCreatedBlocks(response: NotionObject, expectedCount: number): NotionBlock[] {
+  const blocks = Array.isArray(response.results) ? response.results as NotionBlock[] : [];
+  if (blocks.length !== expectedCount) {
+    throw new Error('Notion did not confirm every created block.');
+  }
+  return blocks;
 }

@@ -125,6 +125,7 @@ export function createWorkerNotionOperations({
       replaceManagedBlocks,
       tiptapDocumentToNotionBlocks,
       kindFromNotionBlock,
+      listAllBlockChildren,
       hash,
     });
   }
@@ -132,12 +133,14 @@ export function createWorkerNotionOperations({
   /** Imports supported remote child blocks for a linked page. */
   async function importManagedBlocks(
     store: WorkerStore,
-    page: ProjectPage,
+    page: { id: string; notionPageId?: string },
+    notionBlocks?: NotionBlock[],
   ): Promise<DocumentContent | null> {
     if (!page.notionPageId) return null;
     return importManagedBlocksWithDependencies({
       hash,
       listAllBlockChildren,
+      notionBlocks,
       page: { id: page.id, notionPageId: page.notionPageId },
       store,
     });

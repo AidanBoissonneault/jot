@@ -122,6 +122,8 @@ export function createNotionRequester({
       throw new Error('A connected Notion token is required.');
     }
 
+    const method = (init.method ?? 'GET').toUpperCase();
+    const canRetryAmbiguousFailure = isSafeToRetry(method, endpoint);
     let attempt = 0;
 
     while (true) {
@@ -145,13 +147,18 @@ export function createNotionRequester({
 
         const error = createNotionError(response, payload);
 
-        if (!shouldRetryError(error) || attempt >= maxRetries) {
+        const rateLimited = error.status === 429 && error.code === 'rate_limited';
+        if (
+          !shouldRetryError(error) ||
+          attempt >= maxRetries ||
+          (!rateLimited && !canRetryAmbiguousFailure)
+        ) {
           throw error;
         }
 
         await sleep(retryDelayMs(error, attempt, { baseBackoffMs, maxBackoffMs }));
       } catch (error) {
-        if (isNotionError(error) || attempt >= maxRetries) {
+        if (isNotionError(error) || attempt >= maxRetries || !canRetryAmbiguousFailure) {
           throw error;
         }
 
@@ -161,6 +168,17 @@ export function createNotionRequester({
       attempt += 1;
     }
   };
+}
+
+/**
+ * Avoids replaying writes whose outcome may be unknown after a timeout or 5xx.
+ * Creating children is a PATCH in Notion's API, so it is excluded even though
+ * ordinary resource PATCH requests are safe to repeat.
+ */
+function isSafeToRetry(method: string, endpoint: string): boolean {
+  if (method === 'GET' || method === 'HEAD' || method === 'DELETE') return true;
+  if (method !== 'PATCH') return false;
+  return !/^\/blocks\/[^/]+\/children(?:\?|$)/.test(endpoint);
 }
 
 /**
