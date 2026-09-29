@@ -7,6 +7,7 @@ type InkwellStore = ReturnType<typeof useInkwellStore>;
 export interface SettingsPageContext {
   store: InkwellStore;
   projectStateDraft: Ref<string>;
+  isResyncing: Ref<boolean>;
   saveProjectMetadata: () => Promise<void>;
   resync: () => Promise<void>;
   saveLabel: ComputedRef<string>;

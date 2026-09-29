@@ -42,6 +42,7 @@ export interface TopBarContext {
   accountLabel: ComputedRef<string>;
   workspaceLabel: ComputedRef<string>;
   canUseEditor: ComputedRef<boolean>;
+  isResyncing: Ref<boolean>;
   activeTab: Ref<'editor' | 'settings'>;
   createProject: () => Promise<void>;
   createPage: () => Promise<void>;

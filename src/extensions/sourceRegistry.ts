@@ -6,10 +6,11 @@ import {
   storeInkwellSource,
   type StoredInkwellSource,
 } from '@/src/extensions/inkwellLink';
-
-const SOURCE_REGISTRY_PREFIX = 'inkwell_sources_v1:';
-const SOURCE_ENTRY_PREFIX = 'inkwell_source_v1:';
-const SOURCE_BLOCK_ID_PREFIX = 'source:';
+import {
+  SOURCE_BLOCK_ID_PREFIX,
+  SOURCE_ENTRY_PREFIX,
+  SOURCE_REGISTRY_PREFIX,
+} from '@/src/lib/projectStateSources';
 
 type SourceRegistry = Record<string, StoredInkwellSource>;
 

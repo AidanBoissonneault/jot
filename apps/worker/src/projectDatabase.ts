@@ -57,6 +57,12 @@ interface ProjectDatabaseDependencies {
   notionRequest: NotionRequester;
   replaceManagedBlocks: ReplaceManagedBlocks;
   tiptapDocumentToNotionBlocks: DocumentToBlocks;
+  deleteManagedBlock?: (store: WorkerStore, blockId: string) => Promise<unknown>;
+  updateManagedBlock?: (
+    store: WorkerStore,
+    blockId: string,
+    block: NotionBlockPayload,
+  ) => Promise<unknown>;
 }
 
 /** Describes the parent selection contract used by this API feature. */
@@ -88,6 +94,7 @@ interface ProjectPageResult {
 export function createProjectDatabaseHelpers({
   appendLog,
   createWorkspacePage,
+  deleteManagedBlock,
   importManagedBlocks,
   isNotionObjectNotFound,
   listAllBlockChildren,
@@ -95,6 +102,7 @@ export function createProjectDatabaseHelpers({
   notionRequest,
   replaceManagedBlocks,
   tiptapDocumentToNotionBlocks,
+  updateManagedBlock,
 }: ProjectDatabaseDependencies) {
   const { ensureProjectDatabase } = createProjectDatabaseDiscoveryHelpers({
     appendLog,
@@ -123,6 +131,9 @@ export function createProjectDatabaseHelpers({
     notionBlocksToTiptapDocument,
     notionRequest,
     replaceManagedBlocks,
+    deleteManagedBlock,
+    updateManagedBlock,
+    tiptapDocumentToNotionBlocks,
   });
 
   /** Ensures a row exists for a project. @param store - Worker state. @param project - Local project. @param options - Sync options. @returns Project page result. */

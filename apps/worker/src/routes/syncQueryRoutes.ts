@@ -86,17 +86,21 @@ export function registerSyncQueryRoutes(app: Hono<{ Bindings: WorkerEnv }>): voi
     // Fetch stale + version info from notion_block_sync
     const { data: syncRows } = await supabase
       .from('notion_block_sync')
-      .select('local_id, local_version, is_stale')
+      .select('local_id, local_version, is_stale, status')
       .eq('installation_id', store.installationId);
   
     const stalePageIds: string[] = [];
     const aheadPageIds: string[] = [];
+    const failedPageIds: string[] = [];
     const serverVersions: Record<string, number> = {};
   
     for (const row of syncRows ?? []) {
       serverVersions[row.local_id] = row.local_version;
       if (row.is_stale) {
         stalePageIds.push(row.local_id);
+      }
+      if (row.status === 'failed') {
+        failedPageIds.push(row.local_id);
       } else if (
         typeof knownVersions[row.local_id] === 'number' &&
         row.local_version > knownVersions[row.local_id]
@@ -110,6 +114,7 @@ export function registerSyncQueryRoutes(app: Hono<{ Bindings: WorkerEnv }>): voi
       clearSelectedParentPage: result.clearSelectedParentPage,
       uncachedProjectIds: result.uncachedProjectIds,
       uncachedPageIds: result.uncachedPageIds,
+      failedPageIds,
       stalePageIds,
       aheadPageIds,
       serverVersions,

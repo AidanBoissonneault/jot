@@ -353,6 +353,21 @@
   width: 18px;
 }
 
+.sync-rotating-icon {
+  animation: sync-icon-rotation 1.2s linear infinite;
+}
+
+@keyframes sync-icon-rotation {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sync-rotating-icon {
+    animation: none;
+    opacity: 0.65;
+  }
+}
+
 .icon-label-button > span:not(.text-icon) {
   position: absolute;
   width: 1px;

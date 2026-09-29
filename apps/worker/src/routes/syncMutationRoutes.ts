@@ -27,13 +27,19 @@ import {
   ensureProjectPage,
   ensureProjectStateContainer,
   notionRequest,
+  pushPageToNotion,
   requireConnectedStore,
+  supabase,
   syncProjectToNotion,
   withFreshInstallationStore,
   writeStore,
 } from '../services/workerRuntime.js';
 import { stringValue } from '../workerUtils.js';
 import type { WorkerEnv } from '../types.js';
+import {
+  isUnmappedNotionContentError,
+  UNMAPPED_NOTION_CONTENT_CODE,
+} from '../managedBlocks.js';
 
 /**
  * Registers mutation routes that push local pages and projects to Notion.
@@ -131,7 +137,53 @@ export function registerSyncMutationRoutes(app: Hono<{ Bindings: WorkerEnv }>): 
   
     return c.json({ queued: true, version });
   });
-  
+
+  /** Runs a user-requested page reconciliation immediately so its content diff can be returned. */
+  app.post('/sync/page/resync', async (c) => {
+    const body: Partial<SyncPageRequest> = await c.req.json<SyncPageRequest>().catch(() => ({}));
+    const { page, project, selectedParentPageId } = body ?? {};
+    if (!page?.id || !project?.id) {
+      return c.json({ status: 'error', message: 'Missing page or project.' }, 400);
+    }
+
+    try {
+      const store = await requireConnectedStore(c);
+      const result = await pushPageToNotion({
+        c,
+        page,
+        project,
+        selectedParentPageId,
+      });
+      await supabase.from('notion_block_sync').upsert({
+        installation_id: store.installationId,
+        local_id: page.id,
+        local_version: page.localSyncVersion ?? page.knownSyncVersion ?? 0,
+        synced_version: page.localSyncVersion ?? page.knownSyncVersion ?? 0,
+        status: 'synced',
+        notion_block_id: result?.page?.notionPageId ?? page.notionPageId ?? null,
+        entity_type: 'page',
+        is_stale: false,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: 'installation_id,local_id' });
+      return c.json(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error('[sync/page/resync] failed:', message, error);
+      if (isUnmappedNotionContentError(error)) {
+        // A mergeable sync conflict is a normal application result. Sending it
+        // as HTTP 409 makes the browser log a failed request before the client
+        // can present the diff to the user.
+        return c.json({
+          status: 'error',
+          code: UNMAPPED_NOTION_CONTENT_CODE,
+          message,
+          diff: error.diff,
+        });
+      }
+      return c.json({ status: 'error', message }, 500);
+    }
+  });
+
   /** Synchronizes project metadata immediately. @param c - Hono context. @returns JSON response. */
   app.post('/sync/project', async (c) => {
     const body: Partial<SyncProjectRequest> = await c.req.json<SyncProjectRequest>().catch(() => ({}));
@@ -146,6 +198,14 @@ export function registerSyncMutationRoutes(app: Hono<{ Bindings: WorkerEnv }>): 
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.error('[sync/project] failed:', message, error);
+      if (isUnmappedNotionContentError(error)) {
+        return c.json({
+          status: 'error',
+          code: UNMAPPED_NOTION_CONTENT_CODE,
+          message,
+          diff: error.diff,
+        });
+      }
       return c.json({ status: 'error', message }, 500);
     }
   });
@@ -199,6 +259,14 @@ export function registerSyncMutationRoutes(app: Hono<{ Bindings: WorkerEnv }>): 
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.error('[sync/project/source] failed:', message, error);
+      if (isUnmappedNotionContentError(error)) {
+        return c.json({
+          status: 'error',
+          code: UNMAPPED_NOTION_CONTENT_CODE,
+          message,
+          diff: error.diff,
+        });
+      }
       return c.json({ status: 'error', message }, 500);
     }
   });

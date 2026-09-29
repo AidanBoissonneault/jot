@@ -3,7 +3,7 @@
 import type { TopBarContext } from './topBarContext';
 
 const props = defineProps<{ context: TopBarContext }>();
-const { store, canUseEditor, activeTab, createProject, createPage, resync, logout } = props.context;
+const { store, canUseEditor, isResyncing, activeTab, createProject, createPage, resync, logout } = props.context;
 </script>
 
 <template>
@@ -35,12 +35,13 @@ const { store, canUseEditor, activeTab, createProject, createPage, resync, logou
       <button
         type="button"
         class="icon-label-button secondary-button"
-        :disabled="store.isLoading || !store.syncConfig.connected || !store.isOnline"
-        title="Resync with Notion"
-        aria-label="Resync with Notion"
+        :disabled="store.isLoading || isResyncing || !store.syncConfig.connected || !store.isOnline"
+        :title="isResyncing ? 'Syncing with Notion' : 'Resync with Notion'"
+        :aria-label="isResyncing ? 'Syncing with Notion' : 'Resync with Notion'"
+        :aria-busy="isResyncing"
         @click="resync"
       >
-        <font-awesome-icon :icon="['fas', 'rotate']" fixed-width />
+        <font-awesome-icon :icon="['fas', 'rotate']" :class="{ 'sync-rotating-icon': isResyncing }" fixed-width />
         <span>Sync</span>
       </button>
       <button

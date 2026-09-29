@@ -12,9 +12,15 @@ import {
   toggleTitle,
 } from './projectDatabaseValues.js';
 import type { DocumentContent, Project, ProjectPage } from '../../../src/types/capture.js';
+import {
+  projectStateSourceBlockIds,
+  pruneOrphanedProjectStateSources,
+  SOURCE_BLOCK_ID_PREFIX,
+} from '../../../src/lib/projectStateSources.js';
 import type {
   ListAllBlockChildren,
   NotionBlock,
+  NotionBlockPayload,
   NotionObject,
   NotionRequester,
   ReplaceManagedBlocks,
@@ -33,6 +39,13 @@ interface ProjectDatabaseStateDependencies {
   notionBlocksToTiptapDocument: (blocks: NotionBlock[]) => DocumentContent;
   notionRequest: NotionRequester;
   replaceManagedBlocks: ReplaceManagedBlocks;
+  deleteManagedBlock?: (store: WorkerStore, blockId: string) => Promise<unknown>;
+  updateManagedBlock?: (
+    store: WorkerStore,
+    blockId: string,
+    block: NotionBlockPayload,
+  ) => Promise<unknown>;
+  tiptapDocumentToNotionBlocks?: (document: DocumentContent) => NotionBlockPayload[];
 }
 
 /** Mapping key and project/thread block mappings for a managed Notion toggle. */
@@ -48,6 +61,9 @@ export function createProjectDatabaseStateHelpers({
   notionBlocksToTiptapDocument,
   notionRequest,
   replaceManagedBlocks,
+  deleteManagedBlock,
+  updateManagedBlock,
+  tiptapDocumentToNotionBlocks,
 }: ProjectDatabaseStateDependencies) {
   /** Imports project state content and records the managed container mapping. */
   async function importProjectState(
@@ -138,24 +154,81 @@ export function createProjectDatabaseStateHelpers({
       previous?.lastEditedTime &&
       container.last_edited_time &&
       container.last_edited_time !== previous.lastEditedTime;
+    const isUserReviewedReplacement = project.stateContent?.attrs?.inkwellConflictResolution === true;
+    const existingInkwellBlockIds = inkwellBlockIdsForProjectState(store, key);
+    const stateContent = pruneOrphanedProjectStateSources(
+      project.stateContent ?? emptyDocument(),
+      existingInkwellBlockIds,
+    );
+    let remoteBlocks = await listAllBlockChildren(store, container.id);
+    const removedRemoteIds = new Set<string>();
+    let changedRemoteState = false;
 
-    if (hasRemoteEdit) {
-      const blocks = await listAllBlockChildren(store, container.id);
-      const content = blocks.length ? notionBlocksToTiptapDocument(blocks) : emptyDocument();
+    for (const block of remoteBlocks) {
+      const node = notionBlocksToTiptapDocument([block]).content?.[0];
+      if (!node || !projectStateSourceBlockIds(node).some((blockId) =>
+        !existingInkwellBlockIds.has(blockId),
+      )) continue;
+
+      const cleaned = pruneOrphanedProjectStateSources(
+        { type: 'doc', content: [node] },
+        existingInkwellBlockIds,
+      );
+      const replacementNode = cleaned.content?.[0];
+      if (!replacementNode) {
+        if (deleteManagedBlock) {
+          await deleteManagedBlock(store, block.id);
+        } else {
+          await notionRequest(store, `/blocks/${block.id}`, { method: 'DELETE' });
+        }
+        removedRemoteIds.add(block.id);
+        changedRemoteState = true;
+        continue;
+      }
+
+      const [replacement] = tiptapDocumentToNotionBlocks?.(cleaned) ?? [];
+      if (!replacement) continue;
+      if (updateManagedBlock) {
+        await updateManagedBlock(store, block.id, replacement);
+      } else {
+        const { object: _object, type: _type, ...body } = replacement;
+        await notionRequest(store, `/blocks/${block.id}`, { method: 'PATCH', body });
+      }
+      changedRemoteState = true;
+      for (const mapping of store.blockMappings[key] ?? []) {
+        if (mapping.notionBlockId === block.id) mapping.newState = replacement;
+      }
+    }
+
+    if (removedRemoteIds.size) {
+      store.blockMappings[key] = (store.blockMappings[key] ?? [])
+        .filter((mapping) => !removedRemoteIds.has(mapping.notionBlockId ?? ''));
+    }
+    if (changedRemoteState) {
+      remoteBlocks = await listAllBlockChildren(store, container.id);
+    }
+
+    if (hasRemoteEdit && !isUserReviewedReplacement) {
+      const content = remoteBlocks.length
+        ? pruneOrphanedProjectStateSources(
+            notionBlocksToTiptapDocument(remoteBlocks),
+            existingInkwellBlockIds,
+          )
+        : emptyDocument();
+      const refreshed = await notionRequest(store, `/blocks/${container.id}`).catch(() => container);
       store.projectBlocks[key] = {
         ...store.projectBlocks[key],
         blockId: container.id,
-        lastEditedTime: container.last_edited_time,
+        lastEditedTime: refreshed.last_edited_time,
         parentPageId: notionPageId,
         title: 'Project State',
       };
       return {
         content,
-        lastEditedTime: container.last_edited_time,
+        lastEditedTime: refreshed.last_edited_time,
       };
     }
 
-    const stateContent = project.stateContent ?? emptyDocument();
     await replaceManagedBlocks(store, key, container.id, stateContent);
     const refreshed = await notionRequest(store, `/blocks/${container.id}`).catch(() => container);
     store.projectBlocks[key] = {
@@ -166,6 +239,7 @@ export function createProjectDatabaseStateHelpers({
       title: 'Project State',
     };
     return {
+      content: stateContent,
       lastEditedTime: refreshed.last_edited_time,
     };
   }
@@ -315,4 +389,24 @@ export function createProjectDatabaseStateHelpers({
     syncProjectState,
     updateThreadToggleTitle,
   };
+}
+
+function inkwellBlockIdsForProjectState(
+  store: WorkerStore,
+  projectStateMappingKey: string,
+): Set<string> {
+  const ids = new Set<string>();
+  for (const [localPageId, mappings] of Object.entries(store.blockMappings ?? {})) {
+    if (
+      localPageId === projectStateMappingKey ||
+      store.projectBlocks?.[localPageId] ||
+      store.notePages?.[localPageId]?.archived
+    ) continue;
+
+    for (const mapping of mappings) {
+      const id = mapping.inkwellBlockId ?? mapping.localNodeId;
+      if (id && !id.startsWith(SOURCE_BLOCK_ID_PREFIX)) ids.add(id);
+    }
+  }
+  return ids;
 }

@@ -1,10 +1,13 @@
 import { describe, expect, test } from 'vitest';
 import {
+  addPendingProjectSyncEvent,
   addPendingProjectSourceSyncEvent,
+  blockPendingProjectSyncEvents,
   buildPageSyncOps,
   listPendingProjectSyncEvents,
+  rebaseBlockedProjectSyncEvents,
 } from '@/src/services/syncQueue';
-import { resetBrowserStorage } from './setup';
+import { readIdbStorage, resetBrowserStorage } from './setup';
 import type { Project, ProjectPage } from '@/src/types/capture';
 
 const block = (id: string, text: string) => ({
@@ -67,6 +70,71 @@ describe('block sync queue payloads', () => {
     if (events[0].type !== 'project_source_upsert') throw new Error('Unexpected event');
     expect(events[0].payload.block).toEqual(sourceBlock);
     expect(events[0].payload.project).not.toHaveProperty('stateContent');
+  });
+
+  test('rebases a durable conflict by merging local and Notion content before unblocking delivery', async () => {
+    resetBrowserStorage();
+    const localProject: Project = {
+      ...project,
+      stateContent: { type: 'doc', content: [block('local', 'local block')] },
+    };
+    const remoteProject: Project = {
+      ...project,
+      stateRemoteRevision: 'remote-revision',
+      stateContent: { type: 'doc', content: [block('remote', 'Notion block')] },
+    };
+    const original = await addPendingProjectSyncEvent(localProject, 'parent');
+    await blockPendingProjectSyncEvents(localProject.id, {
+      code: 'unmapped_notion_content',
+      message: 'Notion has content without matching Inkwell block mappings.',
+    });
+
+    const persisted: Project[] = [];
+    const rebased = await rebaseBlockedProjectSyncEvents(
+      [remoteProject],
+      [localProject],
+      async (projects) => { persisted.push(...projects); },
+      'parent',
+    );
+    const queue = await listPendingProjectSyncEvents();
+    const backup = readIdbStorage().project_sync_conflict_backups as Array<{
+      events: Array<{ eventId: string }>;
+    }>;
+
+    expect(rebased).toHaveLength(1);
+    expect(persisted).toHaveLength(1);
+    expect(rebased[0].stateContent?.content?.map((entry) => entry.content?.[0]?.text)).toEqual([
+      'Notion block',
+      'local block',
+    ]);
+    expect(queue).toHaveLength(1);
+    expect(queue[0].deliveryBlocked).toBeUndefined();
+    expect(queue[0].type).toBe('project_upsert');
+    expect(backup.flatMap((entry) => entry.events.map((event) => event.eventId))).toContain(original.eventId);
+  });
+
+  test('releases a blocked project absent from the reload using its durable local snapshot', async () => {
+    resetBrowserStorage();
+    const localProject: Project = {
+      ...project,
+      stateContent: { type: 'doc', content: [block('local', 'keep me')] },
+    };
+    await addPendingProjectSyncEvent(localProject, 'parent');
+    await blockPendingProjectSyncEvents(localProject.id, {
+      code: 'unmapped_notion_content',
+      message: 'Notion has content without matching Inkwell block mappings.',
+    });
+
+    const rebased = await rebaseBlockedProjectSyncEvents(
+      [],
+      [localProject],
+      async () => undefined,
+      'parent',
+    );
+    const queue = await listPendingProjectSyncEvents();
+
+    expect(rebased[0].stateContent?.content?.[0]?.content?.[0]?.text).toBe('keep me');
+    expect(queue[0].deliveryBlocked).toBeUndefined();
   });
 
   test('appending blocks emits one bounded create per block without a full reorder', () => {

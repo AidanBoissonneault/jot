@@ -13,6 +13,7 @@ import {
   syncProjectToNotionForInstallation,
 } from '../services/workerRuntime.js';
 import type { ManagedBlockOperation, SyncQueueMessage, WorkerEnv } from '../types.js';
+import { isUnmappedNotionContentError } from '../managedBlocks.js';
 
 /**
  * Processes and acknowledges or retries one Cloudflare Queue batch.
@@ -131,7 +132,11 @@ export async function processSyncQueue(
             })).catch(() => undefined);
           }
   
-          msg.retry();
+          if (isUnmappedNotionContentError(err)) {
+            msg.ack();
+          } else {
+            msg.retry();
+          }
         }
       }
 }

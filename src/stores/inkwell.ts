@@ -186,8 +186,7 @@ export const useInkwellStore = defineStore('inkwell', () => {
       projects.value = projects.value.map((storedProject) =>
         storedProject.id === project.id ? project : storedProject,
       );
-      saveStatus.value = 'saved';
-      errorMessage.value = '';
+      applyProjectOrPageSyncState(project, currentPage.value);
     } catch (error) {
       errorMessage.value =
         error instanceof Error ? error.message : 'Unable to rename this project.';
@@ -220,8 +219,7 @@ export const useInkwellStore = defineStore('inkwell', () => {
           storedProject.id === project.id ? project : storedProject,
         )
         .sort(sortProjectsByUpdatedDesc);
-      saveStatus.value = 'saved';
-      errorMessage.value = '';
+      applyProjectOrPageSyncState(project, currentPage.value);
     } catch (error) {
       errorMessage.value =
         error instanceof Error ? error.message : 'Unable to update this project.';
@@ -262,6 +260,7 @@ export const useInkwellStore = defineStore('inkwell', () => {
         storedProject.id === project.id ? project : storedProject,
       )
       .sort(sortProjectsByUpdatedDesc);
+    applyProjectOrPageSyncState(project, currentPage.value);
   }
 
   async function archiveCurrentProject() {
@@ -660,16 +659,34 @@ export const useInkwellStore = defineStore('inkwell', () => {
 
     try {
       await notionClient.flushPendingSyncOps({ force: true });
-      projects.value = await notionClient.listProjects();
-      const activePageId = currentPage.value?.id;
-      await loadProjectPages();
-      const refreshedPage = pages.value.find((page) => page.id === activePageId);
-      if (refreshedPage) {
-        currentPage.value = refreshedPage;
-        applyPageSyncState(refreshedPage);
-      }
+      await refreshWorkspaceFromStorage();
     } finally {
       await refreshPendingSyncCount();
+    }
+  }
+
+  async function resyncPendingChanges() {
+    try {
+      const result = await notionClient.resyncPendingChanges();
+      await refreshWorkspaceFromStorage();
+      return result;
+    } finally {
+      await refreshPendingSyncCount();
+    }
+  }
+
+  async function refreshWorkspaceFromStorage() {
+    projects.value = await notionClient.listProjects();
+    const activePageId = currentPage.value?.id;
+    await loadProjectPages();
+    const refreshedPage = pages.value.find((page) => page.id === activePageId);
+    if (!refreshedPage) return;
+
+    currentPage.value = refreshedPage;
+    if (currentProject.value) {
+      applyProjectOrPageSyncState(currentProject.value, refreshedPage);
+    } else {
+      applyPageSyncState(refreshedPage);
     }
   }
 
@@ -771,6 +788,13 @@ export const useInkwellStore = defineStore('inkwell', () => {
   }
 
   function applyPageSyncState(page: ProjectPage) {
+    const project = currentProject.value;
+    if (project?.syncState === 'error') {
+      saveStatus.value = 'error';
+      errorMessage.value = project.syncMessage ?? '';
+      return;
+    }
+
     saveStatus.value = page.syncState ?? 'saved';
     errorMessage.value =
       page.syncState === 'error' || page.syncState === 'stale'
@@ -779,11 +803,15 @@ export const useInkwellStore = defineStore('inkwell', () => {
   }
 
   function applyProjectOrPageSyncState(project: Project, page?: ProjectPage) {
-    const status = page?.syncState ?? project.syncState ?? 'saved';
+    const status = project.syncState === 'error'
+      ? 'error'
+      : page?.syncState ?? project.syncState ?? 'saved';
     saveStatus.value = status;
     errorMessage.value =
       status === 'error' || status === 'stale'
-        ? page?.syncMessage ?? project.syncMessage ?? ''
+        ? project.syncState === 'error'
+          ? project.syncMessage ?? ''
+          : page?.syncMessage ?? project.syncMessage ?? ''
         : '';
   }
 
@@ -936,6 +964,7 @@ export const useInkwellStore = defineStore('inkwell', () => {
     notionParentPages,
     pages,
     pendingSyncCount,
+    refreshWorkspaceFromStorage,
     projects,
     registerCaptureInsertHandler,
     registerCurrentProjectSource,
@@ -960,6 +989,7 @@ export const useInkwellStore = defineStore('inkwell', () => {
     startRuntimeListener,
     syncConfig,
     syncPendingChanges,
+    resyncPendingChanges,
     updateServerUrl,
     getSyncLoginUrl,
   };

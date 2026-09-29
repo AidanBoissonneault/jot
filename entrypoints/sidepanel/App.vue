@@ -6,6 +6,7 @@
  */
 import { computed, nextTick, ref } from 'vue';
 import ArchiveConfirmModal from './components/shared/ArchiveConfirmModal.vue';
+import SyncConflictModal from './components/shared/SyncConflictModal.vue';
 import TopBar from './components/layout/TopBar.vue';
 import type { TopBarContext } from './components/layout/topBarContext';
 import SettingsPage from './components/settings/SettingsPage.vue';
@@ -52,6 +53,7 @@ import {
 } from './components/editor/editorOptions';
 import { useInkwellStore } from '@/src/stores/inkwell';
 import type { DocumentContent } from '@/src/types/capture';
+import type { SyncContentConflict } from '@/src/types/sync';
 import type { CaptureSelectionPayload } from '@/src/types/messages';
 
 const store = useInkwellStore();
@@ -114,6 +116,11 @@ let projectNameEditOriginalDirty = false;
 let pageTitleEditOriginalDirty = false;
 const newProjectNameDraft = ref('');
 const uiMessage = ref('');
+const isResyncing = ref(false);
+const isResolvingSyncConflict = ref(false);
+const syncConflictError = ref('');
+const syncConflicts = ref<SyncContentConflict[]>([]);
+const activeSyncConflict = computed(() => syncConflicts.value[0]);
 const activeTab = ref<'editor' | 'settings'>('editor');
 const {
   createParentPage,
@@ -462,17 +469,80 @@ function saveProjectMetadata() {
 }
 
 async function resync() {
-  await flushEditorContent();
-  const hadPendingLocalChanges = (await notionClient.pendingSyncEventCount()) > 0;
-  await store.syncPendingChanges();
+  if (isResyncing.value) return;
+  isResyncing.value = true;
+  uiMessage.value = '';
 
-  if (hadPendingLocalChanges) {
-    uiMessage.value = 'Changes sent to Notion. They may take a moment to appear.';
-    return;
+  try {
+    await flushEditorContent();
+    const hadPendingLocalChanges = (await notionClient.pendingSyncEventCount()) > 0;
+    await store.refreshSyncSession();
+    if (!store.syncConfig.connected) {
+      throw new Error(store.errorMessage || 'Connect Notion before resyncing.');
+    }
+
+    const result = await store.resyncPendingChanges();
+
+    if (result.conflicts.length) {
+      syncConflicts.value = result.conflicts;
+      syncConflictError.value = '';
+      uiMessage.value = `Review ${result.conflicts.length} sync ${result.conflicts.length === 1 ? 'conflict' : 'conflicts'} to merge the local and Notion blocks.`;
+    } else if (result.blockedProjectCount > 0) {
+      uiMessage.value = result.blockedMessage
+        ? `${result.blockedMessage} Your local snapshot remains saved on this device.`
+        : 'Notion still has content that needs review. Your local snapshot remains saved on this device.';
+    } else if (result.remainingCount > 0) {
+      uiMessage.value = store.errorMessage || 'Some changes remain saved locally and are waiting to sync.';
+    } else if (result.reloadedFromNotion && hadPendingLocalChanges) {
+      uiMessage.value = 'Notion content was merged with your local changes and resynced.';
+    } else if (hadPendingLocalChanges) {
+      uiMessage.value = 'Changes sent to Notion. They may take a moment to appear.';
+    } else {
+      uiMessage.value = 'Up to date with Notion.';
+    }
+  } catch (error) {
+    uiMessage.value = error instanceof Error
+      ? error.message
+      : 'Unable to resync with Notion. Your local changes remain saved.';
+  } finally {
+    isResyncing.value = false;
   }
+}
 
-  await store.reloadFromNotion();
-  uiMessage.value = 'Up to date with Notion.';
+function cancelSyncConflict() {
+  syncConflicts.value = [];
+  syncConflictError.value = '';
+  uiMessage.value = 'Sync conflict review paused. Your local changes remain saved.';
+}
+
+async function resolveSyncConflict(content: DocumentContent) {
+  const conflict = activeSyncConflict.value;
+  if (!conflict || isResolvingSyncConflict.value) return;
+  isResolvingSyncConflict.value = true;
+  syncConflictError.value = '';
+  uiMessage.value = '';
+
+  try {
+    await notionClient.resolveSyncConflict(conflict.targetType, conflict.targetId, content);
+    syncConflicts.value = syncConflicts.value.slice(1);
+    syncConflictError.value = '';
+    uiMessage.value = syncConflicts.value.length
+      ? 'Merge saved. Review the next sync conflict.'
+      : 'Local and Notion blocks were merged and synced.';
+    try {
+      await store.refreshWorkspaceFromStorage();
+    } catch (error) {
+      const detail = error instanceof Error ? ` ${error.message}` : '';
+      uiMessage.value = `Merge synced, but the workspace view could not refresh.${detail}`;
+    }
+  } catch (error) {
+    syncConflictError.value = error instanceof Error
+      ? error.message
+      : 'Unable to apply the merge. Your local changes remain saved.';
+    uiMessage.value = syncConflictError.value;
+  } finally {
+    isResolvingSyncConflict.value = false;
+  }
 }
 
 function toggleTitleMenu(menu: 'project' | 'page' | 'category') {
@@ -548,6 +618,7 @@ const topBarContext: TopBarContext = {
   accountLabel,
   workspaceLabel,
   canUseEditor,
+  isResyncing,
   activeTab,
   createProject,
   createPage,
@@ -561,6 +632,7 @@ const settingsPageContext: SettingsPageContext = {
   store,
   projectStateDraft,
   saveProjectMetadata,
+  isResyncing,
   resync,
   saveLabel,
   accountLabel,
@@ -711,6 +783,15 @@ const editorPageTitleContext: EditorPageTitleContext = {
       :title="archiveTarget.title"
       @cancel="cancelArchive"
       @confirm="confirmArchive"
+    />
+
+    <SyncConflictModal
+      v-if="activeSyncConflict"
+      :conflict="activeSyncConflict"
+      :busy="isResolvingSyncConflict"
+      :error="syncConflictError"
+      @cancel="cancelSyncConflict"
+      @resolve="resolveSyncConflict"
     />
   </main>
 </template>

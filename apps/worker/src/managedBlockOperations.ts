@@ -22,6 +22,8 @@ import {
 import type { BlockPosition, DesiredManagedBlock } from './managedBlockIdentity.js';
 import { managedBlockSignature } from './managedBlockSignatures.js';
 import { appendAndTrackBlock } from './managedBlockReconciliation.js';
+import { notionBlocksToTiptapDocumentStrict } from './blockConversion/notionToTiptap.js';
+import { UnmappedNotionContentError } from './managedBlocks.js';
 
 type AppendManagedBlocks = (
   store: WorkerStore,
@@ -271,6 +273,33 @@ async function applySingleManagedBlockOp({
   };
   let nextMapping: BlockMapping;
   let createdBlock: NotionBlock | undefined;
+
+  if (existing?.notionBlockId) {
+    const remoteBlocks = await listAllBlockChildren(store, notionPageId);
+    const current = remoteBlocks.find((block) => block.id === existing.notionBlockId);
+    if (current && op.payload.block.attrs?.inkwellConflictResolution === true) {
+      existing.newState = current as unknown as NotionBlockPayload;
+    }
+    const baseSignature = existing.newState ? managedBlockSignature(existing.newState) : undefined;
+    const currentSignature = current ? managedBlockSignature(current) : undefined;
+    const desiredSignature = managedBlockSignature(notionBlock);
+    if (currentSignature !== baseSignature && currentSignature !== desiredSignature) {
+      const replacement = remoteBlocks.find((block) =>
+        block.id !== current?.id &&
+        managedBlockSignature(block) === (baseSignature ?? desiredSignature),
+      );
+      if (replacement) {
+        existing.notionBlockId = replacement.id;
+      } else if (current) {
+        throw new UnmappedNotionContentError({
+          localContent: { type: 'doc', content: [op.payload.block] },
+          remoteContent: notionBlocksToTiptapDocumentStrict(remoteBlocks),
+        });
+      } else {
+        existing.notionBlockId = undefined;
+      }
+    }
+  }
 
   if (!existing?.notionBlockId) {
     const previous = mappings.find(

@@ -70,6 +70,7 @@ export type SyncBlockOperation = {
   createdAt: string;
   localVersion: number;
   baseKnownSyncVersion?: number;
+  deliveryBlocked?: SyncBlockDeliveryConflict;
   payload: {
     // content/stateContent remain optional for compatibility with queues made
     // by older extension versions. New operations only carry small metadata.
@@ -87,6 +88,8 @@ export type SyncBlockOperation = {
 
 /** Describes the result of pushing or pulling one page. */
 export type SyncPageResponse = {
+  code?: string;
+  diff?: SyncConflictDiff;
   message?: string;
   page?: ProjectPage;
   parentPage?: NotionParentPage;
@@ -109,10 +112,34 @@ export type SyncProjectSourceRequest = {
 
 /** Describes the result of synchronizing project metadata. */
 export type SyncProjectResponse = {
+  code?: string;
+  diff?: SyncConflictDiff;
   message?: string;
   parentPage?: NotionParentPage;
   project?: Project;
   status: SyncStatus;
+};
+
+/** Carries the local and remote documents shown when content matching cannot resolve a sync. */
+export type SyncConflictDiff = {
+  localContent: DocumentContent;
+  remoteContent: DocumentContent | null;
+};
+
+/** Stops automatic retries for a page until the user resolves its content conflict. */
+export type SyncBlockDeliveryConflict = {
+  code: 'unmapped_notion_content';
+  message: string;
+  diff?: SyncConflictDiff;
+};
+
+/** Identifies the page or project whose local and remote blocks need a merge. */
+export type SyncContentConflict = {
+  targetType: 'page' | 'project';
+  targetId: string;
+  targetTitle: string;
+  localContent: DocumentContent;
+  remoteContent: DocumentContent | null;
 };
 
 /** Describes client entities and known versions submitted for validation. */
@@ -127,6 +154,7 @@ export type SyncValidationResponse = {
   clearSelectedParentPage?: boolean;
   uncachedPageIds?: string[];
   uncachedProjectIds?: string[];
+  failedPageIds?: string[];
   stalePageIds?: string[];
   aheadPageIds?: string[];
   serverVersions?: Record<string, number>;

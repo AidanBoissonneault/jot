@@ -111,6 +111,7 @@ function initSingletons(env: WorkerEnv): void {
   const dbHelpers = createProjectDatabaseHelpers({
     appendLog,
     createWorkspacePage,
+    deleteManagedBlock,
     importManagedBlocks: (store, page, blocks) =>
       workerNotionOperations.importManagedBlocks(store, page, blocks),
     isNotionObjectNotFound,
@@ -119,6 +120,7 @@ function initSingletons(env: WorkerEnv): void {
     notionRequest,
     replaceManagedBlocks,
     tiptapDocumentToNotionBlocks,
+    updateManagedBlock,
   });
   archiveThreadToggle = dbHelpers.archiveThreadToggle;
   ensureProjectDatabase = dbHelpers.ensureProjectDatabase;

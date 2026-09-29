@@ -1,15 +1,28 @@
 import type { DocumentContent, Project, ProjectPage } from '@/src/types/capture';
 import { idbGet, idbSet } from '@/src/services/idbStore';
-import type { SyncBlockOperation as BlockSyncOp } from '@/src/types/sync';
+import { normalizeInkwellBlockIds } from '@/src/extensions/inkwellBlockIds';
+import type {
+  SyncBlockOperation as BlockSyncOp,
+  SyncBlockDeliveryConflict,
+} from '@/src/types/sync';
+import type { SyncConflictDiff } from '@/src/types/sync';
 export type { BlockSyncOp };
 
 const PENDING_SYNC_OPS_KEY = 'pending_sync_ops';
 const PENDING_PROJECT_SYNC_EVENTS_KEY = 'pending_project_sync_events';
+const PROJECT_SYNC_CONFLICT_BACKUPS_KEY = 'project_sync_conflict_backups';
 const SYNC_SEQUENCE_KEY = 'pending_sync_sequence';
 const LOCAL_SYNC_VERSIONS_KEY = 'local_sync_versions';
 const INKWELL_BLOCK_ID_ATTR = 'inkwellBlockId';
 const queueChangeListeners = new Set<() => void>();
 let queueMutation = Promise.resolve();
+
+export type ProjectSyncBlock = {
+  code: 'unmapped_notion_content';
+  message: string;
+  blockedAt: string;
+  diff?: SyncConflictDiff;
+};
 
 export type ProjectUpsertSyncEvent = {
   eventId: string;
@@ -17,6 +30,7 @@ export type ProjectUpsertSyncEvent = {
   projectId: string;
   sequence: number;
   createdAt: string;
+  deliveryBlocked?: ProjectSyncBlock;
   payload: {
     project: Project;
     selectedParentPageId?: string;
@@ -29,6 +43,7 @@ export type ProjectSourceSyncEvent = {
   projectId: string;
   sequence: number;
   createdAt: string;
+  deliveryBlocked?: ProjectSyncBlock;
   payload: {
     project: Omit<Project, 'stateContent'>;
     blockId: string;
@@ -39,6 +54,13 @@ export type ProjectSourceSyncEvent = {
 
 export type ProjectSyncEvent = ProjectUpsertSyncEvent | ProjectSourceSyncEvent;
 
+type ProjectSyncConflictBackup = {
+  backupId: string;
+  projectId: string;
+  capturedAt: string;
+  events: ProjectSyncEvent[];
+};
+
 export async function addPendingSyncOps(ops: Omit<BlockSyncOp, 'opId' | 'sequence' | 'createdAt' | 'localVersion'>[]): Promise<BlockSyncOp[]> {
   if (!ops.length) return [];
 
@@ -47,8 +69,12 @@ export async function addPendingSyncOps(ops: Omit<BlockSyncOp, 'opId' | 'sequenc
     const localVersions = await nextLocalVersions(ops.map((op) => op.pageId));
     let sequence = await nextSequence(ops.length);
     const now = new Date().toISOString();
+    const blockedByPage = new Map(
+      pending.filter((op) => op.deliveryBlocked).map((op) => [op.pageId, op.deliveryBlocked!]),
+    );
     const created = ops.map((op, index) => ({
       ...op,
+      ...(blockedByPage.has(op.pageId) ? { deliveryBlocked: blockedByPage.get(op.pageId) } : {}),
       opId: crypto.randomUUID(),
       sequence: sequence++,
       createdAt: now,
@@ -99,12 +125,16 @@ export async function addPendingProjectSyncEvent(
   return mutateQueue(async () => {
     const pending = await readPendingProjectSyncEvents();
     const sequence = await nextSequence(1);
+    const deliveryBlocked = pending.find(
+      (queued) => queued.projectId === project.id && queued.deliveryBlocked,
+    )?.deliveryBlocked;
     const event: ProjectSyncEvent = {
       eventId: crypto.randomUUID(),
       type: project.status === 'archived' ? 'project_archive' : 'project_upsert',
       projectId: project.id,
       sequence,
       createdAt: new Date().toISOString(),
+      ...(deliveryBlocked ? { deliveryBlocked } : {}),
       payload: { project, selectedParentPageId },
     };
     const compacted = pending.filter((queued) => queued.projectId !== project.id);
@@ -119,6 +149,11 @@ export async function listPendingProjectSyncEvents(): Promise<ProjectSyncEvent[]
   return readPendingProjectSyncEvents();
 }
 
+export async function listBlockedProjectSyncIds(): Promise<string[]> {
+  const events = await listPendingProjectSyncEvents();
+  return [...new Set(events.filter((event) => event.deliveryBlocked).map((event) => event.projectId))];
+}
+
 export async function removePendingProjectSyncEvents(eventIds: string[]): Promise<void> {
   if (!eventIds.length) return;
   await mutateQueue(async () => {
@@ -130,6 +165,299 @@ export async function removePendingProjectSyncEvents(eventIds: string[]): Promis
     );
     notifyQueueChanged();
   });
+}
+
+export async function blockPendingProjectSyncEvents(
+  projectId: string,
+  block: Omit<ProjectSyncBlock, 'blockedAt'>,
+): Promise<void> {
+  await mutateQueue(async () => {
+    const events = await readPendingProjectSyncEvents();
+    await idbSet(
+      PENDING_PROJECT_SYNC_EVENTS_KEY,
+      events.map((event) => event.projectId === projectId
+        ? { ...event, deliveryBlocked: { ...block, blockedAt: new Date().toISOString() } }
+        : event),
+    );
+    notifyQueueChanged();
+  });
+}
+
+export async function blockPendingSyncOps(
+  pageId: string,
+  block: SyncBlockDeliveryConflict,
+): Promise<void> {
+  await mutateQueue(async () => {
+    const ops = await readPendingSyncOps();
+    await idbSet(PENDING_SYNC_OPS_KEY, ops.map((op) => op.pageId === pageId
+      ? { ...op, deliveryBlocked: block }
+      : op));
+    notifyQueueChanged();
+  });
+}
+
+export async function unblockPendingSyncOps(): Promise<void> {
+  await mutateQueue(async () => {
+    const ops = await readPendingSyncOps();
+    await idbSet(PENDING_SYNC_OPS_KEY, ops.map((op) => {
+      if (!op.deliveryBlocked) return op;
+      const { deliveryBlocked: _deliveryBlocked, ...unblocked } = op;
+      return unblocked;
+    }));
+    notifyQueueChanged();
+  });
+}
+
+/** Retries blocked project events when the user explicitly requests a resync. */
+export async function unblockPendingProjectSyncEvents(): Promise<void> {
+  await mutateQueue(async () => {
+    const events = await readPendingProjectSyncEvents();
+    const next = events.map((event) => {
+      if (!event.deliveryBlocked) return event;
+      const { deliveryBlocked: _deliveryBlocked, ...unblocked } = event;
+      return unblocked;
+    });
+    await idbSet(PENDING_PROJECT_SYNC_EVENTS_KEY, next);
+    notifyQueueChanged();
+  });
+}
+
+/** Persists a user-merged project snapshot and replaces its blocked queue with a deliverable event. */
+export async function resolveBlockedProjectSyncEvent(
+  project: Project,
+  persistProject: (project: Project) => Promise<void>,
+  selectedParentPageId?: string,
+): Promise<boolean> {
+  return mutateQueue(async () => {
+    const pending = await readPendingProjectSyncEvents();
+    const events = pending.filter((event) => event.projectId === project.id);
+    const hasBlockedConflict = events.some((event) => event.deliveryBlocked);
+    const hasPendingReviewedMerge = events.some((event) =>
+      event.type !== 'project_source_upsert' &&
+      event.payload.project.stateContent?.attrs?.inkwellConflictResolution === true,
+    );
+    if (!hasBlockedConflict && !hasPendingReviewedMerge) return false;
+
+    const backups = (await idbGet<ProjectSyncConflictBackup[]>(PROJECT_SYNC_CONFLICT_BACKUPS_KEY)) ?? [];
+    const backedUpEventIds = new Set(backups.flatMap((backup) => backup.events.map((event) => event.eventId)));
+    const unbackedEvents = events.filter((event) =>
+      (event.deliveryBlocked || !hasPendingReviewedMerge) &&
+      !backedUpEventIds.has(event.eventId),
+    );
+    if (unbackedEvents.length) {
+      await idbSet(PROJECT_SYNC_CONFLICT_BACKUPS_KEY, [
+        ...backups,
+        {
+          backupId: crypto.randomUUID(),
+          projectId: project.id,
+          capturedAt: new Date().toISOString(),
+          events: unbackedEvents,
+        },
+      ]);
+    }
+
+    await persistProject(project);
+    const sequence = await nextSequence(1);
+    const replacement: ProjectUpsertSyncEvent = {
+      eventId: crypto.randomUUID(),
+      type: project.status === 'archived' ? 'project_archive' : 'project_upsert',
+      projectId: project.id,
+      sequence,
+      createdAt: new Date().toISOString(),
+      payload: { project, selectedParentPageId: selectedParentPageId ?? events.at(-1)?.payload.selectedParentPageId },
+    };
+    await idbSet(
+      PENDING_PROJECT_SYNC_EVENTS_KEY,
+      [...pending.filter((event) => event.projectId !== project.id), replacement]
+        .sort((first, second) => first.sequence - second.sequence),
+    );
+    notifyQueueChanged();
+    return true;
+  });
+}
+
+/** Merges blocked local project content with a reloaded remote snapshot and retains the original queue. */
+export async function rebaseBlockedProjectSyncEvents(
+  remoteProjects: Project[],
+  localProjects: Project[],
+  persistMergedProjects: (projects: Project[]) => Promise<void>,
+  selectedParentPageId?: string,
+): Promise<Project[]> {
+  return mutateQueue(async () => {
+    const pending = ((await idbGet<ProjectSyncEvent[]>(PENDING_PROJECT_SYNC_EVENTS_KEY)) ?? [])
+      .slice()
+      .sort((first, second) => first.sequence - second.sequence);
+    const projectsById = new Map<string, Project>();
+    for (const project of remoteProjects) projectsById.set(project.id, project);
+    const localProjectsById = new Map<string, Project>();
+    for (const project of localProjects) localProjectsById.set(project.id, project);
+    const blockedProjectIds = [...new Set(
+      pending
+        .filter((event) => event.deliveryBlocked)
+        .map((event) => event.projectId),
+    )];
+
+    if (!blockedProjectIds.length) return [];
+
+    const backups = (await idbGet<ProjectSyncConflictBackup[]>(PROJECT_SYNC_CONFLICT_BACKUPS_KEY)) ?? [];
+    const backedUpEventIds = new Set(backups.flatMap((backup) => backup.events.map((event) => event.eventId)));
+    const now = new Date().toISOString();
+    const updatedBackups = [...backups];
+    const replacements: ProjectSyncEvent[] = [];
+    let sequence = await nextSequence(blockedProjectIds.length);
+
+    for (const projectId of blockedProjectIds) {
+      const events = pending.filter((event) => event.projectId === projectId);
+      const remoteProject = projectsById.get(projectId);
+      const fullEventSnapshots = events
+        .filter((event) => event.type !== 'project_source_upsert')
+        .map((event) => event.payload.project as Project);
+
+      const localSnapshots = [
+        localProjectsById.get(projectId),
+        ...fullEventSnapshots,
+      ].filter((project): project is Project => Boolean(project));
+      localSnapshots.sort(
+        (first, second) => projectUpdatedAt(first) - projectUpdatedAt(second),
+      );
+      const sourceProject = events.slice().reverse().find(
+        (event): event is ProjectSourceSyncEvent => event.type === 'project_source_upsert',
+      )?.payload.project;
+      const localProject = localSnapshots.at(-1) ?? (sourceProject
+        ? { ...sourceProject, stateContent: { type: 'doc', content: [] } }
+        : undefined);
+      const baseProject = remoteProject ?? localProject;
+      if (!baseProject) continue;
+      const mergedProject = mergeReloadedProject(
+        baseProject,
+        localProject,
+        events,
+        Boolean(remoteProject),
+      );
+
+      const unbackedEvents = events.filter((event) => !backedUpEventIds.has(event.eventId));
+      if (unbackedEvents.length) {
+        updatedBackups.push({
+          backupId: crypto.randomUUID(),
+          projectId,
+          capturedAt: now,
+          events: unbackedEvents,
+        });
+      }
+
+      const latestEvent = events.at(-1);
+      replacements.push({
+        eventId: crypto.randomUUID(),
+        type: mergedProject.status === 'archived' ? 'project_archive' : 'project_upsert',
+        projectId,
+        sequence: sequence++,
+        createdAt: now,
+        payload: {
+          project: mergedProject,
+          selectedParentPageId: latestEvent?.payload.selectedParentPageId ?? selectedParentPageId,
+        },
+      });
+    }
+
+    const rebasedProjectIds = new Set(replacements.map((event) => event.projectId));
+    const mergedProjects = replacements.map((event) => event.payload.project as Project);
+    await idbSet(PROJECT_SYNC_CONFLICT_BACKUPS_KEY, updatedBackups);
+    // Keep the merged content in primary local storage before making its queue
+    // event deliverable. If the extension closes here, the original blocked
+    // event and its backup remain durable.
+    await persistMergedProjects(mergedProjects);
+    const nextPending = pending.filter((event) => !rebasedProjectIds.has(event.projectId));
+    await idbSet(
+      PENDING_PROJECT_SYNC_EVENTS_KEY,
+      [...nextPending, ...replacements].sort((first, second) => first.sequence - second.sequence),
+    );
+    notifyQueueChanged();
+    return mergedProjects;
+  });
+}
+
+function projectUpdatedAt(project: Project): number {
+  const timestamp = Date.parse(project.updatedAt);
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function mergeReloadedProject(
+  remoteProject: Project,
+  localProject: Project | undefined,
+  events: ProjectSyncEvent[],
+  hasRemoteProject: boolean,
+): Project {
+  const remoteBlocks = remoteProject.stateContent?.content ?? [];
+  const mergedBlocks = [...remoteBlocks];
+  const blockCounts = countProjectStateBlocks(mergedBlocks);
+
+  const appendMissingBlocks = (candidateBlocks: DocumentContent[]) => {
+    const requiredCounts = countProjectStateBlocks(candidateBlocks);
+    for (const block of candidateBlocks) {
+      const signature = projectStateBlockSignature(block);
+      const present = blockCounts.get(signature) ?? 0;
+      if (present >= (requiredCounts.get(signature) ?? 0)) continue;
+      mergedBlocks.push(block);
+      blockCounts.set(signature, present + 1);
+    }
+  };
+
+  appendMissingBlocks(localProject?.stateContent?.content ?? []);
+  // Include source-only events too, including queues left behind by a relog.
+  for (const event of events) {
+    if (event.type === 'project_source_upsert') {
+      appendMissingBlocks([event.payload.block]);
+    }
+  }
+
+  const localMetadata = localProject
+    ? (() => {
+        const {
+          stateContent: _stateContent,
+          stateRemoteRevision: _stateRemoteRevision,
+          syncMessage: _syncMessage,
+          syncState: _syncState,
+          ...metadata
+        } = localProject;
+        return metadata;
+      })()
+    : {};
+
+  return {
+    ...remoteProject,
+    ...localMetadata,
+    stateRemoteRevision: hasRemoteProject ? remoteProject.stateRemoteRevision : undefined,
+    stateContent: normalizeInkwellBlockIds({
+      type: remoteProject.stateContent?.type ?? localProject?.stateContent?.type ?? 'doc',
+      content: mergedBlocks,
+    }),
+    syncState: 'saving',
+    syncMessage: undefined,
+  };
+}
+
+function countProjectStateBlocks(blocks: DocumentContent[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const block of blocks) {
+    const signature = projectStateBlockSignature(block);
+    counts.set(signature, (counts.get(signature) ?? 0) + 1);
+  }
+  return counts;
+}
+
+function projectStateBlockSignature(block: DocumentContent): string {
+  return JSON.stringify(withoutInkwellBlockIds(block));
+}
+
+function withoutInkwellBlockIds(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(withoutInkwellBlockIds);
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([key]) => key !== INKWELL_BLOCK_ID_ATTR)
+      .sort(([first], [second]) => first.localeCompare(second))
+      .map(([key, nested]) => [key, withoutInkwellBlockIds(nested)]),
+  );
 }
 
 export async function pendingSyncEventCount(): Promise<number> {
@@ -270,6 +598,9 @@ export async function addPendingProjectSourceSyncEvent(
   return mutateQueue(async () => {
     const pending = await readPendingProjectSyncEvents();
     const sequence = await nextSequence(1);
+    const deliveryBlocked = pending.find(
+      (queued) => queued.projectId === project.id && queued.deliveryBlocked,
+    )?.deliveryBlocked;
     const { stateContent: _stateContent, ...projectContext } = project;
     const event: ProjectSourceSyncEvent = {
       eventId: crypto.randomUUID(),
@@ -277,6 +608,7 @@ export async function addPendingProjectSourceSyncEvent(
       projectId: project.id,
       sequence,
       createdAt: new Date().toISOString(),
+      ...(deliveryBlocked ? { deliveryBlocked } : {}),
       payload: {
         project: projectContext,
         blockId,

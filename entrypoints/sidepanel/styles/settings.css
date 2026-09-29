@@ -258,3 +258,127 @@
 .modal p {
   overflow-wrap: anywhere;
 }
+
+.sync-conflict-backdrop {
+  z-index: 1000;
+}
+
+.sync-conflict-modal {
+  width: min(100%, 760px);
+  max-height: min(90vh, 900px);
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  overflow: hidden;
+}
+
+.sync-conflict-modal.has-error {
+  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+}
+
+.sync-conflict-modal > p {
+  line-height: 1.4;
+}
+
+.sync-conflict-modal > .sync-conflict-error {
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--inkwell-warning-border, #e8b95c);
+  border-radius: var(--inkwell-radius);
+  background: var(--inkwell-warning-surface, #fff8e7);
+  color: var(--inkwell-text);
+  overflow-wrap: anywhere;
+}
+
+.sync-conflict-rows {
+  display: grid;
+  align-content: start;
+  gap: 9px;
+  min-height: 0;
+  overflow: auto;
+  padding: 2px;
+}
+
+.sync-conflict-row {
+  display: grid;
+  gap: 8px;
+  padding: 9px;
+  border: 1px solid var(--inkwell-border);
+  border-radius: var(--inkwell-radius);
+  background: var(--inkwell-surface-muted);
+}
+
+.sync-conflict-blocks {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.sync-conflict-side {
+  min-width: 0;
+}
+
+.sync-conflict-side strong {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--inkwell-text-muted);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+}
+
+.sync-conflict-side pre {
+  max-height: 140px;
+  margin: 0;
+  overflow: auto;
+  padding: 7px;
+  border-radius: 6px;
+  background: var(--inkwell-surface);
+  color: var(--inkwell-text);
+  font: 0.78rem/1.4 ui-monospace, SFMono-Regular, Consolas, monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.sync-conflict-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px 14px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  font-size: 0.8rem;
+}
+
+.sync-conflict-choices legend {
+  margin-bottom: 5px;
+  font-weight: 750;
+}
+
+.sync-conflict-choices label,
+.sync-conflict-keep-remote,
+.sync-conflict-acknowledge {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.sync-conflict-warning {
+  display: grid;
+  gap: 9px;
+  padding: 10px;
+  border: 1px solid var(--inkwell-warning-border, #e8b95c);
+  border-radius: var(--inkwell-radius);
+  background: var(--inkwell-warning-surface, #fff8e7);
+  color: var(--inkwell-text);
+  font-size: 0.82rem;
+}
+
+.sync-conflict-modal .modal-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+@media (max-width: 420px) {
+  .sync-conflict-blocks {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

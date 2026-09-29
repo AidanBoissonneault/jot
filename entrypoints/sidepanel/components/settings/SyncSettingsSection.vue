@@ -11,6 +11,7 @@ const {
   saveLabel,
   accountLabel,
   parentPageLabel,
+  isResyncing,
   resync,
   hasAcceptedLegalTerms,
   isLegalAcceptanceLoaded,
@@ -44,11 +45,13 @@ const statusItems = computed(() => [
         v-if="store.syncConfig.connected"
         type="button"
         class="icon-label-button secondary-button"
-        title="Resync"
-        aria-label="Resync"
+        :disabled="isResyncing"
+        :title="isResyncing ? 'Syncing with Notion' : 'Resync'"
+        :aria-label="isResyncing ? 'Syncing with Notion' : 'Resync'"
+        :aria-busy="isResyncing"
         @click="resync"
       >
-        <font-awesome-icon :icon="['fas', 'rotate']" fixed-width />
+        <font-awesome-icon :icon="['fas', 'rotate']" :class="{ 'sync-rotating-icon': isResyncing }" fixed-width />
         <span>Resync</span>
       </button>
     </div>

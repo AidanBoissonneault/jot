@@ -21,6 +21,7 @@ import type {
   SourceOpenPayload,
 } from '@/src/types/messages';
 import { normalizeCodeLanguage } from '@/src/lib/codeLanguages';
+import { pruneOrphanedProjectStateSources } from '@/src/lib/projectStateSources';
 import type {
   CreateNotionPageResponse,
   ListNotionPagesResponse,
@@ -30,6 +31,8 @@ import type {
   SyncEventMessage,
   SyncPageResponse,
   SyncProjectResponse,
+  SyncConflictDiff,
+  SyncContentConflict,
   SyncReloadResponse,
   SyncSessionResponse,
   SyncValidationResponse,
@@ -39,14 +42,21 @@ import {
   addPendingProjectSyncEvent,
   addPendingProjectSourceSyncEvent,
   addPendingSyncOps,
+  blockPendingProjectSyncEvents,
+  blockPendingSyncOps,
   buildPageSyncOps,
   compactStoredPendingSyncOps,
   listPendingProjectSyncEvents,
+  listBlockedProjectSyncIds,
   listPendingSyncOps,
   pendingSyncEventCount as queuedSyncEventCount,
   removePendingProjectSyncEvents,
   removePendingSyncOps,
+  resolveBlockedProjectSyncEvent,
+  unblockPendingProjectSyncEvents,
+  unblockPendingSyncOps,
   type BlockSyncOp,
+  type ProjectSyncEvent,
 } from '@/src/services/syncQueue';
 
 type InkwellStorage = {
@@ -104,11 +114,15 @@ const defaultProjects: Project[] = [
 
 const waitForStub = () => new Promise((resolve) => setTimeout(resolve, 80));
 const LOCAL_QUEUE_DELIVERY_DELAY_MS = 10_000;
+const MAX_QUEUE_RETRY_DELAY_MS = 5 * 60_000;
 const pendingTempPageSaves = new Map<string, ProjectPage>();
 const projectReconciliations = new Map<string, Promise<string>>();
+const inFlightProjectSyncRequests = new Map<string, Promise<SyncProjectResponse>>();
 let queueDeliveryPromise: Promise<void> | undefined;
 let queueDeliveryTimer: ReturnType<typeof setTimeout> | undefined;
 let forcedQueueDeliveryPromise: Promise<void> | undefined;
+let queueDeliveryRetryAttempt = 0;
+let queueDeliveryRetryDelayMs = 0;
 
 function emptyDocument(): DocumentContent {
   return normalizeInkwellBlockIds({
@@ -413,6 +427,39 @@ async function writeStorage(storage: Partial<InkwellStorage>) {
   await idbSetMany(storage as Record<string, unknown>);
 }
 
+async function persistRebasedProjectSnapshots(
+  snapshots: Project[],
+  pagesToPreserve: ProjectPage[] = [],
+): Promise<void> {
+  const storage = await readStorage();
+  const snapshotById = new Map(snapshots.map((project) => [project.id, project]));
+  const projects = storage.projects.map((project) => snapshotById.get(project.id) ?? project);
+  const projectIds = new Set(projects.map((project) => project.id));
+  for (const snapshot of snapshots) {
+    if (!projectIds.has(snapshot.id)) projects.push(snapshot);
+  }
+
+  const pagesById = new Map(storage.pages.map((page) => [page.id, page]));
+  for (const page of pagesToPreserve) pagesById.set(page.id, page);
+  const pages = [...pagesById.values()];
+  const activePageIdsByProject = createCompatibleActivePageIds(
+    projects,
+    pages,
+    storage.activePageIdsByProject,
+  );
+  const activeProjects = projects.filter((project) => project.status !== 'archived');
+  const currentProjectId = activeProjects.some((project) => project.id === storage.currentProjectId)
+    ? storage.currentProjectId
+    : activeProjects[0]?.id ?? '';
+
+  await writeStorage({
+    activePageIdsByProject,
+    currentProjectId,
+    pages,
+    projects: projects.sort(sortProjectsByUpdatedDesc),
+  });
+}
+
 function appendContent(page: ProjectPage, content: DocumentContent[]): ProjectPage {
   const existingContent = page.content.content ?? [];
 
@@ -449,6 +496,11 @@ async function syncProject(project: Project): Promise<Project | undefined> {
     project,
     syncConfig.selectedParentPageId,
   );
+
+  if (queuedEvent.deliveryBlocked) {
+    return withProjectSyncStatus(project, 'error', queuedEvent.deliveryBlocked.message);
+  }
+
   triggerQueueDelivery();
 
   if (!syncConfig.connected || isBrowserOffline()) {
@@ -462,13 +514,7 @@ async function syncProject(project: Project): Promise<Project | undefined> {
   }
 
   try {
-    const response = await requestServer<SyncProjectResponse>('/sync/project', {
-      method: 'POST',
-      body: JSON.stringify({
-        project,
-        selectedParentPageId: syncConfig.selectedParentPageId,
-      }),
-    }, syncConfig);
+    const response = await requestQueuedProjectSync(queuedEvent, syncConfig);
 
     if (response.parentPage) {
       await updateStoredSyncConfig({
@@ -482,8 +528,22 @@ async function syncProject(project: Project): Promise<Project | undefined> {
     }
 
     await removePendingProjectSyncEvents([queuedEvent.eventId]);
+    await clearProjectConflictResolutionMarkers(project.id);
+    resetQueueDeliveryBackoff();
     return response.project ?? withProjectSyncStatus(project, 'saved');
-  } catch {
+  } catch (error) {
+    if (isUnmappedContentConflict(error)) {
+      await blockPendingProjectSyncEvents(project.id, {
+        code: 'unmapped_notion_content',
+        message: error.message,
+        ...(error.diff ? { diff: { ...error.diff, localContent: project.stateContent } } : {}),
+      });
+      return withProjectSyncStatus(project, 'error', error.message);
+    }
+
+    recordQueueDeliveryFailure(error);
+    scheduleNextQueueDelivery(queueDeliveryRetryDelayMs);
+
     return withProjectSyncStatus(
       project,
       'stale',
@@ -505,6 +565,11 @@ async function syncProjectSource(
     block,
     syncConfig.selectedParentPageId,
   );
+
+  if (queuedEvent.deliveryBlocked) {
+    return withProjectSyncStatus(project, 'error', queuedEvent.deliveryBlocked.message);
+  }
+
   triggerQueueDelivery();
 
   if (!syncConfig.connected || isBrowserOffline()) {
@@ -518,16 +583,27 @@ async function syncProjectSource(
   }
 
   try {
-    const response = await requestServer<SyncProjectResponse>('/sync/project/source', {
-      method: 'POST',
-      body: JSON.stringify(queuedEvent.payload),
-    }, syncConfig);
+    const response = await requestQueuedProjectSync(queuedEvent, syncConfig);
     if (response.status === 'error') {
       throw new Error(response.message ?? 'Unable to sync this source.');
     }
     await removePendingProjectSyncEvents([queuedEvent.eventId]);
+    await clearProjectConflictResolutionMarkers(project.id);
+    resetQueueDeliveryBackoff();
     return withProjectSyncStatus(project, 'saved');
-  } catch {
+  } catch (error) {
+    if (isUnmappedContentConflict(error)) {
+      await blockPendingProjectSyncEvents(project.id, {
+        code: 'unmapped_notion_content',
+        message: error.message,
+        ...(error.diff ? { diff: { ...error.diff, localContent: project.stateContent } } : {}),
+      });
+      return withProjectSyncStatus(project, 'error', error.message);
+    }
+
+    recordQueueDeliveryFailure(error);
+    scheduleNextQueueDelivery(queueDeliveryRetryDelayMs);
+
     return withProjectSyncStatus(
       project,
       'stale',
@@ -632,6 +708,32 @@ function isBrowserOffline() {
   return typeof navigator !== 'undefined' && navigator.onLine === false;
 }
 
+function collectInkwellBlockIds(content: DocumentContent, ids: Set<string>): void {
+  const value = content.attrs?.inkwellBlockId;
+  if (typeof value === 'string' && value) ids.add(value);
+  for (const child of content.content ?? []) collectInkwellBlockIds(child, ids);
+}
+
+class SyncServerError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly code?: string,
+    readonly retryAfterMs?: number,
+    readonly diff?: SyncConflictDiff,
+  ) {
+    super(message);
+    this.name = 'SyncServerError';
+  }
+}
+
+function isUnmappedContentConflict(error: unknown): error is SyncServerError {
+  return error instanceof SyncServerError && (
+    error.code === 'unmapped_notion_content' ||
+    error.message.includes('Notion and local content differ in blocks that could not be matched')
+  );
+}
+
 async function requestServer<T>(
   path: string,
   init?: RequestInit,
@@ -649,15 +751,73 @@ async function requestServer<T>(
   });
 
   const payload = (await response.json().catch(() => ({}))) as T & {
+    code?: string;
+    diff?: SyncConflictDiff;
     error?: string;
     message?: string;
   };
 
-  if (!response.ok) {
-    throw new Error(payload.message ?? payload.error ?? `Sync server returned ${response.status}.`);
+  // Content conflicts are expected sync outcomes handled by the merge UI.
+  // Interpret their JSON code without returning an HTTP error to the browser.
+  if (!response.ok || payload.code === 'unmapped_notion_content') {
+    throw new SyncServerError(
+      payload.message ?? payload.error ?? `Sync server returned ${response.status}.`,
+      response.status,
+      payload.code,
+      parseRetryAfter(response.headers.get('retry-after')),
+      payload.diff,
+    );
   }
 
   return payload;
+}
+
+function parseRetryAfter(value: string | null): number | undefined {
+  if (!value) return undefined;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? Math.max(0, timestamp - Date.now()) : undefined;
+}
+
+function requestQueuedProjectSync(
+  event: ProjectSyncEvent,
+  syncConfig: SyncConfig,
+): Promise<SyncProjectResponse> {
+  const existing = inFlightProjectSyncRequests.get(event.eventId);
+  if (existing) return existing;
+
+  const isSourceEvent = event.type === 'project_source_upsert';
+  let request: Promise<SyncProjectResponse>;
+  request = requestServer<SyncProjectResponse>(
+    isSourceEvent ? '/sync/project/source' : '/sync/project',
+    { method: 'POST', body: JSON.stringify(event.payload) },
+    syncConfig,
+  ).finally(() => {
+    if (inFlightProjectSyncRequests.get(event.eventId) === request) {
+      inFlightProjectSyncRequests.delete(event.eventId);
+    }
+  });
+  inFlightProjectSyncRequests.set(event.eventId, request);
+  return request;
+}
+
+function recordQueueDeliveryFailure(error: unknown): void {
+  queueDeliveryRetryAttempt += 1;
+  const exponentialDelay = Math.min(
+    LOCAL_QUEUE_DELIVERY_DELAY_MS * (2 ** Math.min(queueDeliveryRetryAttempt - 1, 5)),
+    MAX_QUEUE_RETRY_DELAY_MS,
+  );
+  const serverDelay = error instanceof SyncServerError ? error.retryAfterMs ?? 0 : 0;
+  queueDeliveryRetryDelayMs = Math.min(
+    Math.max(exponentialDelay, serverDelay),
+    MAX_QUEUE_RETRY_DELAY_MS,
+  );
+}
+
+function resetQueueDeliveryBackoff(): void {
+  queueDeliveryRetryAttempt = 0;
+  queueDeliveryRetryDelayMs = 0;
 }
 
 async function pendingLocalWorkCount(): Promise<number> {
@@ -840,25 +1000,40 @@ async function enqueuePageSync(
 
 function triggerQueueDelivery(): void {
   if (queueDeliveryPromise) return;
-  scheduleNextQueueDelivery(LOCAL_QUEUE_DELIVERY_DELAY_MS);
+  scheduleNextQueueDelivery(Math.max(
+    LOCAL_QUEUE_DELIVERY_DELAY_MS,
+    queueDeliveryRetryDelayMs,
+  ));
 }
 
 function runQueueDelivery(): void {
   if (queueDeliveryPromise || forcedQueueDeliveryPromise) return;
-  queueDeliveryPromise = deliverPendingSyncOps({ force: false })
-    .catch(() => {
-      scheduleNextQueueDelivery(LOCAL_QUEUE_DELIVERY_DELAY_MS);
-    })
-    .finally(() => {
-      queueDeliveryPromise = undefined;
-      void scheduleQueueDeliveryIfNeeded();
-    });
+  const delivery = deliverPendingSyncOps({ force: false }).catch((error) => {
+    recordQueueDeliveryFailure(error);
+    throw error;
+  });
+  queueDeliveryPromise = delivery;
+  void delivery.finally(() => {
+    if (queueDeliveryPromise === delivery) queueDeliveryPromise = undefined;
+    void scheduleQueueDeliveryIfNeeded();
+  }).catch(() => undefined);
 }
 
 async function scheduleQueueDeliveryIfNeeded(): Promise<void> {
-  const { syncConfig } = await readStorage();
-  if (syncConfig.connected && !isBrowserOffline() && await pendingLocalWorkCount()) {
-    scheduleNextQueueDelivery(LOCAL_QUEUE_DELIVERY_DELAY_MS);
+  const [{ syncConfig, pages }, pendingOps, projectEvents] = await Promise.all([
+    readStorage(),
+    listPendingSyncOps(),
+    listPendingProjectSyncEvents(),
+  ]);
+  const hasDeliverableWork = pendingOps.some((op) => !op.deliveryBlocked) ||
+    projectEvents.some((event) => !event.deliveryBlocked) ||
+    pages.some((page) => countPendingLocalMedia(page.content) > 0);
+
+  if (syncConfig.connected && !isBrowserOffline() && hasDeliverableWork) {
+    scheduleNextQueueDelivery(Math.max(
+      LOCAL_QUEUE_DELIVERY_DELAY_MS,
+      queueDeliveryRetryDelayMs,
+    ));
   }
 }
 
@@ -908,6 +1083,7 @@ export async function applySyncResult(event: SyncEventMessage): Promise<ProjectP
             : {}),
           syncState: 'saved' as const,
           syncMessage: undefined,
+          content: stripConflictResolutionMarkers(page.content),
         }
       : withSyncStatus(page, 'error', 'Notion sync failed. Will retry.');
 
@@ -1215,20 +1391,22 @@ async function flushPendingSyncOps(options: { force?: boolean } = {}): Promise<v
       return forcedQueueDeliveryPromise;
     }
 
-    forcedQueueDeliveryPromise = (async () => {
+    const delivery = (async () => {
       if (queueDeliveryPromise) {
         await queueDeliveryPromise;
       }
-      await deliverPendingSyncOps({ force: true });
-    })()
-      .catch((error) => {
-        scheduleNextQueueDelivery(LOCAL_QUEUE_DELIVERY_DELAY_MS);
+      try {
+        await deliverPendingSyncOps({ force: true });
+      } catch (error) {
+        recordQueueDeliveryFailure(error);
         throw error;
-      })
-      .finally(() => {
-        forcedQueueDeliveryPromise = undefined;
-        void scheduleQueueDeliveryIfNeeded();
-      });
+      }
+    })();
+    forcedQueueDeliveryPromise = delivery;
+    void delivery.finally(() => {
+      if (forcedQueueDeliveryPromise === delivery) forcedQueueDeliveryPromise = undefined;
+      void scheduleQueueDeliveryIfNeeded();
+    }).catch(() => undefined);
 
     return forcedQueueDeliveryPromise;
   }
@@ -1246,12 +1424,13 @@ async function deliverPendingSyncOps({ force }: { force: boolean }): Promise<voi
   const pending = await compactStoredPendingSyncOps();
   if (pending.length) {
     const now = Date.now();
-    const eligible = force
-      ? pending
-      : pending.filter((op) => now - Date.parse(op.createdAt) >= LOCAL_QUEUE_DELIVERY_DELAY_MS);
+    const eligible = pending.filter((op) => !op.deliveryBlocked && (
+      force || now - Date.parse(op.createdAt) >= LOCAL_QUEUE_DELIVERY_DELAY_MS
+    ));
 
     if (!eligible.length) {
-      scheduleNextQueueDelivery(msUntilOldestOpIsEligible(pending, now));
+      const deliverable = pending.filter((op) => !op.deliveryBlocked);
+      if (deliverable.length) scheduleNextQueueDelivery(msUntilOldestOpIsEligible(deliverable, now));
       return;
     }
 
@@ -1268,22 +1447,65 @@ async function deliverPendingSyncOps({ force }: { force: boolean }): Promise<voi
     throw new Error('Some local media is still waiting for a connection.');
   }
 
-  const remaining = await listPendingSyncOps();
+  const remaining = (await listPendingSyncOps()).filter((op) => !op.deliveryBlocked);
   if (remaining.length) {
     scheduleNextQueueDelivery(msUntilOldestOpIsEligible(remaining));
   }
+
+  resetQueueDeliveryBackoff();
+}
+
+function stripConflictResolutionMarkers(content: DocumentContent): DocumentContent {
+  const attrs = { ...(content.attrs ?? {}) };
+  delete attrs.inkwellConflictResolution;
+  return {
+    ...content,
+    ...(content.attrs ? { attrs } : {}),
+    ...(content.content ? { content: content.content.map(stripConflictResolutionMarkers) } : {}),
+  };
+}
+
+async function clearProjectConflictResolutionMarkers(projectId: string): Promise<void> {
+  const { projects } = await readStorage();
+  await writeStorage({
+    projects: projects.map((project) => project.id === projectId
+      ? { ...project, stateContent: stripConflictResolutionMarkers(project.stateContent) }
+      : project),
+  });
 }
 
 async function deliverPendingProjectSyncEvents(syncConfig: SyncConfig): Promise<void> {
   const events = await listPendingProjectSyncEvents();
+  const blockedProjectIds = new Set(
+    events.filter((event) => event.deliveryBlocked).map((event) => event.projectId),
+  );
 
   for (const event of events) {
+    if (blockedProjectIds.has(event.projectId)) continue;
+
     const isSourceEvent = event.type === 'project_source_upsert';
-    const response = await requestServer<SyncProjectResponse>(
-      isSourceEvent ? '/sync/project/source' : '/sync/project', {
-      method: 'POST',
-      body: JSON.stringify(event.payload),
-    }, syncConfig);
+    let response: SyncProjectResponse;
+    try {
+      response = await requestQueuedProjectSync(event, syncConfig);
+    } catch (error) {
+      if (isUnmappedContentConflict(error)) {
+        const { projects } = await readStorage();
+        const localProject = projects.find((project) => project.id === event.projectId);
+        await blockPendingProjectSyncEvents(event.projectId, {
+          code: 'unmapped_notion_content',
+          message: error.message,
+          ...(error.diff ? {
+            diff: {
+              ...error.diff,
+              localContent: localProject?.stateContent ?? error.diff.localContent,
+            },
+          } : {}),
+        });
+        blockedProjectIds.add(event.projectId);
+        continue;
+      }
+      throw error;
+    }
 
     if (response.status === 'error') {
       throw new Error(response.message ?? 'Unable to sync this project.');
@@ -1298,6 +1520,7 @@ async function deliverPendingProjectSyncEvents(syncConfig: SyncConfig): Promise<
 
     await applySyncedProject(event.payload.project, response.project, isSourceEvent);
     await removePendingProjectSyncEvents([event.eventId]);
+    await clearProjectConflictResolutionMarkers(event.projectId);
   }
 }
 
@@ -1312,7 +1535,9 @@ async function applySyncedProject(
       project.id === queuedProject.id && project.updatedAt === queuedProject.updatedAt
         ? {
             ...(responseProject ?? project),
-            ...(preserveLocalState ? { stateContent: project.stateContent } : {}),
+            ...(preserveLocalState
+              ? { stateContent: stripConflictResolutionMarkers(project.stateContent) }
+              : {}),
             syncState: 'saved' as const,
             syncMessage: undefined,
           }
@@ -1380,6 +1605,209 @@ export const notionClient = {
   flushPendingSyncOps,
   pendingSyncEventCount: pendingLocalWorkCount,
 
+  async resyncPendingChanges(): Promise<{
+    blockedMessage?: string;
+    blockedProjectCount: number;
+    conflicts: SyncContentConflict[];
+    reloadedFromNotion: boolean;
+    remainingCount: number;
+  }> {
+    const { syncConfig } = await readStorage();
+    if (!syncConfig.connected || isBrowserOffline()) {
+      throw new Error('Reconnect to Notion before resyncing. Your local changes remain saved.');
+    }
+
+    const hadPendingWork = await pendingLocalWorkCount() > 0;
+    let reloadedFromNotion = false;
+    const pageConflicts: SyncContentConflict[] = [];
+
+    // Retry blocked snapshots only from this explicit user action.
+    await unblockPendingSyncOps();
+    await unblockPendingProjectSyncEvents();
+    const workspace = await readStorage();
+    const pendingOps = await listPendingSyncOps();
+    const validation = await notionClient.validateNotionCache();
+    const pageIdsToReconcile = new Set([
+      ...pendingOps.map((op) => op.pageId),
+      ...workspace.pages.filter((page) => page.syncState === 'error').map((page) => page.id),
+      ...validation.failedPageIds,
+    ]);
+
+    for (const pageId of pageIdsToReconcile) {
+      const page = workspace.pages.find((entry) => entry.id === pageId);
+      const project = page && workspace.projects.find((entry) => entry.id === page.projectId);
+      if (!page || !project) continue;
+
+      try {
+        const response = await requestServer<SyncPageResponse>('/sync/page/resync', {
+          method: 'POST',
+          body: JSON.stringify({
+            page: { ...page, content: sanitizeMediaForSync(page.content) },
+            project,
+            selectedParentPageId: syncConfig.selectedParentPageId,
+          }),
+        }, syncConfig);
+        if (response.status === 'error') throw new Error(response.message ?? 'Unable to sync this page.');
+        if (response.page) await persistPage({
+          ...response.page,
+          content: stripConflictResolutionMarkers(response.page.content),
+        });
+        await removePendingSyncOps((await listPendingSyncOps())
+          .filter((op) => op.pageId === pageId)
+          .map((op) => op.opId));
+      } catch (error) {
+        if (!isUnmappedContentConflict(error) || !error.diff) throw error;
+        const currentOps = (await listPendingSyncOps()).filter((op) => op.pageId === pageId);
+        if (!currentOps.length) {
+          await addPendingSyncOps(buildPageSyncOps({
+            page: { ...page, content: sanitizeMediaForSync(page.content) },
+            project,
+            selectedParentPageId: syncConfig.selectedParentPageId,
+          }));
+        }
+        await blockPendingSyncOps(pageId, {
+          code: 'unmapped_notion_content',
+          message: error.message,
+          diff: { ...error.diff, localContent: page.content },
+        });
+        pageConflicts.push({
+          targetType: 'page',
+          targetId: page.id,
+          targetTitle: page.title,
+          localContent: page.content,
+          remoteContent: error.diff.remoteContent,
+        });
+        await persistPage({ ...page, syncState: 'error', syncMessage: error.message });
+      }
+    }
+
+    await flushPendingSyncOps({ force: true });
+    const projectEvents = await listPendingProjectSyncEvents();
+    const blockedEvents = projectEvents.filter((event) => event.deliveryBlocked);
+    const { pages, projects } = await readStorage();
+    const projectsById = new Map(projects.map((project) => [project.id, project]));
+    const blockIdsByProject = new Map<string, Set<string>>();
+    for (const page of pages) {
+      if (page.status === 'archived') continue;
+      const blockIds = blockIdsByProject.get(page.projectId) ?? new Set<string>();
+      collectInkwellBlockIds(page.content, blockIds);
+      blockIdsByProject.set(page.projectId, blockIds);
+    }
+    const conflicts = [...pageConflicts];
+    const uniqueBlockedEvents = [...new Map(
+      blockedEvents.map((event) => [event.projectId, event]),
+    ).values()];
+    for (const event of uniqueBlockedEvents) {
+      let project = projectsById.get(event.projectId) ??
+        (event.type === 'project_source_upsert'
+          ? { ...event.payload.project, stateContent: { type: 'doc', content: [event.payload.block] } }
+          : event.payload.project);
+      const diff = event.deliveryBlocked?.diff;
+      if (!diff) continue;
+
+      const liveBlockIds = blockIdsByProject.get(event.projectId) ?? new Set<string>();
+      const localState = project.stateContent ?? diff.localContent;
+      const localContent = pruneOrphanedProjectStateSources(localState, liveBlockIds);
+      const remoteContent = diff.remoteContent
+        ? pruneOrphanedProjectStateSources(diff.remoteContent, liveBlockIds)
+        : null;
+
+      if (localContent !== localState && projectsById.has(event.projectId)) {
+        project = { ...project, stateContent: localContent };
+        projectsById.set(project.id, project);
+        await persistRebasedProjectSnapshots([project]);
+      }
+
+      conflicts.push({
+        targetType: 'project',
+        targetId: event.projectId,
+        targetTitle: project.name,
+        localContent,
+        remoteContent,
+      });
+    }
+
+    if (!blockedEvents.length && pageConflicts.length === 0 && !hadPendingWork) {
+      await notionClient.reloadFromNotion({ force: true });
+      reloadedFromNotion = true;
+    }
+
+    return {
+      blockedMessage: blockedEvents[0]?.deliveryBlocked?.message,
+      blockedProjectCount: new Set(blockedEvents.map((event) => event.projectId)).size,
+      conflicts: [...pageConflicts, ...conflicts],
+      reloadedFromNotion,
+      remainingCount: await pendingLocalWorkCount(),
+    };
+  },
+
+  async resolveSyncConflict(
+    targetType: 'page' | 'project',
+    targetId: string,
+    content: DocumentContent,
+  ): Promise<void> {
+    const storage = await readStorage();
+    const { projects, syncConfig } = storage;
+    if (targetType === 'page') {
+      const page = storage.pages.find((entry) => entry.id === targetId);
+      const project = page && projects.find((entry) => entry.id === page.projectId);
+      if (!page || !project) throw new Error('This page is no longer available.');
+      const mergedPage = {
+        ...page,
+        content: normalizeInkwellBlockIds(content),
+        updatedAt: new Date().toISOString(),
+        syncState: 'saving' as const,
+        syncMessage: undefined,
+      };
+      const response = await requestServer<SyncPageResponse>('/sync/page/resync', {
+        method: 'POST',
+        body: JSON.stringify({
+          page: { ...mergedPage, content: sanitizeMediaForSync(mergedPage.content) },
+          project,
+          selectedParentPageId: syncConfig.selectedParentPageId,
+        }),
+      }, syncConfig);
+      if (response.status === 'error') throw new Error(response.message ?? 'Unable to sync the merged page.');
+      await removePendingSyncOps((await listPendingSyncOps())
+        .filter((op) => op.pageId === targetId)
+        .map((op) => op.opId));
+      const syncedPage = response.page ?? mergedPage;
+      await persistPage({ ...syncedPage, content: stripConflictResolutionMarkers(syncedPage.content) });
+      return;
+    }
+
+    const project = projects.find((entry) => entry.id === targetId);
+    if (!project) throw new Error('This project is no longer available.');
+    const mergedProject: Project = {
+      ...project,
+      stateContent: normalizeInkwellBlockIds(content),
+      updatedAt: new Date().toISOString(),
+      syncState: 'saving',
+      syncMessage: undefined,
+    };
+    const replaced = await resolveBlockedProjectSyncEvent(
+      mergedProject,
+      async (snapshot) => persistRebasedProjectSnapshots([snapshot]),
+      syncConfig.selectedParentPageId,
+    );
+    if (!replaced) throw new Error('This sync conflict has already been resolved.');
+    triggerQueueDelivery();
+    try {
+      await flushPendingSyncOps({ force: true });
+    } catch (error) {
+      // Project delivery runs before unrelated page and media queue work. If
+      // the reviewed project event was removed, its Notion write succeeded;
+      // keep that merge resolved even when a separate queued item failed.
+      const remainingEvents = await listPendingProjectSyncEvents();
+      if (remainingEvents.some((event) => event.projectId === targetId)) throw error;
+    }
+    const remainingConflict = (await listPendingProjectSyncEvents())
+      .find((event) => event.projectId === targetId && event.deliveryBlocked);
+    if (remainingConflict?.deliveryBlocked) {
+      throw new Error(remainingConflict.deliveryBlocked.message);
+    }
+  },
+
   async prepareLocalWorkspaceForFirstSync(): Promise<boolean> {
     const storage = await readStorage();
     const { syncConfig } = storage;
@@ -1433,9 +1861,24 @@ export const notionClient = {
 
   async listProjects(): Promise<Project[]> {
     await waitForStub();
-    const { projects } = await readStorage();
+    const [{ projects }, pendingEvents] = await Promise.all([
+      readStorage(),
+      listPendingProjectSyncEvents(),
+    ]);
+    const blockedMessageByProject = new Map<string, string>();
+    for (const event of pendingEvents) {
+      if (event.deliveryBlocked) {
+        blockedMessageByProject.set(event.projectId, event.deliveryBlocked.message);
+      }
+    }
     return projects
       .filter((project) => project.status !== 'archived')
+      .map((project) => {
+        const blockedMessage = blockedMessageByProject.get(project.id);
+        return blockedMessage
+          ? withProjectSyncStatus(project, 'error', blockedMessage)
+          : project;
+      })
       .sort(sortProjectsByUpdatedDesc);
   },
 
@@ -1653,11 +2096,15 @@ export const notionClient = {
     return nextConfig;
   },
 
-  async validateNotionCache(): Promise<{ stalePageIds: string[]; aheadPageIds: string[] }> {
+  async validateNotionCache(): Promise<{
+    stalePageIds: string[];
+    aheadPageIds: string[];
+    failedPageIds: string[];
+  }> {
     const { pages, projects, syncConfig } = await readStorage();
 
     if (!syncConfig.connected) {
-      return { stalePageIds: [], aheadPageIds: [] };
+      return { stalePageIds: [], aheadPageIds: [], failedPageIds: [] };
     }
 
     const knownVersions: Record<string, number> = {};
@@ -1717,6 +2164,7 @@ export const notionClient = {
     return {
       stalePageIds: response.stalePageIds ?? [],
       aheadPageIds: response.aheadPageIds ?? [],
+      failedPageIds: response.failedPageIds ?? [],
     };
   },
 
@@ -1770,10 +2218,11 @@ export const notionClient = {
         notionHydrationSource: hydrationSource(nextSyncConfig),
         syncConfig: nextSyncConfig,
       });
+      const latestStorage = await readStorage();
       return {
-        currentProjectId,
-        pages: localPages,
-        projects: localProjects,
+        currentProjectId: latestStorage.currentProjectId,
+        pages: latestStorage.pages,
+        projects: latestStorage.projects,
         syncConfig: nextSyncConfig,
       };
     }
@@ -1788,6 +2237,8 @@ export const notionClient = {
     const nextCurrentProjectId = projects.some((project) => project.id === response.currentProjectId)
       ? response.currentProjectId ?? ''
       : projects[0]?.id ?? '';
+    const localStorageToPreserve = await readStorage();
+    const localProjectsToPreserve = localStorageToPreserve.projects;
     await writeStorage({
       activePageIdsByProject,
       currentProjectId: nextCurrentProjectId,
@@ -1797,11 +2248,22 @@ export const notionClient = {
       syncConfig: nextSyncConfig,
       notionHydrationSource: hydrationSource(nextSyncConfig),
     });
+    const blockedProjectIds = new Set(await listBlockedProjectSyncIds());
+    const blockedLocalProjects = localProjectsToPreserve.filter((project) => blockedProjectIds.has(project.id));
+    if (blockedLocalProjects.length) {
+      const blockedIds = new Set(blockedLocalProjects.map((project) => project.id));
+      await persistRebasedProjectSnapshots(
+        blockedLocalProjects,
+        localStorageToPreserve.pages.filter((page) => blockedIds.has(page.projectId)),
+      );
+    }
+
+    const latestStorage = await readStorage();
 
     return {
-      currentProjectId: nextCurrentProjectId,
-      pages,
-      projects,
+      currentProjectId: latestStorage.currentProjectId,
+      pages: latestStorage.pages,
+      projects: latestStorage.projects,
       syncConfig: nextSyncConfig,
     };
   },

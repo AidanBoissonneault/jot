@@ -135,12 +135,14 @@ export async function pushPageToNotionCore({
     candidateNotionPageId: page.notionParentPageId,
   });
   const notionPageId = page.notionPageId ?? store.notePages[page.id]?.notionPageId;
+  const isUserReviewedReplacement = page.content.attrs?.inkwellConflictResolution === true;
 
   let notePage = notionPageId
     ? await notionRequest(store, `/pages/${notionPageId}`)
     : undefined;
 
   if (
+    !isUserReviewedReplacement &&
     notePage?.last_edited_time &&
     page.remoteRevision &&
     notePage.last_edited_time !== page.remoteRevision
@@ -253,8 +255,10 @@ async function pushPageToProjectDatabase({
   }
 
   const toggle = await ensureThreadToggle(store, projectPage.id, page);
+  const isUserReviewedReplacement = page.content.attrs?.inkwellConflictResolution === true;
 
   if (
+    !isUserReviewedReplacement &&
     toggle?.last_edited_time &&
     page.remoteRevision &&
     toggle.last_edited_time !== page.remoteRevision
