@@ -121,7 +121,7 @@ const isResyncing = ref(false);
 const isResolvingSyncConflict = ref(false);
 const syncConflictError = ref('');
 const syncConflicts = ref<SyncContentConflict[]>([]);
-const activeSyncConflict = computed(() => syncConflicts.value[0]);
+const activeSyncConflict = computed(() => syncConflicts.value.find((conflict) => conflict.targetType === 'project'));
 const activeTab = ref<'editor' | 'settings'>('editor');
 const {
   createParentPage,
@@ -183,6 +183,7 @@ const { editor, skipNextEditorUpdate, clearEditorUpdateSkip } = useInkwellEditor
   isApplyingStoredContent,
   saveEditorContent: saveEditorContentOptimistically,
   saveTimer,
+  resolveSyncConflict: resolveInlinePageSyncConflict,
 });
 
 const { applyLink, clearFormatting, linkUrlDraft, runEditorFormattingCommand, setLink } =
@@ -484,13 +485,16 @@ async function resync() {
 
     const result = await store.resyncPendingChanges();
 
-    const conflictsNeedingReview: SyncContentConflict[] = [];
+    const conflictsNeedingInlineReview: SyncContentConflict[] = [];
+    const conflictsNeedingModalReview: SyncContentConflict[] = [];
     let autoMergedAdditions = 0;
     let autoMergeError = '';
     for (const conflict of result.conflicts) {
       const mergedContent = autoMergeUniquePageAdditions(conflict);
       if (!mergedContent) {
-        conflictsNeedingReview.push(conflict);
+        (conflict.targetType === 'page'
+          ? conflictsNeedingInlineReview
+          : conflictsNeedingModalReview).push(conflict);
         continue;
       }
 
@@ -498,29 +502,33 @@ async function resync() {
         await notionClient.resolveSyncConflict(conflict.targetType, conflict.targetId, mergedContent);
         autoMergedAdditions += 1;
       } catch (error) {
-        conflictsNeedingReview.push(conflict);
+        (conflict.targetType === 'page'
+          ? conflictsNeedingInlineReview
+          : conflictsNeedingModalReview).push(conflict);
         autoMergeError ||= error instanceof Error
           ? error.message
           : 'Unable to sync the new blocks automatically. Your local changes remain saved.';
       }
     }
 
-    if (conflictsNeedingReview.length) {
-      syncConflicts.value = conflictsNeedingReview;
+    syncConflicts.value = conflictsNeedingModalReview;
+
+    if (autoMergedAdditions) {
+      await store.refreshWorkspaceFromStorage();
+    }
+
+    if (conflictsNeedingModalReview.length) {
       syncConflictError.value = '';
       if (autoMergeError) syncConflictError.value = autoMergeError;
       uiMessage.value = autoMergeError ||
-        `Review ${conflictsNeedingReview.length} sync ${conflictsNeedingReview.length === 1 ? 'conflict' : 'conflicts'} to merge the local and Notion blocks.`;
+        `${conflictsNeedingInlineReview.length ? 'Page conflicts are ready inside their documents. ' : ''}Review ${conflictsNeedingModalReview.length} project ${conflictsNeedingModalReview.length === 1 ? 'conflict' : 'conflicts'} to merge project state.`;
+    } else if (conflictsNeedingInlineReview.length) {
+      syncConflictError.value = '';
+      uiMessage.value = autoMergeError ||
+        `${conflictsNeedingInlineReview.length} page ${conflictsNeedingInlineReview.length === 1 ? 'conflict is' : 'conflicts are'} ready to review inside ${conflictsNeedingInlineReview.length === 1 ? 'the affected document' : 'their affected documents'}.`;
     } else if (autoMergedAdditions) {
-      syncConflicts.value = [];
       syncConflictError.value = '';
       uiMessage.value = 'New Notion blocks were merged with local content and synced.';
-      try {
-        await store.refreshWorkspaceFromStorage();
-      } catch (error) {
-        const detail = error instanceof Error ? ` ${error.message}` : '';
-        uiMessage.value = `New Notion blocks were merged and synced, but the workspace view could not refresh.${detail}`;
-      }
     } else if (result.blockedProjectCount > 0) {
       uiMessage.value = result.blockedMessage
         ? `${result.blockedMessage} Your local snapshot remains saved on this device.`
@@ -547,6 +555,21 @@ function cancelSyncConflict() {
   syncConflicts.value = [];
   syncConflictError.value = '';
   uiMessage.value = 'Sync conflict review paused. Your local changes remain saved.';
+}
+
+async function resolveInlinePageSyncConflict(
+  conflict: SyncContentConflict,
+  content: DocumentContent,
+) {
+  if (conflict.targetType !== 'page' || isResolvingSyncConflict.value) return;
+  isResolvingSyncConflict.value = true;
+  try {
+    await notionClient.resolveSyncConflict('page', conflict.targetId, content);
+    await store.refreshWorkspaceFromStorage();
+    uiMessage.value = 'Page conflict resolved and synced.';
+  } finally {
+    isResolvingSyncConflict.value = false;
+  }
 }
 
 async function resolveSyncConflict(content: DocumentContent) {

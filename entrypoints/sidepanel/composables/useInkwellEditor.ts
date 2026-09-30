@@ -12,8 +12,11 @@ import {
   InkwellLink,
 } from '@/src/extensions/inkwellLink';
 import { MediaKit } from '@/src/extensions/media';
+import { InkwellSyncConflict } from '@/src/extensions/syncConflictBlock';
 import { PortableTextEditingKit } from '@/src/extensions/textFormatting';
+import type { DocumentContent } from '@/src/types/capture';
 import type { OpenSourceRequestMessage } from '@/src/types/messages';
+import type { SyncContentConflict } from '@/src/types/sync';
 
 /** Stable callbacks connected after their editor-dependent composables initialize. */
 export interface InkwellEditorHandlers {
@@ -28,6 +31,7 @@ interface InkwellEditorOptions {
   isApplyingStoredContent: Ref<boolean>;
   saveEditorContent: () => Promise<void>;
   saveTimer: Ref<number | undefined>;
+  resolveSyncConflict: (conflict: SyncContentConflict, content: DocumentContent) => Promise<void>;
 }
 
 /** Builds the primary editor with supported content extensions and interaction hooks. */
@@ -37,6 +41,7 @@ export function useInkwellEditor({
   isApplyingStoredContent,
   saveEditorContent,
   saveTimer,
+  resolveSyncConflict,
 }: InkwellEditorOptions) {
   const shouldSkipNextUpdateSave = ref(false);
   const editor = useEditor({
@@ -52,6 +57,7 @@ export function useInkwellEditor({
       InkwellBlockIds,
       PortableTextEditingKit,
       MediaKit,
+      InkwellSyncConflict.configure({ onResolve: resolveSyncConflict }),
     ],
     content: {
       type: 'doc',

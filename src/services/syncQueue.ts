@@ -128,6 +128,7 @@ export async function addPendingProjectSyncEvent(
     const deliveryBlocked = pending.find(
       (queued) => queued.projectId === project.id && queued.deliveryBlocked,
     )?.deliveryBlocked;
+    const { syncConflicts: _syncConflicts, ...projectForSync } = project;
     const event: ProjectSyncEvent = {
       eventId: crypto.randomUUID(),
       type: project.status === 'archived' ? 'project_archive' : 'project_upsert',
@@ -135,7 +136,7 @@ export async function addPendingProjectSyncEvent(
       sequence,
       createdAt: new Date().toISOString(),
       ...(deliveryBlocked ? { deliveryBlocked } : {}),
-      payload: { project, selectedParentPageId },
+      payload: { project: projectForSync, selectedParentPageId },
     };
     const compacted = pending.filter((queued) => queued.projectId !== project.id);
     await idbSet(PENDING_PROJECT_SYNC_EVENTS_KEY, [...compacted, event]);
@@ -508,7 +509,7 @@ export function buildPageSyncOps({
   selectedParentPageId?: string;
 }): Omit<BlockSyncOp, 'opId' | 'sequence' | 'createdAt' | 'localVersion'>[] {
   const { content: _pageContent, ...pageContext } = page;
-  const { stateContent: _projectStateContent, ...projectContext } = project;
+  const { stateContent: _projectStateContent, syncConflicts: _syncConflicts, ...projectContext } = project;
   const base = {
     pageId: page.id,
     projectId: project.id,
@@ -601,7 +602,7 @@ export async function addPendingProjectSourceSyncEvent(
     const deliveryBlocked = pending.find(
       (queued) => queued.projectId === project.id && queued.deliveryBlocked,
     )?.deliveryBlocked;
-    const { stateContent: _stateContent, ...projectContext } = project;
+    const { stateContent: _stateContent, syncConflicts: _syncConflicts, ...projectContext } = project;
     const event: ProjectSourceSyncEvent = {
       eventId: crypto.randomUUID(),
       type: 'project_source_upsert',
@@ -754,7 +755,7 @@ function expandLegacyFullPageSnapshots(ops: BlockSyncOp[]): BlockSyncOp[] {
 
 function stripLegacySyncContext(op: BlockSyncOp): BlockSyncOp {
   const { content: _content, ...page } = op.payload.page;
-  const { stateContent: _stateContent, ...project } = op.payload.project;
+  const { stateContent: _stateContent, syncConflicts: _syncConflicts, ...project } = op.payload.project;
   return {
     ...op,
     payload: { ...op.payload, page, project },

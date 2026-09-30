@@ -4,6 +4,8 @@
  * @lastModified September 2026
 */
 
+import type { SyncContentConflict } from './sync.js';
+
 /** Identifies the semantic kind of a captured item. */
 export type CaptureType = 'quote' | 'task' | 'idea' | 'link';
 /** Describes the lifecycle states used while a local save is pending. */
@@ -47,6 +49,8 @@ export type Project = {
   createdAt: string;
   updatedAt: string;
   stateContent: DocumentContent;
+  /** Page merge reviews retained locally until the user resolves them. */
+  syncConflicts?: SyncContentConflict[];
   stateRemoteRevision?: string;
   tags: string[];
   syncMessage?: string;

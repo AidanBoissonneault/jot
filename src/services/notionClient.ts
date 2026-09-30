@@ -22,6 +22,7 @@ import type {
 } from '@/src/types/messages';
 import { normalizeCodeLanguage } from '@/src/lib/codeLanguages';
 import { pruneOrphanedProjectStateSources } from '@/src/lib/projectStateSources';
+import { stripSyncConflictBlocks } from '@/src/lib/syncConflictReview';
 import type {
   CreateNotionPageResponse,
   ListNotionPagesResponse,
@@ -530,7 +531,9 @@ async function syncProject(project: Project): Promise<Project | undefined> {
     await removePendingProjectSyncEvents([queuedEvent.eventId]);
     await clearProjectConflictResolutionMarkers(project.id);
     resetQueueDeliveryBackoff();
-    return response.project ?? withProjectSyncStatus(project, 'saved');
+    return response.project
+      ? { ...response.project, syncConflicts: project.syncConflicts }
+      : withProjectSyncStatus(project, 'saved');
   } catch (error) {
     if (isUnmappedContentConflict(error)) {
       await blockPendingProjectSyncEvents(project.id, {
@@ -788,10 +791,14 @@ function requestQueuedProjectSync(
   if (existing) return existing;
 
   const isSourceEvent = event.type === 'project_source_upsert';
+  const payload = {
+    ...event.payload,
+    project: withoutLocalSyncConflicts(event.payload.project),
+  };
   let request: Promise<SyncProjectResponse>;
   request = requestServer<SyncProjectResponse>(
     isSourceEvent ? '/sync/project/source' : '/sync/project',
-    { method: 'POST', body: JSON.stringify(event.payload) },
+    { method: 'POST', body: JSON.stringify(payload) },
     syncConfig,
   ).finally(() => {
     if (inFlightProjectSyncRequests.get(event.eventId) === request) {
@@ -1481,6 +1488,53 @@ async function clearProjectConflictResolutionMarkers(projectId: string): Promise
   });
 }
 
+async function clearStoredPageSyncConflict(pageId: string): Promise<void> {
+  const { projects } = await readStorage();
+  const nextProjects = projects.map((project) => {
+    const syncConflicts = project.syncConflicts?.filter((conflict) =>
+      conflict.targetType !== 'page' || conflict.targetId !== pageId,
+    );
+    return {
+      ...project,
+      ...(syncConflicts?.length ? { syncConflicts } : { syncConflicts: undefined }),
+    };
+  });
+  await writeStorage({ projects: nextProjects });
+}
+
+async function persistPageSyncConflicts(conflicts: SyncContentConflict[]): Promise<void> {
+  if (!conflicts.length) return;
+  const { pages, projects } = await readStorage();
+  const projectIdByPageId = new Map(pages.map((page) => [page.id, page.projectId]));
+  const conflictsByProject = new Map<string, SyncContentConflict[]>();
+  for (const conflict of conflicts) {
+    if (conflict.targetType !== 'page') continue;
+    const projectId = projectIdByPageId.get(conflict.targetId);
+    if (!projectId) continue;
+    const group = conflictsByProject.get(projectId) ?? [];
+    group.push(conflict);
+    conflictsByProject.set(projectId, group);
+  }
+  if (!conflictsByProject.size) return;
+
+  await writeStorage({
+    projects: projects.map((project) => {
+      const nextConflicts = conflictsByProject.get(project.id);
+      if (!nextConflicts) return project;
+      const affectedPageIds = new Set(nextConflicts.map((conflict) => conflict.targetId));
+      const retained = (project.syncConflicts ?? []).filter((conflict) =>
+        !affectedPageIds.has(conflict.targetId),
+      );
+      return { ...project, syncConflicts: [...retained, ...nextConflicts] };
+    }),
+  });
+}
+
+function withoutLocalSyncConflicts<T extends { syncConflicts?: SyncContentConflict[] }>(project: T): Omit<T, 'syncConflicts'> {
+  const { syncConflicts: _syncConflicts, ...syncable } = project;
+  return syncable;
+}
+
 async function deliverPendingProjectSyncEvents(syncConfig: SyncConfig): Promise<void> {
   const events = await listPendingProjectSyncEvents();
   const blockedProjectIds = new Set(
@@ -1542,6 +1596,9 @@ async function applySyncedProject(
       project.id === queuedProject.id && project.updatedAt === queuedProject.updatedAt
         ? {
             ...(responseProject ?? project),
+            ...(project.syncConflicts?.length
+              ? { syncConflicts: project.syncConflicts }
+              : { syncConflicts: undefined }),
             ...(preserveLocalState
               ? { stateContent: stripConflictResolutionMarkers(project.stateContent) }
               : {}),
@@ -1650,7 +1707,7 @@ export const notionClient = {
           method: 'POST',
           body: JSON.stringify({
             page: { ...page, content: sanitizeMediaForSync(page.content) },
-            project,
+            project: withoutLocalSyncConflicts(project),
             selectedParentPageId: syncConfig.selectedParentPageId,
           }),
         }, syncConfig);
@@ -1659,6 +1716,7 @@ export const notionClient = {
           ...response.page,
           content: stripConflictResolutionMarkers(response.page.content),
         });
+        await clearStoredPageSyncConflict(pageId);
         await removePendingSyncOps((await listPendingSyncOps())
           .filter((op) => op.pageId === pageId)
           .map((op) => op.opId));
@@ -1748,6 +1806,8 @@ export const notionClient = {
       reloadedFromNotion = true;
     }
 
+    await persistPageSyncConflicts(pageConflicts);
+
     return {
       blockedMessage: blockedEvents[0]?.deliveryBlocked?.message,
       blockedProjectCount: new Set(blockedEvents.map((event) => event.projectId)).size,
@@ -1778,8 +1838,11 @@ export const notionClient = {
       const response = await requestServer<SyncPageResponse>('/sync/page/resync', {
         method: 'POST',
         body: JSON.stringify({
-          page: { ...mergedPage, content: sanitizeMediaForSync(mergedPage.content) },
-          project,
+          page: {
+            ...mergedPage,
+            content: sanitizeMediaForSync(stripSyncConflictBlocks(mergedPage.content)),
+          },
+          project: withoutLocalSyncConflicts(project),
           selectedParentPageId: syncConfig.selectedParentPageId,
         }),
       }, syncConfig);
@@ -1788,7 +1851,11 @@ export const notionClient = {
         .filter((op) => op.pageId === targetId)
         .map((op) => op.opId));
       const syncedPage = response.page ?? mergedPage;
-      await persistPage({ ...syncedPage, content: stripConflictResolutionMarkers(syncedPage.content) });
+      await persistPage({
+        ...syncedPage,
+        content: stripConflictResolutionMarkers(stripSyncConflictBlocks(syncedPage.content)),
+      });
+      await clearStoredPageSyncConflict(targetId);
       return;
     }
 
@@ -2132,7 +2199,11 @@ export const notionClient = {
 
     const response = await requestServer<SyncValidationResponse>('/sync/validate', {
       method: 'POST',
-      body: JSON.stringify({ pages, projects, knownVersions }),
+      body: JSON.stringify({
+        pages,
+        projects: projects.map(withoutLocalSyncConflicts),
+        knownVersions,
+      }),
     }, syncConfig);
     const uncachedProjectIds = new Set(response.uncachedProjectIds ?? []);
     const uncachedPageIds = new Set(response.uncachedPageIds ?? []);
@@ -2243,7 +2314,15 @@ export const notionClient = {
       };
     }
 
-    const projects = response.projects.map(normalizeProject).sort(sortProjectsByUpdatedDesc);
+    const localConflictsByProjectId = new Map(localProjects.map((project) => [
+      project.id,
+      project.syncConflicts,
+    ]));
+    const projects = response.projects.map((project) => {
+      const normalized = normalizeProject(project);
+      const syncConflicts = localConflictsByProjectId.get(normalized.id);
+      return syncConflicts?.length ? { ...normalized, syncConflicts } : normalized;
+    }).sort(sortProjectsByUpdatedDesc);
     const pages = response.pages.map(normalizeStoredPage);
     const activePageIdsByProject = createCompatibleActivePageIds(
       projects,

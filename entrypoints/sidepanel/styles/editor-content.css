@@ -378,3 +378,148 @@
   height: 100% !important;
   border: 0;
 }
+
+.editor .tiptap .inkwell-sync-conflict {
+  margin: 0 0 1rem;
+  border: 1px solid #d6a93c;
+  border-left: 4px solid #d6a93c;
+  border-radius: 8px;
+  background: #fff5cf;
+  color: #3a2d12;
+  padding: 12px;
+  box-shadow: 0 2px 8px rgb(75 55 15 / 9%);
+}
+
+.inkwell-sync-conflict__title,
+.inkwell-sync-conflict__candidate header,
+.inkwell-sync-conflict__actions,
+.inkwell-sync-conflict footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.inkwell-sync-conflict__title {
+  margin-bottom: 9px;
+  font-size: 0.9rem;
+}
+
+.inkwell-sync-conflict__title span,
+.inkwell-sync-conflict__candidate header span,
+.inkwell-sync-conflict footer span {
+  color: #76643e;
+  font-size: 0.76rem;
+}
+
+.inkwell-sync-conflict__row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.inkwell-sync-conflict__candidate {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid rgb(98 77 34 / 20%);
+  border-radius: 6px;
+  background: rgb(255 255 255 / 56%);
+}
+
+.inkwell-sync-conflict__candidate header {
+  min-height: 30px;
+  padding: 4px 8px;
+  font-size: 0.78rem;
+}
+
+.inkwell-sync-conflict__candidate pre,
+.inkwell-sync-conflict__inline-diff {
+  overflow: auto;
+  margin: 0;
+  border-top: 1px solid rgb(98 77 34 / 13%);
+  background: rgb(255 255 255 / 48%);
+  padding: 8px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: 0.78rem/1.45 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+}
+
+.inkwell-sync-conflict .removed {
+  background: rgb(248 81 73 / 15%);
+  color: #9b2622;
+}
+
+.inkwell-sync-conflict .added {
+  background: rgb(46 160 67 / 15%);
+  color: #176329;
+}
+
+.inkwell-sync-conflict__actions {
+  justify-content: flex-end;
+  border-top: 1px solid rgb(98 77 34 / 13%);
+  padding: 5px;
+}
+
+.inkwell-sync-conflict__actions button,
+.inkwell-sync-conflict footer button {
+  min-height: 27px;
+  border: 1px solid rgb(98 77 34 / 28%);
+  border-radius: 5px;
+  background: #fffdf6;
+  color: #443719;
+  padding: 3px 8px;
+  font: 600 0.73rem/1.2 inherit;
+  cursor: pointer;
+}
+
+.inkwell-sync-conflict__actions button.chosen {
+  border-color: #846517;
+  background: #f5e4a8;
+}
+
+.inkwell-sync-conflict__inline-diff {
+  max-height: 140px;
+  border-top-style: dashed;
+}
+
+.inkwell-sync-conflict__duplicate,
+.inkwell-sync-conflict__warning,
+.inkwell-sync-conflict__error {
+  margin: 8px 0 0;
+  font-size: 0.78rem;
+}
+
+.inkwell-sync-conflict__warning {
+  border: 1px solid rgb(160 102 22 / 24%);
+  border-radius: 5px;
+  background: rgb(255 255 255 / 48%);
+  padding: 8px;
+}
+
+.inkwell-sync-conflict__warning label {
+  display: block;
+  margin-top: 6px;
+}
+
+.inkwell-sync-conflict__error {
+  color: #9b2622;
+}
+
+.inkwell-sync-conflict footer {
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.inkwell-sync-conflict footer button {
+  flex: 0 0 auto;
+  min-height: 32px;
+  background: #725714;
+  color: white;
+}
+
+.inkwell-sync-conflict footer button:disabled,
+.inkwell-sync-conflict__actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}

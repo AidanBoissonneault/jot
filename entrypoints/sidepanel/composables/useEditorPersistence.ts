@@ -5,6 +5,10 @@ import { watch, type Ref, type ShallowRef } from 'vue';
 import type { Editor } from '@tiptap/core';
 import type { useInkwellStore } from '@/src/stores/inkwell';
 import { normalizeInkwellBlockIds } from '@/src/extensions/inkwellBlockIds';
+import {
+  contentWithSyncConflictBlocks,
+  stripSyncConflictBlocks,
+} from '@/src/lib/syncConflictReview';
 import { notionClient } from '@/src/services/notionClient';
 import type { DocumentContent, ProjectPage } from '@/src/types/capture';
 
@@ -43,18 +47,25 @@ export function useEditorPersistence(
   }
 
   watch(
-    () => store.currentPage,
-    (page) => {
+    () => [store.currentPage, store.currentProject?.syncConflicts] as const,
+    ([page, syncConflicts]) => {
       synchronizePageTitleDraft(page);
       if (!editor.value || !page) {
         return;
       }
 
       const editorContent = JSON.stringify(editor.value.getJSON());
-      const storedContent = JSON.stringify(page.content);
+      const storedContent = JSON.stringify(contentWithSyncConflictBlocks(
+        page.content,
+        page.id,
+        syncConflicts,
+      ));
+      const persistedEditorContent = JSON.stringify(stripSyncConflictBlocks(
+        editor.value.getJSON() as DocumentContent,
+      ));
       const isPageChange = activePageId !== page.id;
       const hasUnsavedEditorContent =
-        editorContent !== lastAppliedContent ||
+        persistedEditorContent !== JSON.stringify(page.content) ||
         isEditorSaveInFlight ||
         shouldSaveAgainAfterCurrentSave;
 
@@ -67,9 +78,9 @@ export function useEditorPersistence(
       }
 
       activePageId = page.id;
-      lastAppliedContent = storedContent;
+      lastAppliedContent = JSON.stringify(page.content);
       isApplyingStoredContent.value = true;
-      editor.value.commands.setContent(page.content, { emitUpdate: false });
+      editor.value.commands.setContent(JSON.parse(storedContent) as DocumentContent, { emitUpdate: false });
       isApplyingStoredContent.value = false;
     },
   );
@@ -114,7 +125,7 @@ export function useEditorPersistence(
           return;
         }
 
-        const content = normalizeInkwellBlockIds(editorContent);
+        const content = normalizeInkwellBlockIds(stripSyncConflictBlocks(editorContent));
         const title = pageTitleDraft.value;
         const serializedContent = JSON.stringify(content);
 
@@ -149,7 +160,7 @@ export function useEditorPersistence(
 
     const page = { ...store.currentPage };
     const editorContent = editor.value.getJSON() as DocumentContent;
-    const content = normalizeInkwellBlockIds(editorContent);
+    const content = normalizeInkwellBlockIds(stripSyncConflictBlocks(editorContent));
     const title = pageTitleDraft.value;
     const serializedContent = JSON.stringify(content);
 
