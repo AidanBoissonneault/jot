@@ -357,6 +357,10 @@ export default defineContentScript({
     }
 
     function buildHeadingDragPayload(event: DragEvent) {
+      const target = event.target instanceof Node
+        ? getElementFromNode(event.target)
+        : null;
+
       const selection = window.getSelection();
       const selectedText = selection?.toString().trim();
       const selectedHeading = selection
@@ -367,9 +371,6 @@ export default defineContentScript({
         return buildHtmlHeadingPayload(selectedHeading, selectedText);
       }
 
-      const target = event.target instanceof Node
-        ? getElementFromNode(event.target)
-        : null;
       const headingElement = getHtmlHeadingElement(target);
 
       if (!headingElement) {
@@ -518,6 +519,15 @@ export default defineContentScript({
       'dragstart',
       (event) => {
         if (!event.dataTransfer) {
+          return;
+        }
+
+        const dragTarget = event.target instanceof Node
+          ? getElementFromNode(event.target)
+          : null;
+        // Preserve native media drops even when the media sits inside a
+        // heading or a previous text selection is still active.
+        if (dragTarget?.closest('img,picture,svg,video,audio,canvas,object,embed')) {
           return;
         }
 

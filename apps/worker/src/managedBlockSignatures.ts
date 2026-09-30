@@ -27,18 +27,46 @@ function nestedString(value: unknown): string | undefined {
 
 /** Removes response-only rich-text fields while retaining authored block data. */
 function comparableValue(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(comparableValue);
+  if (Array.isArray(value)) {
+    return value.map(comparableValue).filter((nested) => !isEmptyText(nested));
+  }
   if (!value || typeof value !== 'object') return value;
 
   const responseOnlyFields = new Set(['expiry_time', 'href', 'plain_text']);
   return Object.fromEntries(
     Object.entries(value)
-      .filter(([key, nested]) => !responseOnlyFields.has(key) && nested !== null && nested !== undefined)
+      .filter(([key, nested]) =>
+        !responseOnlyFields.has(key) &&
+        nested !== null &&
+        nested !== undefined &&
+        !(key === 'color' && nested === 'default') &&
+        !(key === 'caption' && Array.isArray(nested) && nested.length === 0) &&
+        !(key === 'annotations' && isDefaultAnnotations(nested)),
+      )
       .sort(([first], [second]) => first.localeCompare(second))
       .map(([key, nested]) => [
         key,
         key === 'url' ? stableNotionFileUrl(nested) : comparableValue(nested),
       ]),
+  );
+}
+
+/** Treats a zero-width plain-text segment like Notion's empty rich_text array. */
+function isEmptyText(value: unknown): boolean {
+  const item = objectProperty(value);
+  if (item?.type !== 'text') return false;
+  const text = objectProperty(item.text);
+  return text?.content === '' &&
+    Object.keys(item).every((key) => key === 'type' || key === 'text') &&
+    Object.keys(text).every((key) => key === 'content');
+}
+
+/** Treats Notion's default annotations like omitted annotations in an append payload. */
+function isDefaultAnnotations(value: unknown): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const annotations = value as Record<string, unknown>;
+  return Object.values(annotations).every((annotation) =>
+    annotation === false || annotation === 'default',
   );
 }
 

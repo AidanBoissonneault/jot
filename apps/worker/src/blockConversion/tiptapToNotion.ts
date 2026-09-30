@@ -228,17 +228,27 @@ function textNodeToRichText(node: DocumentContent): NotionRichTextPayload {
 /**
  * Creates unformatted Notion rich text.
  * @param text - Text content.
- * @returns A single-item Notion rich-text array.
+ * @returns Notion rich-text items split to fit the API's per-item limit.
  */
 function plainRichText(text: string): NotionRichTextPayload[] {
-  return [
-    {
-      type: 'text',
-      text: {
-        content: text,
-      },
-    },
-  ];
+  // Notion limits each rich-text object's content to 2,000 characters. Source
+  // records are serialized into code blocks and can exceed that limit when a
+  // page has a long URL, XPath, or captured passage.
+  const chunks: string[] = [];
+  let chunk = '';
+  for (const character of text) {
+    if (chunk.length + character.length > 2_000) {
+      chunks.push(chunk);
+      chunk = '';
+    }
+    chunk += character;
+  }
+  if (chunk || !chunks.length) chunks.push(chunk);
+
+  return chunks.map((content) => ({
+    type: 'text',
+    text: { content },
+  }));
 }
 
 /**

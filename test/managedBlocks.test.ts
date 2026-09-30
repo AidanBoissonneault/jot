@@ -293,7 +293,7 @@ describe('managed block replacement safety', () => {
       }]),
       kindFromNotionBlock: vi.fn(() => 'paragraph'),
       hash: vi.fn(() => 'hash'),
-    })).rejects.toThrow('Existing content was preserved');
+    })).rejects.toThrow('Review the sync diff and merge the blocks');
 
     expect(deleteManagedBlock).not.toHaveBeenCalled();
     expect(appendManagedBlocks).not.toHaveBeenCalled();

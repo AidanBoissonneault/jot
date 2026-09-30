@@ -31,7 +31,10 @@ interface InkwellEditorOptions {
   isApplyingStoredContent: Ref<boolean>;
   saveEditorContent: () => Promise<void>;
   saveTimer: Ref<number | undefined>;
-  resolveSyncConflict: (conflict: SyncContentConflict, content: DocumentContent) => Promise<void>;
+  resolveSyncConflict: (
+    conflict: SyncContentConflict,
+    content: DocumentContent,
+  ) => Promise<DocumentContent | void>;
 }
 
 /** Builds the primary editor with supported content extensions and interaction hooks. */

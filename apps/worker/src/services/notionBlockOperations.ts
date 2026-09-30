@@ -13,6 +13,7 @@ import type {
   NotionRequester,
   WorkerStore,
 } from '../types.js';
+import { managedBlockSignature } from '../managedBlockSignatures.js';
 
 /** API and stateless utility dependencies used by Notion block operations. */
 interface NotionBlockOperationDependencies {
@@ -142,11 +143,7 @@ export function createNotionBlockOperations({
     for (const batch of chunks(notionBlocks, 100)) {
       let results: NotionBlock[];
       try {
-        const response = await notionRequest(store, `/blocks/${notionPageId}/children`, {
-          method: 'PATCH',
-          body: { children: batch, ...(position ? { position } : {}) },
-        });
-        results = confirmedCreatedBlocks(response, batch.length);
+        results = await appendAndConfirmBlocks(store, notionPageId, batch, position);
       } catch (error) {
         // Only a deterministic payload rejection proves that the batch was not
         // applied. A timeout or server error has an ambiguous outcome; replaying
@@ -173,11 +170,7 @@ export function createNotionBlockOperations({
 
     for (const block of blocks) {
       try {
-        const response = await notionRequest(store, `/blocks/${notionPageId}/children`, {
-          method: 'PATCH',
-          body: { children: [block], ...(position ? { position } : {}) },
-        });
-        const created = confirmedCreatedBlocks(response, 1);
+        const created = await appendAndConfirmBlocks(store, notionPageId, [block], position);
         results.push(...created);
         position = positionAfterCreatedBlocks(position, created);
       } catch (error) {
@@ -190,17 +183,57 @@ export function createNotionBlockOperations({
         if (!isBlockValidationError(error)) throw error;
 
         const fallback = mediaFallbackBlock(block);
-        const response = await notionRequest(store, `/blocks/${notionPageId}/children`, {
-          method: 'PATCH',
-          body: { children: [fallback], ...(position ? { position } : {}) },
-        });
-        const created = confirmedCreatedBlocks(response, 1);
+        const created = await appendAndConfirmBlocks(store, notionPageId, [fallback], position);
         results.push(...created);
         position = positionAfterCreatedBlocks(position, created);
       }
     }
 
     return results;
+  }
+
+  /** Confirms child creation from the response or by reading back its exact position. */
+  async function appendAndConfirmBlocks(
+    store: WorkerStore,
+    notionPageId: string,
+    blocks: NotionBlockPayload[],
+    position?: BlockPosition,
+  ): Promise<NotionBlock[]> {
+    const response = await notionRequest(store, `/blocks/${notionPageId}/children`, {
+      method: 'PATCH',
+      body: { children: blocks, ...(position ? { position } : {}) },
+    });
+
+    try {
+      return confirmedCreatedBlocks(response, blocks.length);
+    } catch (error) {
+      if (!(error instanceof IncompleteBlockAppendResponseError)) throw error;
+
+      const responseBlocks = Array.isArray(response.results)
+        ? response.results as NotionBlock[]
+        : [];
+      const recoveredResponse = findMatchingBlockWindow(responseBlocks, blocks, position);
+      if (recoveredResponse) return recoveredResponse;
+      if (response.object === 'list') {
+        const positionedResponse = findPositionedBlockWindow(responseBlocks, blocks, position);
+        if (positionedResponse) return positionedResponse;
+      }
+
+      let children: NotionBlock[];
+      try {
+        children = await listAllBlockChildren(store, notionPageId);
+      } catch {
+        throw error;
+      }
+
+      const recovered = findMatchingBlockWindow(children, blocks, position);
+      if (recovered) return recovered;
+      if (response.object === 'list') {
+        const positionedChildren = findPositionedBlockWindow(children, blocks, position);
+        if (positionedChildren) return positionedChildren;
+      }
+      throw error;
+    }
   }
 
   return {
@@ -228,7 +261,84 @@ function isBlockValidationError(error: unknown): boolean {
 function confirmedCreatedBlocks(response: NotionObject, expectedCount: number): NotionBlock[] {
   const blocks = Array.isArray(response.results) ? response.results as NotionBlock[] : [];
   if (blocks.length !== expectedCount) {
-    throw new Error('Notion did not confirm every created block.');
+    throw new IncompleteBlockAppendResponseError(
+      `Notion append response confirmed ${blocks.length} of ${expectedCount} blocks ` +
+      `(response object: ${response.object ?? 'unknown'}).`,
+    );
   }
   return blocks;
+}
+
+/** Identifies a successful append whose response omitted or duplicated block results. */
+class IncompleteBlockAppendResponseError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'IncompleteBlockAppendResponseError';
+  }
+}
+
+/** Locates the exact inserted blocks, even when Notion returns the whole child list. */
+function findMatchingBlockWindow(
+  children: NotionBlock[],
+  expected: NotionBlockPayload[],
+  position?: BlockPosition,
+): NotionBlock[] | undefined {
+  let preferredStartIndex: number | undefined;
+  if (position?.type === 'start') {
+    preferredStartIndex = 0;
+  } else if (position?.type === 'after_block' && position.after_block?.id) {
+    const anchorIndex = children.findIndex((block) => block.id === position.after_block?.id);
+    if (anchorIndex >= 0) preferredStartIndex = anchorIndex + 1;
+  } else if (expected.length <= children.length) {
+    preferredStartIndex = children.length - expected.length;
+  }
+
+  const matchesAt = (startIndex: number) => {
+    const inserted = children.slice(startIndex, startIndex + expected.length);
+    return inserted.length === expected.length && inserted.every(
+      (block, index) => managedBlockSignature(block) === managedBlockSignature(expected[index]!),
+    )
+      ? inserted
+      : undefined;
+  };
+
+  const preferredMatch = preferredStartIndex === undefined
+    ? undefined
+    : matchesAt(preferredStartIndex);
+  if (preferredMatch) return preferredMatch;
+
+  const matches: NotionBlock[][] = [];
+  for (let index = 0; index <= children.length - expected.length; index += 1) {
+    const match = matchesAt(index);
+    if (match) matches.push(match);
+  }
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
+/** Recovers a confirmed full-list append by insertion position if Notion rewrote block data. */
+function findPositionedBlockWindow(
+  children: NotionBlock[],
+  expected: NotionBlockPayload[],
+  position?: BlockPosition,
+): NotionBlock[] | undefined {
+  if (children.length <= expected.length) return undefined;
+
+  let startIndex: number;
+  if (position?.type === 'start') {
+    startIndex = 0;
+  } else if (position?.type === 'after_block' && position.after_block?.id) {
+    const anchorIndex = children.findIndex((block) => block.id === position.after_block?.id);
+    if (anchorIndex < 0) return undefined;
+    startIndex = anchorIndex + 1;
+  } else {
+    // Notion appends to the end when no explicit position is supplied.
+    startIndex = children.length - expected.length;
+  }
+
+  const inserted = children.slice(startIndex, startIndex + expected.length);
+  return inserted.length === expected.length && inserted.every(
+    (block, index) => block.object === 'block' && block.type === expected[index]!.type,
+  )
+    ? inserted
+    : undefined;
 }

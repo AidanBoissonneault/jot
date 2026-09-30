@@ -32,17 +32,22 @@ function isChosen(rowId: string, choice: SyncConflictChoice) {
 async function applyChoices() {
   if (hasUnresolved.value || (conflict.value.remoteContent === null && !remoteAcknowledged.value)) return;
   const options = props.extension.options as {
-    onResolve?: (conflict: SyncContentConflict, content: DocumentContent) => Promise<void>;
+    onResolve?: (
+      conflict: SyncContentConflict,
+      content: DocumentContent,
+    ) => Promise<DocumentContent | void>;
   };
   if (!options.onResolve) return;
 
   isApplying.value = true;
   error.value = '';
   try {
-    await options.onResolve(
-      conflict.value,
-      buildSyncConflictMerge(conflict.value, rows.value, choices.value),
-    );
+    const mergedContent = buildSyncConflictMerge(conflict.value, rows.value, choices.value);
+    const resolvedContent = await options.onResolve(conflict.value, mergedContent);
+    if (!resolvedContent) {
+      throw new Error('The merge was not applied. Try again.');
+    }
+    props.editor.commands.setContent(resolvedContent, { emitUpdate: false });
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : 'Unable to apply this merge.';
   } finally {

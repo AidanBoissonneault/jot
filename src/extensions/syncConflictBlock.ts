@@ -5,7 +5,10 @@ import type { SyncContentConflict } from '../types/sync.js';
 import SyncConflictNodeView from '@/entrypoints/sidepanel/components/editor/SyncConflictNodeView.vue';
 
 export type SyncConflictBlockOptions = {
-  onResolve: (conflict: SyncContentConflict, content: DocumentContent) => Promise<void>;
+  onResolve: (
+    conflict: SyncContentConflict,
+    content: DocumentContent,
+  ) => Promise<DocumentContent | void>;
 };
 
 export const InkwellSyncConflict = Node.create<SyncConflictBlockOptions>({

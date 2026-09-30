@@ -558,13 +558,21 @@ function cancelSyncConflict() {
 async function resolveInlinePageSyncConflict(
   conflict: SyncContentConflict,
   content: DocumentContent,
-) {
-  if (conflict.targetType !== 'page' || isResolvingSyncConflict.value) return;
+): Promise<DocumentContent | void> {
+  if (conflict.targetType !== 'page') {
+    throw new Error('Only page conflicts can be applied in the editor.');
+  }
+  if (isResolvingSyncConflict.value) {
+    throw new Error('Another sync conflict is already being applied.');
+  }
   isResolvingSyncConflict.value = true;
   try {
     await notionClient.resolveSyncConflict('page', conflict.targetId, content);
     await store.refreshWorkspaceFromStorage();
     uiMessage.value = 'Page conflict resolved and synced.';
+    return store.currentPage?.id === conflict.targetId
+      ? store.currentPage.content
+      : content;
   } finally {
     isResolvingSyncConflict.value = false;
   }

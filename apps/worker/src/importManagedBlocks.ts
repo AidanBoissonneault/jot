@@ -149,6 +149,7 @@ function withRemoteMediaState(
     [desired.type]: {
       ...desiredBody,
       ...remoteBody,
+      type: 'file_upload',
       file_upload: { id: fileUploadId },
     },
   };
