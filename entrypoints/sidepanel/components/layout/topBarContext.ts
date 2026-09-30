@@ -17,7 +17,7 @@ export type CategoryColor =
 export interface TopBarContext {
   store: InkwellStore;
   syncBadgeClass: ComputedRef<Record<string, boolean>>;
-  syncBadgeTitle: ComputedRef<string>;
+  syncBadgeHoverTitle: ComputedRef<string>;
   saveLabel: ComputedRef<string>;
   isProjectNameEditing: Ref<boolean>;
   projectNameInputRef: Ref<HTMLInputElement | null>;

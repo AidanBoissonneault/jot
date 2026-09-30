@@ -8,6 +8,8 @@ import type {
 import { detectCodeLanguage } from '@/src/lib/codeLanguages';
 
 const BUTTON_ID = 'inkwell-inline-save';
+const ACCENT_COLOR = '#173494';
+const ACCENT_HOVER_COLOR = '#0f2673';
 const INKWELL_DRAG_MIME = 'application/x-inkwell-capture';
 const INKWELL_HEADING_DRAG_MIME = 'application/x-inkwell-heading-capture';
 const INKWELL_SOURCE_DATA_ATTR = 'data-inkwell-source';
@@ -33,16 +35,24 @@ export default defineContentScript({
       display: 'none',
       minHeight: '30px',
       padding: '0 12px',
-      border: '1px solid #17483f',
+      border: `1px solid ${ACCENT_HOVER_COLOR}`,
       borderRadius: '8px',
-      background: '#28635a',
+      background: ACCENT_COLOR,
       boxShadow: '0 8px 24px rgb(0 0 0 / 18%)',
       color: '#ffffff',
       cursor: 'pointer',
+      transition: 'background-color 120ms ease, box-shadow 120ms ease',
       font: '600 13px/1 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
     });
 
     document.documentElement.append(button);
+
+    button.addEventListener('mouseenter', () => {
+      button.style.background = ACCENT_HOVER_COLOR;
+    });
+    button.addEventListener('mouseleave', () => {
+      button.style.background = ACCENT_COLOR;
+    });
 
     browser.runtime.onMessage.addListener((message: InkwellRuntimeMessage) => {
       if (message?.type !== 'inkwell.restoreHighlight') {

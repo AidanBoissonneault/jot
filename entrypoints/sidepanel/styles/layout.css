@@ -2,7 +2,7 @@
 /* Sidepanel-scoped design and editor styles shared by the composed views. */
 .shell {
   display: grid;
-  grid-template-rows: auto auto 1fr;
+  grid-template-rows: auto 1fr;
   min-height: 100vh;
   padding: 10px;
 }
@@ -415,11 +415,6 @@
 
 .editor-header p {
   color: var(--inkwell-muted);
-}
-
-.error {
-  margin: 10px 0 0;
-  color: var(--inkwell-warning);
 }
 
 .auth-gate {

@@ -5,17 +5,17 @@ import ProjectHeaderControls from './ProjectHeaderControls.vue';
 
 const props = defineProps<{ context: TopBarContext }>();
 const context = props.context;
-const { syncBadgeClass, syncBadgeTitle, saveLabel, accountLabel, workspaceLabel } = context;
+const { syncBadgeClass, syncBadgeHoverTitle, saveLabel, accountLabel, workspaceLabel } = context;
 </script>
 
 <template>
   <div class="topbar-status">
     <div
       :class="syncBadgeClass"
-      :title="syncBadgeTitle"
+      :title="syncBadgeHoverTitle"
       role="status"
       tabindex="0"
-      :aria-label="`${saveLabel}: ${syncBadgeTitle}`"
+      :aria-label="syncBadgeHoverTitle"
     >
       <span class="sync-dot" aria-hidden="true" />
       <span class="sync-label">{{ saveLabel }}</span>

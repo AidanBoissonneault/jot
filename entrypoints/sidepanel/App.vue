@@ -307,8 +307,6 @@ const {
   restoreEditorContextSelection,
 );
 
-const hasInlineMessage = computed(() => Boolean(uiMessage.value || store.errorMessage));
-
 useSidepanelLifecycle({
   activeTab,
   editor,
@@ -647,10 +645,15 @@ function handlePanelExit() {
   editorPersistence?.handlePanelExit();
 }
 
+const syncBadgeHoverTitle = computed(() => {
+  const feedback = store.errorMessage || uiMessage.value;
+  return [...new Set([saveLabel.value, syncBadgeTitle.value, feedback].filter(Boolean))].join(' · ');
+});
+
 const topBarContext: TopBarContext = {
   store,
   syncBadgeClass,
-  syncBadgeTitle,
+  syncBadgeHoverTitle,
   saveLabel,
   isProjectNameEditing,
   projectNameInputRef,
@@ -808,10 +811,6 @@ const editorPageTitleContext: EditorPageTitleContext = {
 <template>
   <main class="shell">
     <TopBar :context="topBarContext" />
-
-    <p v-if="hasInlineMessage" class="error">
-      {{ uiMessage || store.errorMessage }}
-    </p>
 
     <section
       v-if="canUseEditor && activeTab === 'editor'"
