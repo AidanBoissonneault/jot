@@ -43,6 +43,11 @@ export function isNotionObjectNotFound(error: unknown): boolean {
   return numberProperty(error, 'status') === 404 || stringProperty(error, 'code') === 'object_not_found';
 }
 
+/** Detects a forbidden Notion object lookup so regular sync can try rediscovery. */
+export function isNotionObjectForbidden(error: unknown): boolean {
+  return numberProperty(error, 'status') === 403 || stringProperty(error, 'code') === 'restricted_resource';
+}
+
 /** Detects a block/page endpoint mismatch. @param error - Unknown error. @returns Match result. */
 export function isBlockNotPageError(error: unknown): boolean {
   return stringProperty(error, 'code') === 'validation_error'

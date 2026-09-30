@@ -33,7 +33,7 @@ interface PageSyncDependencies {
   ensureProjectPage: ((
     store: WorkerStore,
     project: Project,
-    options: { selectedParentPageId: string | undefined },
+    options: { isForcedMerge?: boolean; selectedParentPageId: string | undefined; syncState?: boolean },
   ) => Promise<ProjectPageResult>) | undefined;
   ensureProjectRootPage: (
     store: WorkerStore,
@@ -227,7 +227,13 @@ async function pushPageToProjectDatabase({
   updateThreadToggleTitle,
   writeStore,
 }: ProjectDatabasePushOptions) {
-  const projectPage = await ensureProjectPage(store, project, { selectedParentPageId });
+  const isForcedMerge = page.content.attrs?.inkwellConflictResolution === true;
+  // Page writes must not trigger the separate project-state conflict check.
+  const projectPage = await ensureProjectPage(store, project, {
+    isForcedMerge,
+    selectedParentPageId,
+    syncState: false,
+  });
 
   if (page.status === 'archived') {
     await archiveThreadToggle?.(store, page);

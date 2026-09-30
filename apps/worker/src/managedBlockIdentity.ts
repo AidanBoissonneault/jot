@@ -75,7 +75,9 @@ export function mappingFromDesired(
   entry: DesiredManagedBlock,
   notionBlockId: string | undefined,
   previous: Partial<BlockMapping> = {},
+  syncedState?: Record<string, unknown>,
 ): BlockMapping {
+  const nextState = stateFromSyncedBlock(entry.notionBlock, syncedState);
   return {
     localPageId: entry.localPageId,
     inkwellBlockId: entry.inkwellBlockId,
@@ -85,8 +87,33 @@ export function mappingFromDesired(
     order: entry.order,
     lastSyncedHash: entry.lastSyncedHash,
     oldState: previous.newState ?? previous.oldState ?? null,
-    newState: entry.notionBlock,
+    newState: nextState,
   };
+}
+
+function stateFromSyncedBlock(
+  desired: NotionBlockPayload,
+  syncedState: Record<string, unknown> | undefined,
+): NotionBlockPayload {
+  if (!syncedState || (desired.type !== 'image' && desired.type !== 'audio')) return desired;
+  const desiredBody = objectValue(desired[desired.type]);
+  const syncedBody = objectValue(syncedState[desired.type]);
+  if (!desiredBody || !syncedBody) return desired;
+
+  return {
+    ...desired,
+    [desired.type]: {
+      ...desiredBody,
+      ...syncedBody,
+      ...(desiredBody.file_upload ? { file_upload: desiredBody.file_upload } : {}),
+    },
+  };
+}
+
+function objectValue(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
 }
 
 /** Indexes persisted mappings by stable local identity. */

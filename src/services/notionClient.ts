@@ -1085,7 +1085,13 @@ export async function applySyncResult(event: SyncEventMessage): Promise<ProjectP
           syncMessage: undefined,
           content: stripConflictResolutionMarkers(page.content),
         }
-      : withSyncStatus(page, 'error', 'Notion sync failed. Will retry.');
+      : withSyncStatus(
+          page,
+          'error',
+          event.message ?? (event.statusCode
+            ? `Notion sync failed with HTTP ${event.statusCode}. Check Notion access, then use Resync.`
+            : 'Notion sync failed. Will retry.'),
+        );
 
   await persistPage(updated);
   return updated;
@@ -1458,6 +1464,7 @@ async function deliverPendingSyncOps({ force }: { force: boolean }): Promise<voi
 function stripConflictResolutionMarkers(content: DocumentContent): DocumentContent {
   const attrs = { ...(content.attrs ?? {}) };
   delete attrs.inkwellConflictResolution;
+  delete attrs.inkwellPreserveRemoteBlocks;
   return {
     ...content,
     ...(content.attrs ? { attrs } : {}),
@@ -1668,13 +1675,16 @@ export const notionClient = {
         await blockPendingSyncOps(pageId, {
           code: 'unmapped_notion_content',
           message: error.message,
-          diff: { ...error.diff, localContent: page.content },
+          diff: error.diff,
         });
         pageConflicts.push({
           targetType: 'page',
           targetId: page.id,
           targetTitle: page.title,
-          localContent: page.content,
+          baseContent: error.diff.baseContent,
+          localChangedBlockIds: error.diff.localChangedBlockIds,
+          remoteChangedBlockIds: error.diff.remoteChangedBlockIds,
+          localContent: error.diff.localContent,
           remoteContent: error.diff.remoteContent,
         });
         await persistPage({ ...page, syncState: 'error', syncMessage: error.message });
@@ -1711,6 +1721,9 @@ export const notionClient = {
       const remoteContent = diff.remoteContent
         ? pruneOrphanedProjectStateSources(diff.remoteContent, liveBlockIds)
         : null;
+      const baseContent = diff.baseContent
+        ? pruneOrphanedProjectStateSources(diff.baseContent, liveBlockIds)
+        : null;
 
       if (localContent !== localState && projectsById.has(event.projectId)) {
         project = { ...project, stateContent: localContent };
@@ -1722,6 +1735,9 @@ export const notionClient = {
         targetType: 'project',
         targetId: event.projectId,
         targetTitle: project.name,
+        baseContent,
+        localChangedBlockIds: diff.localChangedBlockIds,
+        remoteChangedBlockIds: diff.remoteChangedBlockIds,
         localContent,
         remoteContent,
       });

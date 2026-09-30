@@ -22,6 +22,7 @@ import {
 } from './projectDatabaseRows.js';
 import { createProjectDatabaseStateHelpers } from './projectDatabaseState.js';
 import { createProjectDatabaseDiscoveryHelpers } from './projectDatabaseDiscovery.js';
+import { isNotionObjectForbidden } from './workerUtils.js';
 
 import type { DocumentContent, Project, ProjectPage } from '../../../src/types/capture.js';
 import type {
@@ -72,6 +73,7 @@ interface ParentSelection {
 
 /** Describes the ensure project page options contract used by this API feature. */
 interface EnsureProjectPageOptions extends ParentSelection {
+  isForcedMerge: boolean;
   retryOnArchivedAncestor: boolean;
   syncState: boolean;
 }
@@ -143,9 +145,10 @@ export function createProjectDatabaseHelpers({
     {
       selectedParentPageId,
       syncState = true,
-    }: Partial<Pick<EnsureProjectPageOptions, 'selectedParentPageId' | 'syncState'>> = {},
+      isForcedMerge = project.stateContent?.attrs?.inkwellConflictResolution === true,
+    }: Partial<Pick<EnsureProjectPageOptions, 'selectedParentPageId' | 'syncState' | 'isForcedMerge'>> = {},
   ): Promise<ProjectPageResult> {
-    return ensureProjectPageAttempt(store, project, { selectedParentPageId, syncState });
+    return ensureProjectPageAttempt(store, project, { selectedParentPageId, syncState, isForcedMerge });
   }
 
   /** Performs a project-row sync attempt. @param store - Worker state. @param project - Local project. @param options - Retry options. @returns Project page result. */
@@ -156,13 +159,19 @@ export function createProjectDatabaseHelpers({
       selectedParentPageId,
       retryOnArchivedAncestor = true,
       syncState = true,
+      isForcedMerge = project.stateContent?.attrs?.inkwellConflictResolution === true,
     }: Partial<EnsureProjectPageOptions> = {},
   ): Promise<ProjectPageResult> {
     const database = await ensureProjectDatabase(store, { selectedParentPageId });
     const stored = store.projectPages?.[project.id];
     const existingPageId = stored?.notionPageId;
     let page = existingPageId
-      ? await notionRequest(store, `/pages/${existingPageId}`).catch(() => undefined)
+      ? await notionRequest(store, `/pages/${existingPageId}`).catch((error) => {
+          if (isNotionObjectNotFound(error) || (!isForcedMerge && isNotionObjectForbidden(error))) {
+            return undefined;
+          }
+          throw error;
+        })
       : undefined;
 
     if (!page) {
@@ -177,7 +186,9 @@ export function createProjectDatabaseHelpers({
         page = await updateProjectDatabasePage(store, page.id, project);
       }
 
-      const stateSync = syncState ? await syncProjectState(store, page.id, project) : undefined;
+      const stateSync = syncState
+        ? await syncProjectState(store, page.id, project, isForcedMerge)
+        : undefined;
       storeProjectPage(store, database, project, page);
       return {
         ...pageSummaryFromNotionPage(page, database),
@@ -203,6 +214,7 @@ export function createProjectDatabaseHelpers({
         selectedParentPageId,
         retryOnArchivedAncestor: false,
         syncState,
+        isForcedMerge,
       });
     }
   }

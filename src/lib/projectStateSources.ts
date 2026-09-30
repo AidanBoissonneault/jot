@@ -3,8 +3,8 @@ import type { DocumentContent } from '../types/capture.js';
 export const SOURCE_REGISTRY_PREFIX = 'inkwell_sources_v1:';
 export const SOURCE_ENTRY_PREFIX = 'inkwell_source_v1:';
 export const SOURCE_BLOCK_ID_PREFIX = 'source:';
-const SOURCE_V2_PREFIX = 'inkwell_source_v2:';
-const LINKS_V1_PREFIX = 'inkwell_links_v1:';
+export const SOURCE_V2_PREFIX = 'inkwell_source_v2:';
+export const LINKS_V1_PREFIX = 'inkwell_links_v1:';
 
 /** Removes source entries that point to Inkwell blocks which no longer exist. */
 export function pruneOrphanedProjectStateSources(

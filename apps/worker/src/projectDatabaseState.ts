@@ -27,6 +27,7 @@ import type {
   StoredBlock,
   WorkerStore,
 } from './types.js';
+import { isNotionObjectForbidden } from './workerUtils.js';
 
 /** Dependencies used to read and write nested project state and thread blocks. */
 interface ProjectDatabaseStateDependencies {
@@ -50,6 +51,7 @@ interface ProjectDatabaseStateDependencies {
 
 /** Mapping key and project/thread block mappings for a managed Notion toggle. */
 interface ToggleOptions {
+  isForcedMerge?: boolean;
   key: string;
   mappings: Record<string, StoredBlock>;
 }
@@ -143,10 +145,17 @@ export function createProjectDatabaseStateHelpers({
   }
 
   /** Reconciles local project state with its Notion toggle, preserving remote edits. */
-  async function syncProjectState(store: WorkerStore, notionPageId: string, project: Project) {
+  async function syncProjectState(
+    store: WorkerStore,
+    notionPageId: string,
+    project: Project,
+    isForcedMerge = false,
+  ) {
     const key = projectStateKey(project.id);
     const previous = store.projectBlocks?.[key];
+    const isUserReviewedReplacement = project.stateContent?.attrs?.inkwellConflictResolution === true;
     const container = await ensureToggleBlock(store, notionPageId, 'Project State', {
+      isForcedMerge: isForcedMerge || isUserReviewedReplacement,
       key,
       mappings: store.projectBlocks,
     });
@@ -154,58 +163,68 @@ export function createProjectDatabaseStateHelpers({
       previous?.lastEditedTime &&
       container.last_edited_time &&
       container.last_edited_time !== previous.lastEditedTime;
-    const isUserReviewedReplacement = project.stateContent?.attrs?.inkwellConflictResolution === true;
-    const existingInkwellBlockIds = inkwellBlockIdsForProjectState(store, key);
-    const stateContent = pruneOrphanedProjectStateSources(
-      project.stateContent ?? emptyDocument(),
-      existingInkwellBlockIds,
-    );
-    let remoteBlocks = await listAllBlockChildren(store, container.id);
-    const removedRemoteIds = new Set<string>();
-    let changedRemoteState = false;
+    const existingInkwellBlockIds = isUserReviewedReplacement
+      ? new Set<string>()
+      : inkwellBlockIdsForProjectState(store, key);
+    const stateContent = isUserReviewedReplacement
+      ? project.stateContent ?? emptyDocument()
+      : pruneOrphanedProjectStateSources(
+          project.stateContent ?? emptyDocument(),
+          existingInkwellBlockIds,
+        );
+    let remoteBlocks: NotionBlock[] = [];
 
-    for (const block of remoteBlocks) {
-      const node = notionBlocksToTiptapDocument([block]).content?.[0];
-      if (!node || !projectStateSourceBlockIds(node).some((blockId) =>
-        !existingInkwellBlockIds.has(blockId),
-      )) continue;
-
-      const cleaned = pruneOrphanedProjectStateSources(
-        { type: 'doc', content: [node] },
-        existingInkwellBlockIds,
-      );
-      const replacementNode = cleaned.content?.[0];
-      if (!replacementNode) {
-        if (deleteManagedBlock) {
-          await deleteManagedBlock(store, block.id);
-        } else {
-          await notionRequest(store, `/blocks/${block.id}`, { method: 'DELETE' });
-        }
-        removedRemoteIds.add(block.id);
-        changedRemoteState = true;
-        continue;
-      }
-
-      const [replacement] = tiptapDocumentToNotionBlocks?.(cleaned) ?? [];
-      if (!replacement) continue;
-      if (updateManagedBlock) {
-        await updateManagedBlock(store, block.id, replacement);
-      } else {
-        const { object: _object, type: _type, ...body } = replacement;
-        await notionRequest(store, `/blocks/${block.id}`, { method: 'PATCH', body });
-      }
-      changedRemoteState = true;
-      for (const mapping of store.blockMappings[key] ?? []) {
-        if (mapping.notionBlockId === block.id) mapping.newState = replacement;
-      }
-    }
-
-    if (removedRemoteIds.size) {
-      store.blockMappings[key] = (store.blockMappings[key] ?? [])
-        .filter((mapping) => !removedRemoteIds.has(mapping.notionBlockId ?? ''));
-    }
-    if (changedRemoteState) {
+    // A reviewed merge is the user's chosen snapshot. Skip automatic source
+    // pruning so metadata or unique blocks from that snapshot are not removed
+    // before replaceManagedBlocks writes it.
+    if (!isUserReviewedReplacement) {
       remoteBlocks = await listAllBlockChildren(store, container.id);
+      const removedRemoteIds = new Set<string>();
+      let changedRemoteState = false;
+
+      for (const block of remoteBlocks) {
+        const node = notionBlocksToTiptapDocument([block]).content?.[0];
+        if (!node || !projectStateSourceBlockIds(node).some((blockId) =>
+          !existingInkwellBlockIds.has(blockId),
+        )) continue;
+
+        const cleaned = pruneOrphanedProjectStateSources(
+          { type: 'doc', content: [node] },
+          existingInkwellBlockIds,
+        );
+        const replacementNode = cleaned.content?.[0];
+        if (!replacementNode) {
+          if (deleteManagedBlock) {
+            await deleteManagedBlock(store, block.id);
+          } else {
+            await notionRequest(store, `/blocks/${block.id}`, { method: 'DELETE' });
+          }
+          removedRemoteIds.add(block.id);
+          changedRemoteState = true;
+          continue;
+        }
+
+        const [replacement] = tiptapDocumentToNotionBlocks?.(cleaned) ?? [];
+        if (!replacement) continue;
+        if (updateManagedBlock) {
+          await updateManagedBlock(store, block.id, replacement);
+        } else {
+          const { object: _object, type: _type, ...body } = replacement;
+          await notionRequest(store, `/blocks/${block.id}`, { method: 'PATCH', body });
+        }
+        changedRemoteState = true;
+        for (const mapping of store.blockMappings[key] ?? []) {
+          if (mapping.notionBlockId === block.id) mapping.newState = replacement;
+        }
+      }
+
+      if (removedRemoteIds.size) {
+        store.blockMappings[key] = (store.blockMappings[key] ?? [])
+          .filter((mapping) => !removedRemoteIds.has(mapping.notionBlockId ?? ''));
+      }
+      if (changedRemoteState) {
+        remoteBlocks = await listAllBlockChildren(store, container.id);
+      }
     }
 
     if (hasRemoteEdit && !isUserReviewedReplacement) {
@@ -263,6 +282,7 @@ export function createProjectDatabaseStateHelpers({
     page: ProjectPage,
   ): Promise<NotionObject> {
     return ensureToggleBlock(store, projectPageId, page.title || 'Untitled Page', {
+      isForcedMerge: page.content.attrs?.inkwellConflictResolution === true,
       key: threadKey(page.id),
       mappings: store.threadBlocks,
     });
@@ -273,11 +293,17 @@ export function createProjectDatabaseStateHelpers({
     store: WorkerStore,
     parentBlockId: string,
     title: string,
-    { key, mappings }: ToggleOptions,
+    { isForcedMerge = false, key, mappings }: ToggleOptions,
   ): Promise<NotionObject> {
     const stored = mappings?.[key];
     if (stored?.blockId) {
-      const block = await notionRequest(store, `/blocks/${stored.blockId}`).catch(() => undefined);
+      const block = await notionRequest(store, `/blocks/${stored.blockId}`).catch((error) => {
+        if (
+          isNotionObjectNotFoundError(error) ||
+          (!isForcedMerge && isNotionObjectForbidden(error))
+        ) return undefined;
+        throw error;
+      });
 
       if (block?.id && !block.archived) {
         if (toggleTitle(block) !== title) {
@@ -287,7 +313,13 @@ export function createProjectDatabaseStateHelpers({
       }
     }
 
-    const children = await listAllBlockChildren(store, parentBlockId).catch(() => []);
+    const children = await listAllBlockChildren(store, parentBlockId).catch((error) => {
+      if (
+        isNotionObjectNotFoundError(error) ||
+        (!isForcedMerge && isNotionObjectForbidden(error))
+      ) return [];
+      throw error;
+    });
     const matching = children.find(
       (block) => block.type === 'toggle' && !block.archived && toggleTitle(block) === title,
     );
@@ -389,6 +421,12 @@ export function createProjectDatabaseStateHelpers({
     syncProjectState,
     updateThreadToggleTitle,
   };
+}
+
+function isNotionObjectNotFoundError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const detail = error as { status?: unknown; code?: unknown };
+  return detail.status === 404 || detail.code === 'object_not_found';
 }
 
 function inkwellBlockIdsForProjectState(

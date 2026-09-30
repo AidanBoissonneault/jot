@@ -16,6 +16,7 @@ import type {
   HashValue,
   ListAllBlockChildren,
   NotionBlock,
+  NotionBlockPayload,
   WorkerStore,
 } from './types.js';
 
@@ -113,6 +114,10 @@ function rebuildImportedBlockMappings({
     const importedBlock = notionBlocks[index];
     const node = content[index];
     const existing = existingByNotionId.get(importedBlock?.id);
+    const fileUploadId = fileUploadIdFromMapping(existing);
+    const savedState = fileUploadId && importedBlock
+      ? withRemoteMediaState(notionBlock, importedBlock, fileUploadId)
+      : notionBlock;
 
     return {
       localPageId,
@@ -123,11 +128,30 @@ function rebuildImportedBlockMappings({
       order: index,
       lastSyncedHash: hash(JSON.stringify(notionBlock ?? {})),
       oldState: existing?.newState ?? existing?.oldState ?? null,
-      newState: notionBlock,
+      newState: savedState,
     };
   });
 
   return mapped;
+}
+
+function withRemoteMediaState(
+  desired: NotionBlockPayload,
+  remote: NotionBlock,
+  fileUploadId: string,
+): NotionBlockPayload {
+  if (desired.type !== 'image' && desired.type !== 'audio') return desired;
+  const desiredBody = objectProperty(desired, desired.type);
+  const remoteBody = objectProperty(remote, desired.type);
+  if (!desiredBody || !remoteBody) return desired;
+  return {
+    ...desired,
+    [desired.type]: {
+      ...desiredBody,
+      ...remoteBody,
+      file_upload: { id: fileUploadId },
+    },
+  };
 }
 
 /**

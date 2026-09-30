@@ -55,6 +55,7 @@ import { useInkwellStore } from '@/src/stores/inkwell';
 import type { DocumentContent } from '@/src/types/capture';
 import type { SyncContentConflict } from '@/src/types/sync';
 import type { CaptureSelectionPayload } from '@/src/types/messages';
+import { autoMergeUniquePageAdditions } from '@/src/lib/syncConflictAutoMerge';
 
 const store = useInkwellStore();
 const {
@@ -483,10 +484,43 @@ async function resync() {
 
     const result = await store.resyncPendingChanges();
 
-    if (result.conflicts.length) {
-      syncConflicts.value = result.conflicts;
+    const conflictsNeedingReview: SyncContentConflict[] = [];
+    let autoMergedAdditions = 0;
+    let autoMergeError = '';
+    for (const conflict of result.conflicts) {
+      const mergedContent = autoMergeUniquePageAdditions(conflict);
+      if (!mergedContent) {
+        conflictsNeedingReview.push(conflict);
+        continue;
+      }
+
+      try {
+        await notionClient.resolveSyncConflict(conflict.targetType, conflict.targetId, mergedContent);
+        autoMergedAdditions += 1;
+      } catch (error) {
+        conflictsNeedingReview.push(conflict);
+        autoMergeError ||= error instanceof Error
+          ? error.message
+          : 'Unable to sync the new blocks automatically. Your local changes remain saved.';
+      }
+    }
+
+    if (conflictsNeedingReview.length) {
+      syncConflicts.value = conflictsNeedingReview;
       syncConflictError.value = '';
-      uiMessage.value = `Review ${result.conflicts.length} sync ${result.conflicts.length === 1 ? 'conflict' : 'conflicts'} to merge the local and Notion blocks.`;
+      if (autoMergeError) syncConflictError.value = autoMergeError;
+      uiMessage.value = autoMergeError ||
+        `Review ${conflictsNeedingReview.length} sync ${conflictsNeedingReview.length === 1 ? 'conflict' : 'conflicts'} to merge the local and Notion blocks.`;
+    } else if (autoMergedAdditions) {
+      syncConflicts.value = [];
+      syncConflictError.value = '';
+      uiMessage.value = 'New Notion blocks were merged with local content and synced.';
+      try {
+        await store.refreshWorkspaceFromStorage();
+      } catch (error) {
+        const detail = error instanceof Error ? ` ${error.message}` : '';
+        uiMessage.value = `New Notion blocks were merged and synced, but the workspace view could not refresh.${detail}`;
+      }
     } else if (result.blockedProjectCount > 0) {
       uiMessage.value = result.blockedMessage
         ? `${result.blockedMessage} Your local snapshot remains saved on this device.`

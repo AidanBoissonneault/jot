@@ -9,6 +9,8 @@ import {
 import {
   SOURCE_BLOCK_ID_PREFIX,
   SOURCE_ENTRY_PREFIX,
+  SOURCE_V2_PREFIX,
+  LINKS_V1_PREFIX,
   SOURCE_REGISTRY_PREFIX,
 } from '@/src/lib/projectStateSources';
 
@@ -58,14 +60,20 @@ export function mergeVisibleProjectState(
   previousState: DocumentContent | undefined,
 ): DocumentContent {
   const registry = readSourceRegistry(previousState);
+  const legacyMetadata = (previousState?.content ?? []).filter((node) =>
+    isProjectStateMetadataNode(node) &&
+    sourceRegistryText(node) === null &&
+    sourceEntryText(node) === null,
+  );
 
-  return Object.keys(registry).length
+  return Object.keys(registry).length || legacyMetadata.length
     ? {
         ...visibleContent,
         type: 'doc',
         content: [
           ...stateNodesForStorage(visibleContent),
           ...sourceEntryNodes(registry),
+          ...legacyMetadata,
         ],
       }
     : visibleContent;
@@ -75,7 +83,7 @@ export function visibleProjectStateContent(
   stateContent: DocumentContent | undefined,
 ): DocumentContent {
   const content = (stateContent?.content ?? []).filter(
-    (node) => !isSourceRegistryNode(node),
+    (node) => !isProjectStateMetadataNode(node),
   );
 
   return {
@@ -215,8 +223,10 @@ function stateNodesForStorage(content: DocumentContent) {
     : nodes;
 }
 
-function isSourceRegistryNode(node: DocumentContent) {
-  return sourceRegistryText(node) !== null || sourceEntryText(node) !== null;
+export function isProjectStateMetadataNode(node: DocumentContent) {
+  const text = codeBlockText(node);
+  return sourceRegistryText(node) !== null || sourceEntryText(node) !== null ||
+    Boolean(text?.startsWith(SOURCE_V2_PREFIX) || text?.startsWith(LINKS_V1_PREFIX));
 }
 
 function sourceEntry(node: DocumentContent): {

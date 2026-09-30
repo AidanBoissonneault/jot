@@ -178,7 +178,7 @@ export async function applyManagedBlockOps({
         createdByOrder,
         desired.order,
       );
-      nextById.set(inkwellBlockId, mappingFromDesired(desired, createdBlock?.id));
+      nextById.set(inkwellBlockId, mappingFromDesired(desired, createdBlock?.id, {}, createdBlock));
       continue;
     }
 
@@ -203,7 +203,7 @@ export async function applyManagedBlockOps({
       createdByOrder,
       desired.order,
     );
-    nextById.set(inkwellBlockId, mappingFromDesired(desired, createdBlock?.id, existing));
+    nextById.set(inkwellBlockId, mappingFromDesired(desired, createdBlock?.id, existing, createdBlock));
   }
 
   store.blockMappings[localPageId] = desiredBlocks
@@ -327,7 +327,7 @@ async function applySingleManagedBlockOp({
     if (!createdBlock?.id) {
       throw new Error('Notion did not confirm the new block; existing content was preserved.');
     }
-    nextMapping = mappingFromDesired(desired, createdBlock?.id);
+    nextMapping = mappingFromDesired(desired, createdBlock?.id, {}, createdBlock);
   } else if (existing.lastSyncedHash === desired.lastSyncedHash) {
     nextMapping = mappingFromDesired(desired, existing.notionBlockId, existing);
   } else if (isUpdateCompatible(existing, desired)) {
@@ -362,7 +362,7 @@ async function applySingleManagedBlockOp({
     if (!createdBlock?.id) {
       throw new Error('Notion did not confirm the replacement block; existing content was preserved.');
     }
-    nextMapping = mappingFromDesired(desired, createdBlock?.id, existing);
+    nextMapping = mappingFromDesired(desired, createdBlock?.id, existing, createdBlock);
   }
 
   if (existingIndex >= 0) mappings.splice(existingIndex, 1);

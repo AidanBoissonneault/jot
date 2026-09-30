@@ -91,7 +91,7 @@ export async function reconcileManagedBlocks({
       if (!createdBlock?.id) {
         throw new Error('Notion did not confirm the new block; existing content was preserved.');
       }
-      nextMappings.push(mappingFromDesired(entry, createdBlock?.id));
+      nextMappings.push(mappingFromDesired(entry, createdBlock?.id, {}, createdBlock));
       previousNotionBlockId = createdBlock?.id ?? previousNotionBlockId;
       continue;
     }
@@ -140,7 +140,7 @@ export async function reconcileManagedBlocks({
     // Keep the old block until its replacement is confirmed in Notion. If a
     // delete fails, a retry will recognize the staged replacement above.
     await deleteManagedBlock(store, existing.notionBlockId);
-    nextMappings.push(mappingFromDesired(entry, createdBlock?.id, existing));
+    nextMappings.push(mappingFromDesired(entry, createdBlock?.id, existing, createdBlock));
     previousNotionBlockId = createdBlock?.id ?? previousNotionBlockId;
   }
 
@@ -214,7 +214,7 @@ export async function rebuildReorderedRange({
     }
 
     createdByOrder[entry.order] = createdBlock;
-    rebuiltMappings.set(entry.inkwellBlockId, mappingFromDesired(entry, createdBlock?.id));
+    rebuiltMappings.set(entry.inkwellBlockId, mappingFromDesired(entry, createdBlock?.id, {}, createdBlock));
     previousBlockId = createdBlock?.id ?? previousBlockId;
   }
 

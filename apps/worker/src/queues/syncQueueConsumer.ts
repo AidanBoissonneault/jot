@@ -126,18 +126,41 @@ export async function processSyncQueue(
   
           if (!syncRow || syncRow.local_version <= queuedVersion) {
             const doStub = env.SYNC_EVENTS.get(env.SYNC_EVENTS.idFromName(installationId));
+            const errorRecord = err && typeof err === 'object'
+              ? err as { code?: unknown; message?: unknown; status?: unknown }
+              : undefined;
+            const statusCode = typeof errorRecord?.status === 'number' ? errorRecord.status : undefined;
+            const errorMessage = err instanceof Error ? err.message : String(err);
+            const message = statusCode === 403
+              ? `${errorMessage} Check that Inkwell has access to this Notion page, then use Resync.`
+              : errorMessage;
             await doStub.fetch(new Request('http://do/notify', {
               method: 'POST',
-              body: JSON.stringify({ status: 'failed', pageId: job.localId }),
+              body: JSON.stringify({
+                status: 'failed',
+                pageId: job.localId,
+                message,
+                ...(typeof errorRecord?.code === 'string' ? { code: errorRecord.code } : {}),
+                ...(statusCode !== undefined ? { statusCode } : {}),
+              }),
             })).catch(() => undefined);
           }
-  
-          if (isUnmappedNotionContentError(err)) {
+
+          if (isUnmappedNotionContentError(err) || isPermanentNotionFailure(err)) {
             msg.ack();
           } else {
             msg.retry();
-          }
-        }
+  }
+}
+
+/** Avoids retrying Notion requests that require a user or permission change. */
+function isPermanentNotionFailure(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const detail = error as { isNotionApiError?: unknown; status?: unknown };
+  return detail.isNotionApiError === true &&
+    typeof detail.status === 'number' &&
+    [400, 401, 403, 404].includes(detail.status);
+}
       }
 }
 

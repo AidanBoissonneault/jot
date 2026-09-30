@@ -122,6 +122,10 @@ export type SyncProjectResponse = {
 
 /** Carries the local and remote documents shown when content matching cannot resolve a sync. */
 export type SyncConflictDiff = {
+  /** Last shared version of mapped blocks, used to detect edits on both sides. */
+  baseContent?: DocumentContent | null;
+  localChangedBlockIds?: string[];
+  remoteChangedBlockIds?: string[];
   localContent: DocumentContent;
   remoteContent: DocumentContent | null;
 };
@@ -138,6 +142,9 @@ export type SyncContentConflict = {
   targetType: 'page' | 'project';
   targetId: string;
   targetTitle: string;
+  baseContent?: DocumentContent | null;
+  localChangedBlockIds?: string[];
+  remoteChangedBlockIds?: string[];
   localContent: DocumentContent;
   remoteContent: DocumentContent | null;
 };
@@ -211,5 +218,5 @@ export type SyncEnqueueResponse = {
 /** Describes a real-time synchronization status notification. */
 export type SyncEventMessage =
   | { status: 'synced'; pageId: string; notionBlockId?: string | null; version?: number }
-  | { status: 'failed'; pageId: string }
+  | { status: 'failed'; pageId: string; code?: string; message?: string; statusCode?: number }
   | { status: 'stale'; pageId: string; version?: number };

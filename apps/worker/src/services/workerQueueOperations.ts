@@ -174,6 +174,7 @@ export function createWorkerQueueOperations(dependencies: WorkerQueueDependencie
 
       if (ensureProjectPage && ensureThreadToggle) {
         const projectPage = await ensureProjectPage(freshStore, project, {
+          isForcedMerge: page.content.attrs?.inkwellConflictResolution === true,
           selectedParentPageId,
           syncState: false,
         });
