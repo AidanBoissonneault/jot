@@ -337,6 +337,12 @@
   color: var(--inkwell-text);
 }
 
+.danger-button {
+  border-color: #d9a09c;
+  background: var(--inkwell-surface);
+  color: #9f2d25;
+}
+
 .icon-label-button {
   display: inline-flex;
   align-items: center;

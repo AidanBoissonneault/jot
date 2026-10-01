@@ -22,6 +22,8 @@ const {
   isSigningIn,
   loginWithNotion,
   logout,
+  isDeletingConnection,
+  deleteConnection,
 } = props.context;
 
 const statusItems = computed(() => [
@@ -35,6 +37,20 @@ const statusItems = computed(() => [
     value: `${store.pendingSyncCount} ${store.pendingSyncCount === 1 ? 'change' : 'changes'}`,
   },
 ]);
+const queueAccountMismatch = computed(() =>
+  store.syncConfig.connected &&
+  store.syncConfig.syncQueueOwnerUserId !== undefined &&
+  store.syncConfig.syncQueueOwnerUserId !== store.syncConfig.userId,
+);
+const queueOwnerUnknown = computed(() => queueAccountMismatch.value && store.syncConfig.syncQueueOwnerUserId === null);
+
+async function assignUnknownQueueToCurrentAccount() {
+  const confirmed = window.confirm(
+    'These older local changes could not be matched to a Notion account. Sync them to the currently connected account?',
+  );
+  if (!confirmed) return;
+  await store.assignUnmatchedPendingQueueToCurrentAccount().catch(() => undefined);
+}
 </script>
 
 <template>
@@ -58,6 +74,16 @@ const statusItems = computed(() => [
 
     <SyncStatusList :items="statusItems" />
 
+    <div v-if="queueAccountMismatch" class="sync-conflict-warning" role="status">
+      <template v-if="queueOwnerUnknown">
+        <span>Older local data could not be matched to a Notion account. Your documents remain on this device.</span>
+        <button type="button" class="secondary-button" @click="assignUnknownQueueToCurrentAccount">
+          Use this account for local data
+        </button>
+      </template>
+      <span v-else>Local documents and queued changes are locked to their original Notion account. Reconnect that account to sync them. Your documents remain on this device.</span>
+    </div>
+
     <LegalConsent
       v-if="!store.syncConfig.connected"
       v-model:accepted="hasAcceptedLegalTerms"
@@ -80,15 +106,28 @@ const statusItems = computed(() => [
       <span>{{ isSigningIn ? 'Connecting...' : 'Continue with Notion' }}</span>
     </button>
     <button
-      v-else
+      v-if="store.syncConfig.authenticated || store.syncConfig.connected"
       type="button"
       class="icon-label-button secondary-button"
       title="Logout"
       aria-label="Logout"
+      :disabled="isDeletingConnection"
       @click="logout"
     >
       <font-awesome-icon :icon="['fas', 'right-from-bracket']" fixed-width />
       <span>Logout</span>
+    </button>
+    <button
+      v-if="store.projects.length > 0 || store.pendingSyncCount > 0 || store.syncConfig.authenticated || store.syncConfig.connected"
+      type="button"
+      class="icon-label-button danger-button"
+      :disabled="isDeletingConnection || queueAccountMismatch"
+      :aria-busy="isDeletingConnection"
+      :title="queueAccountMismatch ? 'Reconnect the account that owns this local data first' : isDeletingConnection ? 'Deleting connection' : 'Delete connection and Inkwell data'"
+      @click="deleteConnection"
+    >
+      <font-awesome-icon :icon="['fas', 'trash-can']" fixed-width />
+      <span>{{ isDeletingConnection ? 'Deleting connection…' : 'Delete connection' }}</span>
     </button>
   </div>
 </template>

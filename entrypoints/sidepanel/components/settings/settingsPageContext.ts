@@ -20,8 +20,10 @@ export interface SettingsPageContext {
   openLegalUrl: (url: string) => void;
   canLoginWithNotion: ComputedRef<boolean>;
   isSigningIn: Ref<boolean>;
+  isDeletingConnection: Ref<boolean>;
   loginWithNotion: () => Promise<void>;
   logout: () => Promise<void>;
+  deleteConnection: () => Promise<void>;
   serverUrlDraft: Ref<string>;
   saveServerUrl: () => Promise<void>;
   parentPageSearchDraft: Ref<string>;

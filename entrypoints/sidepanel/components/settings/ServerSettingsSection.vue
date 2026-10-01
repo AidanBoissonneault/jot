@@ -14,6 +14,7 @@ const { serverUrlDraft, saveServerUrl } = props.context;
         v-model="serverUrlDraft"
         type="url"
         aria-label="Sync server URL"
+        aria-describedby="server-security-note"
         placeholder="http://localhost:8787"
       />
       <button
@@ -26,5 +27,8 @@ const { serverUrlDraft, saveServerUrl } = props.context;
         <span>Save</span>
       </button>
     </form>
+    <p id="server-security-note" class="server-security-note">
+      Only use a server you control or trust. It receives Inkwell authentication data and any content you sync to it. HTTPS is required outside localhost development.
+    </p>
   </div>
 </template>

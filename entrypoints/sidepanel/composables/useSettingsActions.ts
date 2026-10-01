@@ -36,8 +36,12 @@ export function useSettingsActions(
       return;
     }
 
-    await store.updateServerUrl(serverUrl);
-    uiMessage.value = '';
+    try {
+      await store.updateServerUrl(serverUrl);
+      uiMessage.value = '';
+    } catch (error) {
+      uiMessage.value = error instanceof Error ? error.message : 'Unable to save the sync server URL.';
+    }
   }
 
   /** Searches Notion workspace pages for a parent selection. */

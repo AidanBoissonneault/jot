@@ -1,5 +1,6 @@
 import { notionClient } from '@/src/services/notionClient';
 import { safeInkwellSourceUrl } from '@/src/extensions/inkwellLink';
+import { parseCaptureSelectionPayload } from '@/src/lib/capturePayload';
 import type {
   CaptureSelectionMessage,
   CaptureSelectionPayload,
@@ -35,6 +36,18 @@ export default defineBackground(() => {
   }
 
   browser.runtime.onMessage.addListener((message: InkwellRuntimeMessage) => {
+    if (message?.type === 'inkwell.prepareConnectionDeletion') {
+      return notionClient.prepareConnectionDeletion();
+    }
+
+    if (message?.type === 'inkwell.abortConnectionDeletion') {
+      return notionClient.abortConnectionDeletion().then(() => true);
+    }
+
+    if (message?.type === 'inkwell.completeConnectionDeletion') {
+      return notionClient.completeConnectionDeletion().then(() => true);
+    }
+
     if (message?.type === 'inkwell.captureSelection') {
       return handleCaptureSelection(message);
     }
@@ -63,17 +76,26 @@ export default defineBackground(() => {
   });
 
   // A background restart (including a browser reload) is an opportunity to
-  // resume durable work that was queued while the network was unavailable.
-  void notionClient.flushPendingSyncOps({ force: true }).catch(() => undefined);
+  // resume durable work, unless the user has an unfinished connection wipe.
+  void browser.storage.local.get('inkwellPendingConnectionDeletion').then(
+    async (stored: Record<string, unknown>) => {
+      if (stored.inkwellPendingConnectionDeletion) {
+        notionClient.markConnectionDeletionPending();
+      } else {
+        await notionClient.flushPendingSyncOps({ force: true });
+      }
+    },
+  ).catch(() => undefined);
 });
 
 function handleHeadingDragStarted(message: HeadingDragStartedMessage) {
-  if (!message.payload.highlightMeta.isHeading) {
+  const payload = parseCaptureSelectionPayload(message.payload);
+  if (!payload?.highlightMeta.isHeading) {
     return false;
   }
 
   lastHeadingDrag = {
-    payload: message.payload,
+    payload,
     createdAt: Date.now(),
   };
 
@@ -104,8 +126,11 @@ function handleConsumeHeadingDrag(message: ConsumeHeadingDragMessage) {
 }
 
 function handleTextDragStarted(message: TextDragStartedMessage) {
+  const payload = parseCaptureSelectionPayload(message.payload);
+  if (!payload || payload.highlightMeta.isHeading) return false;
+
   lastTextDrag = {
-    payload: message.payload,
+    payload,
     createdAt: Date.now(),
   };
 
@@ -136,10 +161,13 @@ function handleConsumeTextDrag(message: ConsumeTextDragMessage) {
 }
 
 async function handleCaptureSelection(message: CaptureSelectionMessage) {
+  const payload = parseCaptureSelectionPayload(message.payload);
+  if (!payload) return false;
+
   const wasInsertedBySidePanel = await browser.runtime
     .sendMessage({
       type: 'inkwell.insertCaptureRequest',
-      payload: message.payload,
+      payload,
     } satisfies InsertCaptureRequestMessage)
     .then((response: unknown) => response === true)
     .catch(() => false);
@@ -148,7 +176,7 @@ async function handleCaptureSelection(message: CaptureSelectionMessage) {
     return true;
   }
 
-  const page = await notionClient.appendCaptureToCurrentPage(message.payload);
+  const page = await notionClient.appendCaptureToCurrentPage(payload);
 
   void browser.runtime
     .sendMessage({

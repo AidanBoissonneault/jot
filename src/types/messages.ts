@@ -78,13 +78,28 @@ export type RestoreHighlightMessage = {
   payload: SourceOpenPayload;
 };
 
+export type PrepareConnectionDeletionMessage = {
+  type: 'inkwell.prepareConnectionDeletion';
+};
+
+export type AbortConnectionDeletionMessage = {
+  type: 'inkwell.abortConnectionDeletion';
+};
+
+export type CompleteConnectionDeletionMessage = {
+  type: 'inkwell.completeConnectionDeletion';
+};
+
 export type InkwellRuntimeMessage =
   | CaptureSelectionMessage
+  | AbortConnectionDeletionMessage
+  | CompleteConnectionDeletionMessage
   | ConsumeHeadingDragMessage
   | ConsumeTextDragMessage
   | HeadingDragStartedMessage
   | InsertCaptureRequestMessage
   | ProjectPageUpdatedMessage
+  | PrepareConnectionDeletionMessage
   | OpenSourceRequestMessage
   | RestoreHighlightMessage
   | TextDragStartedMessage;

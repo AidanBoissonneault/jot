@@ -39,7 +39,7 @@ settings, and interaction behavior live in the feature composables below.
 - `composables/useEditorContextMenu.ts` owns context-menu placement, source
   lookup, saved selection, clipboard behavior, and page-change dismissal.
 - `composables/useInkwellEditor.ts` configures Tiptap extensions, link opening,
-  editor events, and debounced content saves.
+  editor events, and saves when focus leaves a block or the editor.
 - `composables/useEditorToolbar.ts` owns toolbar modes, active panels, panel
   choices, and transitions for recording and link controls.
 - `composables/useEditorLinkActions.ts` owns link drafts, link commands, and

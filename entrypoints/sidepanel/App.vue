@@ -4,7 +4,7 @@
  * and places the top-level editor, settings, and archive regions in the shell.
  * Feature-specific state and effects live in their components or composables.
  */
-import { computed, nextTick, ref } from 'vue';
+import { computed, nextTick, onBeforeUnmount, ref } from 'vue';
 import ArchiveConfirmModal from './components/shared/ArchiveConfirmModal.vue';
 import SyncConflictModal from './components/shared/SyncConflictModal.vue';
 import TopBar from './components/layout/TopBar.vue';
@@ -54,10 +54,25 @@ import {
 import { useInkwellStore } from '@/src/stores/inkwell';
 import type { DocumentContent } from '@/src/types/capture';
 import type { SyncContentConflict } from '@/src/types/sync';
-import type { CaptureSelectionPayload } from '@/src/types/messages';
+import type { CaptureSelectionPayload, InkwellRuntimeMessage } from '@/src/types/messages';
 import { autoMergeUniquePageAdditions } from '@/src/lib/syncConflictAutoMerge';
 
 const store = useInkwellStore();
+
+function handleConnectionDeletionMessage(message: InkwellRuntimeMessage) {
+  if (message.type === 'inkwell.abortConnectionDeletion') {
+    void notionClient.abortConnectionDeletion().catch(() => undefined);
+  } else if (message.type === 'inkwell.completeConnectionDeletion') {
+    void notionClient.completeConnectionDeletion()
+      .finally(() => window.location.reload());
+  }
+}
+
+browser.runtime.onMessage.addListener(handleConnectionDeletionMessage);
+onBeforeUnmount(() => {
+  browser.runtime.onMessage.removeListener(handleConnectionDeletionMessage);
+});
+
 const {
   accountLabel,
   canUseEditor,
@@ -101,6 +116,7 @@ projectSettings = useProjectSettings(
 );
 const projectStateDraft = projectSettings.projectStateDraft;
 const saveTimer = ref<number | undefined>();
+let editorPersistence: ReturnType<typeof useEditorPersistence> | undefined;
 const pageTitleDraft = ref('');
 const isPageTitleEditing = ref(false);
 const isPageTitleDraftDirty = ref(false);
@@ -133,22 +149,40 @@ const {
   selectParentPage,
   serverUrlDraft,
 } = useSettingsActions(store, uiMessage);
+
+async function prepareForConnectionDeletion() {
+  window.clearTimeout(saveTimer.value);
+  saveTimer.value = undefined;
+  await editorPersistence?.flushEditorContent();
+}
+
+function resetEditorAfterConnectionDeletion() {
+  editorPersistence?.resetEditorToCurrentPage();
+}
+
 const {
   hasAcceptedLegalTerms,
   isLegalAcceptanceLoaded,
   isSigningIn,
+  isDeletingConnection,
   canLoginWithNotion,
   loadLegalAcceptance,
   stopSessionPolling,
   loginWithNotion,
   openLegalUrl,
   logout,
-} = useNotionConnection(store, activeTab, uiMessage);
+  deleteConnection,
+} = useNotionConnection(
+  store,
+  activeTab,
+  uiMessage,
+  prepareForConnectionDeletion,
+  resetEditorAfterConnectionDeletion,
+);
 const isProjectNameEditing = ref(false);
 const projectNameInputRef = ref<HTMLInputElement | null>(null);
 const editorStateVersion = ref(0);
 const isApplyingStoredContent = ref(false);
-let editorPersistence: ReturnType<typeof useEditorPersistence> | undefined;
 const editorHandlers: InkwellEditorHandlers = {
   handleDrop: () => false,
   showContextMenu: () => undefined,
@@ -182,7 +216,6 @@ const { editor, skipNextEditorUpdate, clearEditorUpdateSkip } = useInkwellEditor
   handlers: editorHandlers,
   isApplyingStoredContent,
   saveEditorContent: saveEditorContentOptimistically,
-  saveTimer,
   resolveSyncConflict: resolveInlinePageSyncConflict,
 });
 
@@ -712,8 +745,10 @@ const settingsPageContext: SettingsPageContext = {
   openLegalUrl,
   canLoginWithNotion,
   isSigningIn,
+  isDeletingConnection,
   loginWithNotion,
   logout,
+  deleteConnection,
   serverUrlDraft,
   saveServerUrl,
   parentPageSearchDraft,
