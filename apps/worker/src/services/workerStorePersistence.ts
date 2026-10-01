@@ -12,14 +12,14 @@ export function createWorkerStorePersistence(supabase: WorkerSupabaseClient) {
     return {
       ignoredInkwellDatabaseIds: store.ignoredInkwellDatabaseIds ?? new Set<string>(),
       installationId: store.installationId,
-      parentPages: store.parentPages ?? {},
-      projectPages: store.projectPages ?? {},
-      projectBlocks: store.projectBlocks ?? {},
-      threadBlocks: store.threadBlocks ?? {},
+      parentPages: safeRecord(store.parentPages),
+      projectPages: safeRecord(store.projectPages),
+      projectBlocks: safeRecord(store.projectBlocks),
+      threadBlocks: safeRecord(store.threadBlocks),
       inkwellRootPage: store.inkwellRootPage,
       inkwellDatabase: store.inkwellDatabase,
-      notePages: store.notePages ?? {},
-      blockMappings: store.blockMappings ?? {},
+      notePages: safeRecord(store.notePages),
+      blockMappings: safeRecord(store.blockMappings),
       logs: store.logs ?? [],
       tokens: store.tokens,
     };
@@ -52,6 +52,17 @@ export function createWorkerStorePersistence(supabase: WorkerSupabaseClient) {
         { onConflict: 'installation_id', ignoreDuplicates: true },
       );
     if (error) throw new Error('Unable to ensure Inkwell synchronization state.');
+  }
+
+  /** Copies JSON-backed dictionaries into prototype-free maps before key lookups or writes. */
+  function safeRecord<Value>(value: unknown): Record<string, Value> {
+    const record = Object.create(null) as Record<string, Value>;
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return record;
+
+    for (const key of Object.keys(value)) {
+      record[key] = (value as Record<string, Value>)[key];
+    }
+    return record;
   }
 
   /** Loads and normalizes persisted synchronization state. */
@@ -115,12 +126,12 @@ export function createWorkerStorePersistence(supabase: WorkerSupabaseClient) {
           null,
         inkwell_database_title:
           store.inkwellDatabase?.title ?? store.inkwellRootPage?.title ?? null,
-        note_pages_json: store.notePages ?? {},
-        block_mappings_json: store.blockMappings ?? {},
-        parent_pages_json: store.parentPages ?? {},
-        project_pages_json: store.projectPages ?? {},
-        project_blocks_json: store.projectBlocks ?? {},
-        thread_blocks_json: store.threadBlocks ?? {},
+        note_pages_json: safeRecord(store.notePages),
+        block_mappings_json: safeRecord(store.blockMappings),
+        parent_pages_json: safeRecord(store.parentPages),
+        project_pages_json: safeRecord(store.projectPages),
+        project_blocks_json: safeRecord(store.projectBlocks),
+        thread_blocks_json: safeRecord(store.threadBlocks),
         updated_at: new Date().toISOString(),
       })
       .eq('installation_id', installationId);

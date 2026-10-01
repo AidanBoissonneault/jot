@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createWorkerStorePersistence } from '@/apps/worker/src/services/workerStorePersistence';
 import type { WorkerStore, WorkerSupabaseClient } from '@/apps/worker/src/types';
 
-function fakeSupabase(failOn?: 'upsert' | 'select' | 'update') {
+function fakeSupabase(failOn?: 'upsert' | 'select' | 'update', storedState: Record<string, unknown> = {}) {
   const calls: string[] = [];
   let operation = '';
   const builder: Record<string, unknown> & {
@@ -26,6 +26,7 @@ function fakeSupabase(failOn?: 'upsert' | 'select' | 'update') {
         project_pages_json: {},
         project_blocks_json: {},
         thread_blocks_json: {},
+        ...storedState,
       } : null,
       error: failOn === operation ? new Error('database failure') : null,
     };
@@ -75,5 +76,25 @@ describe('worker sync-state persistence failures', () => {
 
     await expect(persistence.ensureInkwellSyncStateRow(42))
       .rejects.toThrow('Unable to ensure Inkwell synchronization state.');
+  });
+
+  it('keeps hostile JSON keys as own metadata keys without changing map prototypes', async () => {
+    const hostileMap = JSON.parse(
+      '{"__proto__":{"title":"prototype key"},"constructor":{"title":"constructor key"}}',
+    ) as WorkerStore['notePages'];
+    const { client } = fakeSupabase(undefined, { note_pages_json: hostileMap });
+    const persistence = createWorkerStorePersistence(client);
+    const state = await persistence.readInkwellSyncState(42);
+
+    expect(Object.getPrototypeOf(state.notePages)).toBeNull();
+    expect(Object.keys(state.notePages)).toEqual(['__proto__', 'constructor']);
+    expect(state.notePages['__proto__'].title).toBe('prototype key');
+
+    state.notePages['__proto__'] = { ...state.notePages['__proto__'], title: 'saved safely' };
+
+    expect(Object.getPrototypeOf(state.notePages)).toBeNull();
+    expect(Object.keys(state.notePages)).toContain('__proto__');
+    expect(JSON.parse(JSON.stringify(state.notePages))['__proto__'].title).toBe('saved safely');
+    expect(({} as { title?: string }).title).toBeUndefined();
   });
 });
