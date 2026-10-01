@@ -178,7 +178,9 @@ export function createNotionRequester({
 
       try {
         const response = await fetchImpl(requestUrl, {
-          redirect: 'error',
+          // Keep Notion redirects manual: the deployed edge runtime rejects the
+          // `error` mode, and following could forward the bearer token elsewhere.
+          redirect: 'manual',
           method: init.method ?? 'GET',
           headers: {
             Authorization: `Bearer ${store.tokens.access_token}`,
@@ -255,7 +257,8 @@ export async function uploadFileToNotion(
   const apiBase = parseNotionApiBase(baseUrl);
 
   const sessionRes = await fetchImpl(notionApiUrl(apiBase, '/file_uploads'), {
-    redirect: 'error',
+    // Do not forward the Notion bearer token to a redirect destination.
+    redirect: 'manual',
     method: 'POST',
     headers: {
       Authorization: `Bearer ${store.tokens.access_token}`,
@@ -283,7 +286,8 @@ export async function uploadFileToNotion(
   body.append('file', new Blob([data], { type: mimeType }), filename);
 
   const uploadRes = await fetchImpl(notionApiUrl(apiBase, `/file_uploads/${id}/send`), {
-    redirect: 'error',
+    // Do not forward file bytes or credentials to a redirect destination.
+    redirect: 'manual',
     method: 'POST',
     headers: {
       Authorization: `Bearer ${store.tokens.access_token}`,

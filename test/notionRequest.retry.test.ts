@@ -1,5 +1,5 @@
 import { describe, expect, test, vi } from 'vitest';
-import { createNotionRequester, notionApiHttpFailure } from '@/apps/worker/src/notionRequest';
+import { createNotionRequester, notionApiHttpFailure, uploadFileToNotion } from '@/apps/worker/src/notionRequest';
 import type { WorkerStore } from '@/apps/worker/src/types';
 
 const store = { tokens: { access_token: 'test-token' } } as WorkerStore;
@@ -134,7 +134,7 @@ describe('Notion request retry policy', () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
-  test('sets authenticated Notion requests to fail on redirects', async () => {
+  test('does not follow authenticated Notion API redirects', async () => {
     const fetchImpl = vi.fn(async () => jsonResponse({ id: 'page-id' }));
     const request = createNotionRequester({
       fetchImpl: fetchImpl as typeof fetch,
@@ -143,7 +143,22 @@ describe('Notion request retry policy', () => {
 
     await request(store, '/pages/page-id');
 
-    expect(fetchImpl.mock.calls[0]?.[1]?.redirect).toBe('error');
+    expect(fetchImpl.mock.calls[0]?.[1]?.redirect).toBe('manual');
+  });
+
+  test('keeps both Notion file-upload requests on the API host', async () => {
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ id: 'upload-id' }))
+      .mockResolvedValueOnce(jsonResponse({ status: 'uploaded' }));
+
+    await uploadFileToNotion(
+      store,
+      { data: new Uint8Array([1, 2, 3]), mimeType: 'image/png', filename: 'image.png' },
+      { fetchImpl: fetchImpl as typeof fetch },
+    );
+
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(fetchImpl.mock.calls.map((call) => call[1]?.redirect)).toEqual(['manual', 'manual']);
   });
 
   test('pins the bearer token transport to the official Notion API host', () => {
