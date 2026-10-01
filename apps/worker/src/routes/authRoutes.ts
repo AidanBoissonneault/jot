@@ -9,7 +9,9 @@ import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import { randomUUID } from 'node:crypto';
 import { closePage, legalPage, privacyBody, termsBody } from '../htmlPages.js';
 import {
+  createNotionOAuthState,
   exchangeNotionCode,
+  notionOAuthGenerationFromState,
   notionUserFromToken,
   revokeNotionToken,
 } from '../notionAuth.js';
@@ -121,7 +123,13 @@ export function registerAuthRoutes(app: Hono<{ Bindings: WorkerEnv }>): void {
     }
   
     const workerUrl = serverBaseUrl(env);
-    const state = randomToken(24);
+    let state: string;
+    try {
+      const generation = await auth.getNotionOAuthGeneration();
+      state = await createNotionOAuthState(env.NOTION_OAUTH_CLIENT_SECRET, generation);
+    } catch {
+      return c.html(closePage('Notion login could not be started. Please try again.'), 503);
+    }
     const redirectUri = `${workerUrl}/auth/notion/callback`;
     const url = new URL('https://api.notion.com/v1/oauth/authorize');
     url.searchParams.set('client_id', env.NOTION_OAUTH_CLIENT_ID);
@@ -144,6 +152,9 @@ export function registerAuthRoutes(app: Hono<{ Bindings: WorkerEnv }>): void {
   /** Completes OAuth and creates an application session. @param c - Hono context. @returns Redirect response. */
   app.get('/auth/notion/callback', async (c) => {
     const env = c.env;
+    if (!env.NOTION_OAUTH_CLIENT_SECRET) {
+      return c.html(closePage('Notion login is not configured on the sync server yet.'), 503);
+    }
     const expectedState = getCookie(c, INKWELL_OAUTH_STATE_COOKIE);
     const state = c.req.query('state') ?? '';
     const code = c.req.query('code') ?? '';
@@ -156,6 +167,11 @@ export function registerAuthRoutes(app: Hono<{ Bindings: WorkerEnv }>): void {
     }
   
     if (!code || !state || !expectedState || state !== expectedState) {
+      return c.html(closePage('Notion login could not be verified. You can close this tab and try again.'), 400);
+    }
+    const oauthGeneration = await notionOAuthGenerationFromState(env.NOTION_OAUTH_CLIENT_SECRET, state)
+      .catch(() => null);
+    if (oauthGeneration === null) {
       return c.html(closePage('Notion login could not be verified. You can close this tab and try again.'), 400);
     }
   
@@ -180,6 +196,7 @@ export function registerAuthRoutes(app: Hono<{ Bindings: WorkerEnv }>): void {
         sessionToken: randomToken(),
         sessionId: randomUUID(),
         SESSION_MAX_AGE_SECONDS,
+        oauthGeneration,
       });
       sessionCommitted = true;
   

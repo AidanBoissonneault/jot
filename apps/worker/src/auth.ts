@@ -67,6 +67,7 @@ interface NotionOAuthUser {
 /** Describes the create notion session options contract used by this API feature. */
 interface CreateNotionSessionOptions {
   SESSION_MAX_AGE_SECONDS: number;
+  oauthGeneration: string;
   accessToken: string;
   ipAddress: string | null;
   notionAccountId: string;
@@ -82,6 +83,7 @@ interface CreateNotionSessionOptions {
 
 /** Describes the complete authentication and installation service. */
 export interface AuthService {
+  getNotionOAuthGeneration: () => Promise<string>;
   createNotionSession: (options: CreateNotionSessionOptions) => Promise<{
     installationId: Identifier | null;
     sessionToken: string;
@@ -108,6 +110,8 @@ export interface AuthService {
  */
 export function createAuth(supabase: WorkerSupabaseClient): AuthService {
   return {
+    /** Returns the version that newly initiated OAuth flows must commit against. */
+    getNotionOAuthGeneration: () => getNotionOAuthGeneration(supabase),
     /** Creates or replaces an Inkwell session from a successful Notion OAuth exchange. */
     createNotionSession: (options: CreateNotionSessionOptions) => createNotionSession(supabase, options),
     /** Removes the custom session represented by the supplied cookie token. */
@@ -224,6 +228,7 @@ async function createNotionSession(
     sessionToken,
     sessionId,
     SESSION_MAX_AGE_SECONDS,
+    oauthGeneration,
   } = options;
   const userId = preferredUserId;
   const accountId = `notion:${notionAccountId}`;
@@ -244,6 +249,7 @@ async function createNotionSession(
     p_user_agent: userAgent,
     p_workspace_id: workspaceId ?? null,
     p_workspace_name: workspaceName ?? null,
+    p_oauth_generation: oauthGeneration,
   };
   let installationId: Identifier | null = null;
   for (let attempt = 0; attempt < 2 && installationId === null; attempt += 1) {
@@ -262,6 +268,21 @@ async function createNotionSession(
   }
 
   return { sessionToken, installationId };
+}
+
+/** Reads the global OAuth generation used to invalidate in-flight callbacks during deletion. */
+async function getNotionOAuthGeneration(supabase: WorkerSupabaseClient): Promise<string> {
+  const { data, error } = await supabase
+    .from('inkwell_oauth_generation')
+    .select('generation')
+    .eq('id', 1)
+    .single();
+  if (error || !data) throw new Error('Unable to start a secure Notion connection.');
+  const generation = String(data.generation);
+  if (!/^(0|[1-9]\d{0,18})$/.test(generation)) {
+    throw new Error('Unable to start a secure Notion connection.');
+  }
+  return generation;
 }
 
 /**

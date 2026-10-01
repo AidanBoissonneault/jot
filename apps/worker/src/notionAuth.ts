@@ -6,6 +6,7 @@
 
 import { timingSafeEqual } from 'node:crypto';
 import type { JsonObject, WorkerEnv } from './types.js';
+import { randomToken } from './workerUtils.js';
 
 /** Describes the notion oauth tokens contract used by this API feature. */
 export interface NotionOAuthTokens {
@@ -63,6 +64,30 @@ export async function verifyNotionWebhookSignature(
   const supplied = Buffer.from(signature.slice('sha256='.length), 'hex');
   const expected = Buffer.from(await computeHmacSignature(secret, body), 'hex');
   return supplied.byteLength === expected.byteLength && timingSafeEqual(supplied, expected);
+}
+
+/** Signs the database generation into OAuth state so old callbacks cannot reconnect after deletion. */
+export async function createNotionOAuthState(secret: string, generation: string): Promise<string> {
+  if (!/^(0|[1-9]\d{0,18})$/.test(generation) || BigInt(generation) > 9_223_372_036_854_775_807n) {
+    throw new Error('Invalid OAuth generation.');
+  }
+  const payload = `v1.${generation}.${randomToken(24)}`;
+  return `${payload}.${await computeHmacSignature(secret, `inkwell-oauth-state:${payload}`)}`;
+}
+
+/** Verifies signed OAuth state and returns its generation, or null for invalid state. */
+export async function notionOAuthGenerationFromState(secret: string, state: string): Promise<string | null> {
+  const match = /^v1\.(0|[1-9]\d{0,18})\.([A-Za-z0-9_-]{32})\.([a-f0-9]{64})$/.exec(state);
+  if (!match || BigInt(match[1]) > 9_223_372_036_854_775_807n) return null;
+
+  const expected = Buffer.from(
+    await computeHmacSignature(secret, `inkwell-oauth-state:v1.${match[1]}.${match[2]}`),
+    'hex',
+  );
+  const supplied = Buffer.from(match[3], 'hex');
+  return supplied.byteLength === expected.byteLength && timingSafeEqual(supplied, expected)
+    ? match[1]
+    : null;
 }
 
 /** Revokes an OAuth access token at Notion without changing any Notion pages. */

@@ -24,7 +24,10 @@ function fakeSupabase(failTable?: string) {
         upsert: (...args: unknown[]) => { calls.push({ table, method: 'upsert', args }); return builder; },
         or: (...args: unknown[]) => { calls.push({ table, method: 'or', args }); return builder; },
         maybeSingle: async () => ({ data: null, error }),
-        single: async () => ({ data: { id: 42 }, error }),
+        single: async () => ({
+          data: table === 'inkwell_oauth_generation' ? { generation: '7' } : { id: 42 },
+          error,
+        }),
         then: (resolve, reject) => Promise.resolve({ data: null, error }).then(resolve, reject),
       };
       return builder;
@@ -62,6 +65,17 @@ describe('server authentication data lifecycle', () => {
     ]);
     await expect(createAuth(fakeSupabase('account').client).clearNotionAccountTokens('notion:user-42'))
       .rejects.toThrow('Unable to remove the stored Notion credentials.');
+  });
+
+  it('reads the signed OAuth generation from the service-only version row', async () => {
+    const { calls, client } = fakeSupabase();
+    await expect(createAuth(client).getNotionOAuthGeneration()).resolves.toBe('7');
+    expect(calls).toContainEqual({
+      table: 'inkwell_oauth_generation', method: 'select', args: ['generation'],
+    });
+    expect(calls).toContainEqual({ table: 'inkwell_oauth_generation', method: 'eq', args: ['id', 1] });
+    await expect(createAuth(fakeSupabase('inkwell_oauth_generation').client).getNotionOAuthGeneration())
+      .rejects.toThrow('Unable to start a secure Notion connection.');
   });
 
   it('revokes queued sync access without deleting the installation row', async () => {
@@ -113,6 +127,7 @@ describe('server authentication data lifecycle', () => {
       sessionToken: 'session-token-test',
       sessionId: 'session-id-test',
       SESSION_MAX_AGE_SECONDS: 1800,
+      oauthGeneration: '7',
     });
 
     const commit = calls.find((call) => call.method === 'commit_notion_oauth_session');
@@ -148,6 +163,7 @@ describe('server authentication data lifecycle', () => {
       sessionToken: 'session-token-test',
       sessionId: 'session-id-test',
       SESSION_MAX_AGE_SECONDS: 1800,
+      oauthGeneration: '7',
     })).resolves.toMatchObject({ installationId: 42 });
     expect(rpc).toHaveBeenCalledTimes(2);
     expect(rpc.mock.calls[0][1]).toEqual(rpc.mock.calls[1][1]);
@@ -225,11 +241,16 @@ describe('server authentication data lifecycle', () => {
     const persistUser = oauthFunction.indexOf('INSERT INTO public."user"');
 
     expect(migration).toContain('CREATE OR REPLACE FUNCTION public.prepare_inkwell_connection_deletion(');
+    expect(migration).toContain('CREATE TABLE IF NOT EXISTS public.inkwell_oauth_generation');
     expect(migration).toContain('UPDATE public.notion_installations');
     expect(migration).toContain('CREATE OR REPLACE FUNCTION public.commit_notion_oauth_session(');
     expect(lock).toBeGreaterThanOrEqual(0);
     expect(pendingCheck).toBeGreaterThan(lock);
     expect(persistUser).toBeGreaterThan(pendingCheck);
+    expect(oauthFunction).toContain('FOR SHARE');
+    expect(oauthFunction).toContain('IS DISTINCT FROM p_oauth_generation');
+    expect(migration).toContain('DROP FUNCTION IF EXISTS public.commit_notion_oauth_session(');
+    expect(migration.match(/generation = generation \+ 1/g)).toHaveLength(1);
     expect(migration).toContain('CREATE OR REPLACE FUNCTION public.complete_inkwell_connection_deletion(');
     expect(migration).toContain('REVOKE ALL ON FUNCTION public.prepare_inkwell_connection_deletion(TEXT, TEXT)');
     expect(migration).toContain('TO service_role');

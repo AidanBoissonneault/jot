@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import {
   computeHmacSignature,
+  notionOAuthGenerationFromState,
   revokeNotionToken,
   verifyNotionWebhookSignature,
 } from '@/apps/worker/src/notionAuth';
@@ -124,6 +125,110 @@ function stubAuthenticatedInkwellSession(sessionToken: string, accountId: string
 }
 
 afterEach(() => vi.unstubAllGlobals());
+
+describe('Notion OAuth generation binding', () => {
+  it('carries the signed database generation from OAuth start into the atomic commit', async () => {
+    let commitBody: Record<string, unknown> | undefined;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      if (url.hostname === 'api.notion.com' && url.pathname === '/v1/oauth/token') {
+        return new Response(JSON.stringify({
+          access_token: 'notion-access-test',
+          refresh_token: 'notion-refresh-test',
+          owner: { user: { id: 'oauth-user-42', name: 'OAuth user', person: { email: 'oauth@example.test' } } },
+          workspace_id: 'workspace-42',
+          workspace_name: 'OAuth workspace',
+        }), { headers: { 'Content-Type': 'application/json' } });
+      }
+      if (url.pathname.endsWith('/inkwell_oauth_generation')) {
+        return new Response(JSON.stringify({ generation: '7' }), { headers: { 'Content-Type': 'application/json' } });
+      }
+      if (url.pathname.endsWith('/rpc/commit_notion_oauth_session')) {
+        commitBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        return new Response('42', { headers: { 'Content-Type': 'application/json' } });
+      }
+      return new Response('[]', { headers: { 'Content-Type': 'application/json' } });
+    }));
+    initSingletons(env);
+
+    const start = await workerApp.request('/auth/notion/start', {}, env);
+    expect(start.status).toBe(302);
+    const authorizeUrl = new URL(start.headers.get('location')!);
+    const state = authorizeUrl.searchParams.get('state')!;
+    const cookie = start.headers.get('set-cookie')!;
+    const stateCookie = decodeURIComponent(cookie.match(/inkwell_notion_oauth_state=([^;]+)/)![1]);
+    expect(stateCookie).toBe(state);
+    await expect(notionOAuthGenerationFromState(env.NOTION_OAUTH_CLIENT_SECRET!, state)).resolves.toBe('7');
+
+    const callback = await workerApp.request(
+      `/auth/notion/callback?code=authorization-code&state=${encodeURIComponent(state)}`,
+      { headers: { Cookie: `inkwell_notion_oauth_state=${stateCookie}` } },
+      env,
+    );
+
+    expect(callback.status).toBe(200);
+    expect(commitBody).toMatchObject({ p_oauth_generation: '7', p_user_id: 'notion:oauth-user-42' });
+  });
+
+  it('rejects a modified OAuth state before exchanging a code', async () => {
+    const fetchMock = vi.fn(async () => new Response('{}', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    initSingletons(env);
+    const state = 'v1.7.abcdefghijklmnopqrstuvwx12345678.' + 'a'.repeat(64);
+    const response = await workerApp.request(
+      `/auth/notion/callback?code=authorization-code&state=${state}`,
+      { headers: { Cookie: `inkwell_notion_oauth_state=${state}` } },
+      env,
+    );
+    expect(response.status).toBe(400);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('revokes a newly exchanged token when deletion invalidates its OAuth generation', async () => {
+    let generation = '7';
+    const revokedTokens: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      if (url.hostname === 'api.notion.com' && url.pathname === '/v1/oauth/token') {
+        return new Response(JSON.stringify({
+          access_token: 'stale-oauth-access-token',
+          owner: { user: { id: 'oauth-user-42', person: { email: 'oauth@example.test' } } },
+        }), { headers: { 'Content-Type': 'application/json' } });
+      }
+      if (url.hostname === 'api.notion.com' && url.pathname === '/v1/oauth/revoke') {
+        revokedTokens.push((JSON.parse(String(init?.body)) as { token: string }).token);
+        return new Response('{}', { status: 200 });
+      }
+      if (url.pathname.endsWith('/inkwell_oauth_generation')) {
+        return new Response(JSON.stringify({ generation }), { headers: { 'Content-Type': 'application/json' } });
+      }
+      if (url.pathname.endsWith('/rpc/commit_notion_oauth_session')) {
+        const body = JSON.parse(String(init?.body)) as { p_oauth_generation: string };
+        return body.p_oauth_generation === generation
+          ? new Response('42', { headers: { 'Content-Type': 'application/json' } })
+          : new Response(JSON.stringify({ message: 'OAuth generation was invalidated.' }), {
+              status: 400,
+              headers: { 'Content-Type': 'application/json' },
+            });
+      }
+      return new Response('[]', { headers: { 'Content-Type': 'application/json' } });
+    }));
+    initSingletons(env);
+
+    const start = await workerApp.request('/auth/notion/start', {}, env);
+    const state = new URL(start.headers.get('location')!).searchParams.get('state')!;
+    const cookie = decodeURIComponent(start.headers.get('set-cookie')!.match(/inkwell_notion_oauth_state=([^;]+)/)![1]);
+    generation = '8';
+    const callback = await workerApp.request(
+      `/auth/notion/callback?code=authorization-code&state=${encodeURIComponent(state)}`,
+      { headers: { Cookie: `inkwell_notion_oauth_state=${cookie}` } },
+      env,
+    );
+
+    expect(callback.status).toBe(500);
+    expect(revokedTokens).toEqual(['stale-oauth-access-token']);
+  });
+});
 
 describe('worker request origin policy', () => {
   it('adds security headers without preventing the intended YouTube embed', async () => {

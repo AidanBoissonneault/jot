@@ -1,5 +1,24 @@
 -- Serialize deletion preparation with OAuth persistence so deletion revokes
--- the newest credential, or rejects and revokes an OAuth token issued later.
+-- the newest credential and invalidates OAuth callbacks from an older generation.
+
+-- OAuth state carries this signed version. Advancing it at completion invalidates
+-- callbacks that began before or during the wipe after pending receipts protected them.
+CREATE TABLE IF NOT EXISTS public.inkwell_oauth_generation (
+  id SMALLINT PRIMARY KEY CHECK (id = 1),
+  generation BIGINT NOT NULL DEFAULT 1 CHECK (generation > 0),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT pg_catalog.now()
+);
+INSERT INTO public.inkwell_oauth_generation (id) VALUES (1)
+ON CONFLICT (id) DO NOTHING;
+
+ALTER TABLE public.inkwell_oauth_generation ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "service_role_inkwell_oauth_generation"
+  ON public.inkwell_oauth_generation;
+CREATE POLICY "service_role_inkwell_oauth_generation"
+  ON public.inkwell_oauth_generation FOR ALL TO service_role
+  USING (true) WITH CHECK (true);
+REVOKE ALL ON TABLE public.inkwell_oauth_generation FROM PUBLIC, anon, authenticated;
+GRANT SELECT, UPDATE ON TABLE public.inkwell_oauth_generation TO service_role;
 
 CREATE OR REPLACE FUNCTION public.prepare_inkwell_connection_deletion(
   p_request_id_hash TEXT,
@@ -75,7 +94,8 @@ CREATE OR REPLACE FUNCTION public.commit_notion_oauth_session(
   p_ip_address TEXT,
   p_user_agent TEXT,
   p_workspace_id TEXT,
-  p_workspace_name TEXT
+  p_workspace_name TEXT,
+  p_oauth_generation TEXT
 ) RETURNS BIGINT
 LANGUAGE plpgsql
 VOLATILE
@@ -84,6 +104,7 @@ SET search_path = pg_catalog, public, pg_temp
 AS $$
 DECLARE
   v_installation_id BIGINT;
+  v_current_generation BIGINT;
   v_existing_user_id TEXT;
   v_existing_token TEXT;
 BEGIN
@@ -91,7 +112,8 @@ BEGIN
      OR p_account_row_id IS NULL OR p_account_id IS NULL OR p_account_id = ''
      OR p_access_token IS NULL OR p_access_token = ''
      OR p_session_id IS NULL OR p_session_token_hash IS NULL OR p_session_token_hash = ''
-     OR p_expires_at IS NULL OR p_name IS NULL OR p_email IS NULL THEN
+     OR p_expires_at IS NULL OR p_name IS NULL OR p_email IS NULL
+     OR p_oauth_generation IS NULL OR p_oauth_generation !~ '^(0|[1-9][0-9]{0,18})$' THEN
     RAISE EXCEPTION 'Invalid OAuth session input';
   END IF;
 
@@ -99,6 +121,14 @@ BEGIN
   PERFORM pg_catalog.pg_advisory_xact_lock(
     pg_catalog.hashtextextended(p_user_id, 0)
   );
+  SELECT generation
+    INTO v_current_generation
+    FROM public.inkwell_oauth_generation
+   WHERE id = 1
+   FOR SHARE;
+  IF NOT FOUND OR v_current_generation::TEXT IS DISTINCT FROM p_oauth_generation THEN
+    RAISE EXCEPTION 'Notion OAuth flow was invalidated by a connection deletion';
+  END IF;
   IF EXISTS (
     SELECT 1
       FROM public.inkwell_connection_deletion_receipts AS receipt
@@ -174,6 +204,12 @@ BEGIN
 END;
 $$;
 
+-- Remove the previous 15-argument entry point so it cannot bypass generation checks.
+DROP FUNCTION IF EXISTS public.commit_notion_oauth_session(
+  TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT,
+  TIMESTAMPTZ, TEXT, TEXT, TEXT, TEXT
+);
+
 CREATE OR REPLACE FUNCTION public.complete_inkwell_connection_deletion(p_request_id_hash TEXT)
 RETURNS BOOLEAN
 LANGUAGE plpgsql
@@ -220,6 +256,14 @@ BEGIN
     RETURN FALSE;
   END IF;
 
+  UPDATE public.inkwell_oauth_generation
+     SET generation = generation + 1,
+         updated_at = pg_catalog.now()
+   WHERE id = 1;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'OAuth generation is unavailable';
+  END IF;
+
   UPDATE public.inkwell_connection_deletion_receipts
      SET status = 'completed', user_id = NULL, updated_at = pg_catalog.now()
    WHERE request_id_hash = p_request_id_hash;
@@ -231,13 +275,15 @@ $$;
 REVOKE ALL ON FUNCTION public.prepare_inkwell_connection_deletion(TEXT, TEXT) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.commit_notion_oauth_session(
   TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT,
-  TIMESTAMPTZ, TEXT, TEXT, TEXT, TEXT
+  TIMESTAMPTZ, TEXT, TEXT, TEXT, TEXT, TEXT
 ) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.complete_inkwell_connection_deletion(TEXT) FROM PUBLIC, anon, authenticated;
 
 GRANT EXECUTE ON FUNCTION public.prepare_inkwell_connection_deletion(TEXT, TEXT) TO service_role;
 GRANT EXECUTE ON FUNCTION public.commit_notion_oauth_session(
   TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT,
-  TIMESTAMPTZ, TEXT, TEXT, TEXT, TEXT
+  TIMESTAMPTZ, TEXT, TEXT, TEXT, TEXT, TEXT
 ) TO service_role;
 GRANT EXECUTE ON FUNCTION public.complete_inkwell_connection_deletion(TEXT) TO service_role;
+
+NOTIFY pgrst, 'reload schema';

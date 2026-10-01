@@ -80,4 +80,5 @@ session in one service-role-only transaction, preserving the current connection 
 
 Apply `apps/worker/migrations/009_serialize_connection_deletion.sql` after migration 008 and before
 deploying the latest Worker. It serializes OAuth commits with Delete connection, so deletion revokes
-the current Notion token and any OAuth callback that races with the deletion is rejected and revoked.
+the current Notion token and advances the global signed OAuth generation when deletion completes.
+OAuth flows already in progress must restart after a wipe; a new flow after completion can connect.
