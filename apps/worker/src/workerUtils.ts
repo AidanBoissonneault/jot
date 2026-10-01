@@ -218,9 +218,14 @@ export function isBase64(value: string): boolean {
 }
 
 /** Checks whether a MIME type is supported media. @param mimeType - MIME type. @returns Support decision. */
+const SUPPORTED_MEDIA_MIME_TYPES = new Set([
+  'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/avif',
+  'audio/mpeg', 'audio/mp3', 'audio/mp4', 'audio/aac', 'audio/wav',
+  'audio/x-wav', 'audio/ogg', 'audio/opus', 'audio/webm',
+]);
+
 export function isSupportedMediaMimeType(mimeType: string): boolean {
-  const normalized = mimeType.toLowerCase();
-  return normalized.startsWith('image/') || normalized.startsWith('audio/');
+  return SUPPORTED_MEDIA_MIME_TYPES.has(mimeType.trim().toLowerCase());
 }
 
 /** Produces a safe upload filename with an extension. @param filename - Requested filename. @param mimeType - MIME type. @returns Safe filename. */

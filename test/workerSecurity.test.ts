@@ -1030,4 +1030,24 @@ describe('Notion webhook verification', () => {
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({ error: 'Invalid upload request.' });
   });
+
+  it('rejects SVG media rather than accepting every image MIME subtype', async () => {
+    const sessionToken = 'media-svg-session-token-test';
+    const accountId = 'notion:media-svg-test';
+    stubAuthenticatedInkwellSession(sessionToken, accountId);
+
+    const response = await workerApp.request('/media/upload', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Origin: 'http://localhost:3000',
+        Cookie: `inkwell_session=${sessionToken}`,
+        'X-Inkwell-Account': accountId,
+      },
+      body: JSON.stringify({ dataBase64: 'PHN2Zz48L3N2Zz4=', mimeType: 'image/svg+xml' }),
+    }, env);
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: 'This image or audio format is not supported.' });
+  });
 });

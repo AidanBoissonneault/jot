@@ -57,7 +57,7 @@ export function registerMediaRoutes(app: Hono<{ Bindings: WorkerEnv }>): void {
     }
   
     if (!dataBase64 || !mimeType) return c.json({ error: 'Missing dataBase64 or mimeType.' }, 400);
-    if (!isSupportedMediaMimeType(mimeType)) return c.json({ error: 'Only image and audio uploads are supported.' }, 400);
+    if (!isSupportedMediaMimeType(mimeType)) return c.json({ error: 'This image or audio format is not supported.' }, 400);
     if (dataBase64.length > MAX_MEDIA_UPLOAD_BASE64_LENGTH) {
       return c.json({ error: 'Media files must be 20 MB or smaller.' }, 413);
     }
