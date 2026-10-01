@@ -67,6 +67,36 @@ describe('server authentication data lifecycle', () => {
       .rejects.toThrow('Unable to remove the stored Notion credentials.');
   });
 
+  it('serializes logout start with OAuth commits', async () => {
+    const { calls, client } = fakeSupabase();
+    await createAuth(client).beginNotionLogout('notion:user-42');
+
+    expect(calls).toContainEqual({
+      table: 'rpc',
+      method: 'begin_inkwell_notion_logout',
+      args: [{ p_user_id: 'notion:user-42' }],
+    });
+    await expect(createAuth(fakeSupabase('rpc').client).beginNotionLogout('notion:user-42'))
+      .rejects.toThrow('Unable to securely begin the Notion logout.');
+  });
+
+  it('completes logout with a hashed session token', async () => {
+    const { calls, client } = fakeSupabase();
+    await createAuth(client).completeNotionLogout('notion:user-42', 'session-token-test');
+
+    expect(calls).toContainEqual({
+      table: 'rpc',
+      method: 'complete_inkwell_notion_logout',
+      args: [{
+        p_user_id: 'notion:user-42',
+        p_session_token_hash: hash('session-token-test'),
+      }],
+    });
+    await expect(createAuth(fakeSupabase('rpc').client)
+      .completeNotionLogout('notion:user-42', 'session-token-test'))
+      .rejects.toThrow('Unable to securely complete the Notion logout.');
+  });
+
   it('reads the signed OAuth generation from the service-only version row', async () => {
     const { calls, client } = fakeSupabase();
     await expect(createAuth(client).getNotionOAuthGeneration()).resolves.toBe('7');
@@ -254,5 +284,35 @@ describe('server authentication data lifecycle', () => {
     expect(migration).toContain('CREATE OR REPLACE FUNCTION public.complete_inkwell_connection_deletion(');
     expect(migration).toContain('REVOKE ALL ON FUNCTION public.prepare_inkwell_connection_deletion(TEXT, TEXT)');
     expect(migration).toContain('TO service_role');
+  });
+
+  it('serializes logout with OAuth commits and clears credentials atomically', () => {
+    const migration = readFileSync(
+      new URL('../apps/worker/migrations/010_serialize_notion_logout.sql', import.meta.url),
+      'utf8',
+    );
+    const oauthFunction = migration.slice(
+      migration.indexOf('CREATE OR REPLACE FUNCTION public.commit_notion_oauth_session('),
+    );
+    const lock = oauthFunction.indexOf('pg_advisory_xact_lock');
+    const logoutPendingCheck = oauthFunction.indexOf('inkwell_user.logout_pending');
+    const persistUser = oauthFunction.indexOf('INSERT INTO public."user"');
+    const completeFunction = migration.slice(
+      migration.indexOf('CREATE OR REPLACE FUNCTION public.complete_inkwell_notion_logout('),
+    );
+
+    expect(migration).toContain('ADD COLUMN IF NOT EXISTS logout_pending BOOLEAN NOT NULL DEFAULT FALSE');
+    expect(migration).toContain('CREATE OR REPLACE FUNCTION public.begin_inkwell_notion_logout(');
+    expect(lock).toBeGreaterThanOrEqual(0);
+    expect(logoutPendingCheck).toBeGreaterThan(lock);
+    expect(persistUser).toBeGreaterThan(logoutPendingCheck);
+    expect(migration).toContain("RAISE EXCEPTION 'Inkwell logout is in progress'");
+    expect(completeFunction).toContain('"accessToken" = NULL');
+    expect(completeFunction).toContain('"refreshToken" = NULL');
+    expect(completeFunction).toContain('DELETE FROM public.session');
+    expect(completeFunction).toContain('logout_pending = FALSE');
+    expect(migration).toContain('REVOKE ALL ON FUNCTION public.begin_inkwell_notion_logout(TEXT)');
+    expect(migration).toContain('REVOKE ALL ON FUNCTION public.complete_inkwell_notion_logout(TEXT, TEXT)');
+    expect(migration).toContain('GRANT EXECUTE ON FUNCTION public.complete_inkwell_notion_logout(TEXT, TEXT) TO service_role');
   });
 });

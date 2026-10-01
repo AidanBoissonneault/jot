@@ -95,6 +95,8 @@ export interface AuthService {
   getCustomSession: (token: string | undefined) => Promise<AuthSessionResult | null>;
   getNotionAccountTokens: (userId: string) => Promise<NotionAccountTokens | null>;
   clearNotionAccountTokens: (userId: string) => Promise<void>;
+  beginNotionLogout: (userId: string) => Promise<void>;
+  completeNotionLogout: (userId: string, sessionToken: string) => Promise<void>;
   getConnectionDeletionReceipt: (requestIdHash: string) => Promise<ConnectionDeletionReceipt | null>;
   prepareConnectionDeletionReceipt: (requestIdHash: string, userId: string) => Promise<ConnectionDeletionReceipt>;
   updateConnectionDeletionRevocation: (requestIdHash: string, notionTokenRevoked: boolean) => Promise<void>;
@@ -129,6 +131,11 @@ export function createAuth(supabase: WorkerSupabaseClient): AuthService {
     getNotionAccountTokens: (userId: string) => getNotionAccountTokens(supabase, userId),
     /** Clears stored access and refresh tokens. */
     clearNotionAccountTokens: (userId: string) => clearNotionAccountTokens(supabase, userId),
+    /** Marks logout pending and invalidates older OAuth callbacks atomically. */
+    beginNotionLogout: (userId: string) => beginNotionLogout(supabase, userId),
+    /** Clears stored credentials and the session, then permits a future OAuth login. */
+    completeNotionLogout: (userId: string, sessionToken: string) =>
+      completeNotionLogout(supabase, userId, sessionToken),
     /** Reads the retry receipt for a connection deletion request. */
     getConnectionDeletionReceipt: (requestIdHash: string) => getConnectionDeletionReceipt(supabase, requestIdHash),
     /** Serializes OAuth persistence against deletion and pauses queue work. */
@@ -327,6 +334,30 @@ async function clearNotionAccountTokens(
     .eq('userId', userId)
     .eq('providerId', 'notion');
   if (error) throw new Error('Unable to remove the stored Notion credentials.');
+}
+
+/** Serializes logout with OAuth commits and revokes the active installation. */
+async function beginNotionLogout(
+  supabase: WorkerSupabaseClient,
+  userId: string,
+): Promise<void> {
+  const { data, error } = await supabase.rpc('begin_inkwell_notion_logout', {
+    p_user_id: userId,
+  });
+  if (error || data !== true) throw new Error('Unable to securely begin the Notion logout.');
+}
+
+/** Atomically clears the Notion credentials, current session, and logout marker. */
+async function completeNotionLogout(
+  supabase: WorkerSupabaseClient,
+  userId: string,
+  sessionToken: string,
+): Promise<void> {
+  const { data, error } = await supabase.rpc('complete_inkwell_notion_logout', {
+    p_user_id: userId,
+    p_session_token_hash: hash(sessionToken),
+  });
+  if (error || data !== true) throw new Error('Unable to securely complete the Notion logout.');
 }
 
 /** Reads a privacy-minimal retry receipt using only its SHA-256 request identifier. */

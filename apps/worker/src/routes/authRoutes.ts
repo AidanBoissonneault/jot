@@ -245,23 +245,54 @@ export function registerAuthRoutes(app: Hono<{ Bindings: WorkerEnv }>): void {
     }
 
     const token = getCookie(c, INKWELL_SESSION_COOKIE);
+    if (!token) {
+      deleteCookie(c, INKWELL_SESSION_COOKIE, { path: '/' });
+      return c.json({ connected: false, loggedOut: false, notionTokenRevoked: false }, 401);
+    }
+
+    try {
+      // The database lock invalidates older OAuth states and prevents a callback
+      // from restoring credentials until this logout has fully completed.
+      await auth.beginNotionLogout(session.user.id);
+    } catch {
+      // Keep logout usable if the serialization migration is not deployed yet.
+      // This path still clears credentials, but cannot guarantee the OAuth race is closed.
+      const notionTokens = await auth.getNotionAccountTokens(session.user.id).catch(() => null);
+      await auth.revokeInstallation(session.user.id).catch(() => undefined);
+      const notionTokenRevoked = notionTokens?.accessToken
+        ? await revokeNotionToken(c.env, notionTokens.accessToken)
+        : false;
+      await auth.clearNotionAccountTokens(session.user.id).catch(() => undefined);
+      await auth.deleteCustomSession(token).catch(() => undefined);
+      deleteCookie(c, INKWELL_SESSION_COOKIE, { path: '/' });
+      return c.json({ connected: false, loggedOut: true, notionTokenRevoked, serverDataCleanupComplete: false });
+    }
+
     const notionTokens = await auth.getNotionAccountTokens(session.user.id).catch(() => null);
-    let serverDataCleanupComplete = true;
-    await auth.revokeInstallation(session.user.id).catch(() => {
-      serverDataCleanupComplete = false;
-    });
     const notionTokenRevoked = notionTokens?.accessToken
       ? await revokeNotionToken(c.env, notionTokens.accessToken)
       : false;
-    await auth.clearNotionAccountTokens(session.user.id).catch(() => {
-      serverDataCleanupComplete = false;
-    });
-    await auth.deleteCustomSession(token).catch(() => {
-      serverDataCleanupComplete = false;
-    });
-    deleteCookie(c, INKWELL_SESSION_COOKIE, { path: '/' });
+    let completed = false;
+    for (let attempt = 0; attempt < 2 && !completed; attempt += 1) {
+      try {
+        await auth.completeNotionLogout(session.user.id, token);
+        completed = true;
+      } catch {
+        // The operation is idempotent, so retry once if its response was lost.
+      }
+    }
+    if (!completed) {
+      // The cookie remains available so a user can retry after the database recovers.
+      return c.json({
+        connected: false,
+        loggedOut: false,
+        notionTokenRevoked,
+        serverDataCleanupComplete: false,
+      }, 503);
+    }
 
-    return c.json({ connected: false, loggedOut: true, notionTokenRevoked, serverDataCleanupComplete });
+    deleteCookie(c, INKWELL_SESSION_COOKIE, { path: '/' });
+    return c.json({ connected: false, loggedOut: true, notionTokenRevoked, serverDataCleanupComplete: true });
   });
 
   /** Deletes Inkwell's account data and Notion connection while preserving Notion pages. */

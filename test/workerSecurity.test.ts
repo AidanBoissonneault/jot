@@ -378,7 +378,7 @@ describe('connected route authorization', () => {
 });
 
 describe('logout lifecycle route', () => {
-  it('revokes the Notion token, clears both stored tokens, revokes the installation, and expires the cookie', async () => {
+  it('serializes logout, revokes the Notion token, and expires the cookie', async () => {
     const sessionToken = 'logout-session-token-test';
     const accountToken = 'logout-notion-token-test';
     const accountId = 'notion:user-42';
@@ -395,6 +395,10 @@ describe('logout lifecycle route', () => {
 
       if (url.hostname === 'api.notion.com' && url.pathname === '/v1/oauth/revoke') {
         return new Response('{}', { status: 200 });
+      }
+      if (url.pathname.endsWith('/rpc/begin_inkwell_notion_logout')
+        || url.pathname.endsWith('/rpc/complete_inkwell_notion_logout')) {
+        return new Response('true', { headers: { 'Content-Type': 'application/json' } });
       }
       if (url.pathname.endsWith('/session') && method === 'GET') {
         return new Response(JSON.stringify([{
@@ -433,10 +437,79 @@ describe('logout lifecycle route', () => {
       serverDataCleanupComplete: true,
     });
     expect(response.headers.get('set-cookie')).toContain('Max-Age=0');
-    const accountUpdate = calls.find((call) => call.pathname.endsWith('/account') && call.method === 'PATCH');
-    expect(JSON.parse(accountUpdate?.body ?? '{}')).toMatchObject({ accessToken: null, refreshToken: null });
-    expect(calls.some((call) => call.pathname.endsWith('/notion_installations') && call.method === 'PATCH')).toBe(true);
-    expect(calls.some((call) => call.pathname.endsWith('/session') && call.method === 'DELETE')).toBe(true);
+    const beginIndex = calls.findIndex((call) => call.pathname.endsWith('/rpc/begin_inkwell_notion_logout'));
+    const accountReadIndex = calls.findIndex((call) => call.pathname.endsWith('/account') && call.method === 'GET');
+    const revokeIndex = calls.findIndex((call) => call.pathname === '/v1/oauth/revoke');
+    const completeIndex = calls.findIndex((call) => call.pathname.endsWith('/rpc/complete_inkwell_notion_logout'));
+    expect(beginIndex).toBeGreaterThanOrEqual(0);
+    expect(accountReadIndex).toBeGreaterThan(beginIndex);
+    expect(revokeIndex).toBeGreaterThan(accountReadIndex);
+    expect(completeIndex).toBeGreaterThan(revokeIndex);
+    expect(JSON.parse(calls[beginIndex].body)).toEqual({ p_user_id: accountId });
+    expect(JSON.parse(calls[completeIndex].body)).toEqual({
+      p_user_id: accountId,
+      p_session_token_hash: createHash('sha256').update(sessionToken).digest('hex'),
+    });
+  });
+
+  it('keeps the session cookie available when atomic logout cleanup must be retried', async () => {
+    const sessionToken = 'logout-retry-session-token';
+    const accountId = 'notion:user-logout-retry';
+    let completeAttempts = 0;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      const method = init?.method ?? (input instanceof Request ? input.method : 'GET');
+
+      if (url.pathname.endsWith('/rpc/begin_inkwell_notion_logout')) {
+        return new Response('true', { headers: { 'Content-Type': 'application/json' } });
+      }
+      if (url.pathname.endsWith('/rpc/complete_inkwell_notion_logout')) {
+        completeAttempts += 1;
+        return new Response(JSON.stringify({ message: 'temporary database failure' }), {
+          status: 503,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (url.hostname === 'api.notion.com' && url.pathname === '/v1/oauth/revoke') {
+        return new Response('{}', { status: 200 });
+      }
+      if (url.pathname.endsWith('/session') && method === 'GET') {
+        return new Response(JSON.stringify([{
+          id: 'session-id-logout-retry',
+          token: createHash('sha256').update(sessionToken).digest('hex'),
+          expiresAt: new Date(Date.now() + 60_000).toISOString(),
+          userId: accountId,
+          user: { id: accountId, name: 'Test user', email: 'test@example.test', image: null, emailVerified: false },
+        }]), { headers: { 'Content-Type': 'application/json' } });
+      }
+      if (url.pathname.endsWith('/account') && method === 'GET') {
+        return new Response(JSON.stringify([{ accessToken: 'logout-retry-access-token', refreshToken: null }]), {
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      return new Response('[]', { headers: { 'Content-Type': 'application/json' } });
+    }));
+    initSingletons(env);
+
+    const response = await workerApp.request('/auth/notion/logout', {
+      method: 'POST',
+      headers: {
+        Origin: 'http://localhost:3000',
+        Cookie: `inkwell_session=${sessionToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: '{}',
+    }, env);
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({
+      connected: false,
+      loggedOut: false,
+      notionTokenRevoked: true,
+      serverDataCleanupComplete: false,
+    });
+    expect(response.headers.get('set-cookie')).toBeNull();
+    expect(completeAttempts).toBe(2);
   });
 });
 
