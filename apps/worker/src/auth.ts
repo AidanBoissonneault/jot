@@ -88,13 +88,11 @@ export interface AuthService {
     installationId: Identifier | null;
     sessionToken: string;
   }>;
-  deleteCustomSession: (token: string | undefined) => Promise<void>;
   getActiveInstallation: (userId: string) => Promise<NotionInstallation | null>;
   getActiveInstallationWithTokens: (userId: string) => Promise<ConnectedNotionInstallation | undefined>;
   getActiveInstallationWithTokensById: (installationId: Identifier) => Promise<ConnectedNotionInstallation | undefined>;
   getCustomSession: (token: string | undefined) => Promise<AuthSessionResult | null>;
   getNotionAccountTokens: (userId: string) => Promise<NotionAccountTokens | null>;
-  clearNotionAccountTokens: (userId: string) => Promise<void>;
   beginNotionLogout: (userId: string) => Promise<void>;
   completeNotionLogout: (userId: string, sessionToken: string) => Promise<void>;
   getConnectionDeletionReceipt: (requestIdHash: string) => Promise<ConnectionDeletionReceipt | null>;
@@ -102,7 +100,6 @@ export interface AuthService {
   updateConnectionDeletionRevocation: (requestIdHash: string, notionTokenRevoked: boolean) => Promise<void>;
   completeConnectionDeletionReceipt: (requestIdHash: string) => Promise<void>;
   hasInkwellUser: (userId: string) => Promise<boolean>;
-  revokeInstallation: (userId: string) => Promise<void>;
 }
 
 /**
@@ -116,8 +113,6 @@ export function createAuth(supabase: WorkerSupabaseClient): AuthService {
     getNotionOAuthGeneration: () => getNotionOAuthGeneration(supabase),
     /** Creates or replaces an Inkwell session from a successful Notion OAuth exchange. */
     createNotionSession: (options: CreateNotionSessionOptions) => createNotionSession(supabase, options),
-    /** Removes the custom session represented by the supplied cookie token. */
-    deleteCustomSession: (token: string | undefined) => deleteCustomSession(supabase, token),
     /** Returns public metadata for a user's active Notion installation. */
     getActiveInstallation: (userId: string) => getActiveInstallation(supabase, userId),
     /** Returns an active Notion installation together with its access token. */
@@ -129,8 +124,6 @@ export function createAuth(supabase: WorkerSupabaseClient): AuthService {
     getCustomSession: (token: string | undefined) => getCustomSession(supabase, token),
     /** Loads stored Notion credentials for remote revocation. */
     getNotionAccountTokens: (userId: string) => getNotionAccountTokens(supabase, userId),
-    /** Clears stored access and refresh tokens. */
-    clearNotionAccountTokens: (userId: string) => clearNotionAccountTokens(supabase, userId),
     /** Marks logout pending and invalidates older OAuth callbacks atomically. */
     beginNotionLogout: (userId: string) => beginNotionLogout(supabase, userId),
     /** Clears stored credentials and the session, then permits a future OAuth login. */
@@ -146,8 +139,6 @@ export function createAuth(supabase: WorkerSupabaseClient): AuthService {
     completeConnectionDeletionReceipt: (requestIdHash: string) => completeConnectionDeletionReceipt(supabase, requestIdHash),
     /** Checks whether the user row still exists while recovering a pending deletion. */
     hasInkwellUser: (userId: string) => hasInkwellUser(supabase, userId),
-    /** Marks all Notion installations for a user as revoked. */
-    revokeInstallation: (userId: string) => revokeInstallation(supabase, userId),
   };
 }
 
@@ -292,21 +283,6 @@ async function getNotionOAuthGeneration(supabase: WorkerSupabaseClient): Promise
   return generation;
 }
 
-/**
- * Deletes a custom browser session when a token is available.
- * @param supabase - Privileged database client.
- * @param token - Session token to remove.
- * @returns A promise resolved after deletion.
- */
-async function deleteCustomSession(
-  supabase: WorkerSupabaseClient,
-  token: string | undefined,
-): Promise<void> {
-  if (!token) return;
-  const { error } = await supabase.from('session').delete().eq('token', hash(token));
-  if (error) throw new Error('Unable to delete the Inkwell session.');
-}
-
 /** Loads a user's stored Notion credentials for remote revocation. */
 async function getNotionAccountTokens(
   supabase: WorkerSupabaseClient,
@@ -321,19 +297,6 @@ async function getNotionAccountTokens(
     .maybeSingle();
   if (error) throw new Error('Unable to load the stored Notion connection.');
   return data;
-}
-
-/** Removes the access and refresh tokens while retaining the provider identity. */
-async function clearNotionAccountTokens(
-  supabase: WorkerSupabaseClient,
-  userId: string,
-): Promise<void> {
-  const { error } = await supabase
-    .from('account')
-    .update({ accessToken: null, refreshToken: null })
-    .eq('userId', userId)
-    .eq('providerId', 'notion');
-  if (error) throw new Error('Unable to remove the stored Notion credentials.');
 }
 
 /** Serializes logout with OAuth commits and revokes the active installation. */
@@ -450,20 +413,6 @@ async function hasInkwellUser(
     .maybeSingle();
   if (error) throw new Error('Unable to verify the Inkwell account.');
   return Boolean(data);
-}
-
-/**
- * Revokes every active Notion installation belonging to a user.
- * @param supabase - Privileged database client.
- * @param userId - Inkwell user identifier.
- * @returns A promise resolved after the update.
- */
-async function revokeInstallation(supabase: WorkerSupabaseClient, userId: string): Promise<void> {
-  const { error } = await supabase
-    .from('notion_installations')
-    .update({ active: 0, revoked_at: new Date().toISOString() })
-    .eq('user_id', userId);
-  if (error) throw new Error('Unable to revoke the Notion installation.');
 }
 
 /**

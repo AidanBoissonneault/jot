@@ -255,23 +255,13 @@ export function registerAuthRoutes(app: Hono<{ Bindings: WorkerEnv }>): void {
       // from restoring credentials until this logout has fully completed.
       await auth.beginNotionLogout(session.user.id);
     } catch {
-      // Keep logout usable if the serialization migration is not deployed yet.
-      // This path still clears credentials, but cannot guarantee the OAuth race is closed.
-      const notionTokens = await auth.getNotionAccountTokens(session.user.id).catch(() => null);
-      await auth.revokeInstallation(session.user.id).catch(() => undefined);
-      const notionTokenRevoked = notionTokens?.accessToken
-        ? await revokeNotionToken(c.env, notionTokens.accessToken)
-        : false;
-      await auth.clearNotionAccountTokens(session.user.id).catch(() => undefined);
-      await auth.deleteCustomSession(token).catch(() => undefined);
-      deleteCookie(c, INKWELL_SESSION_COOKIE, { path: '/' });
       return c.json({
         connected: false,
-        loggedOut: true,
-        notionTokenRevoked,
+        loggedOut: false,
+        notionTokenRevoked: false,
         serverDataCleanupComplete: false,
-        retryable: false,
-      });
+        retryable: true,
+      }, 503);
     }
 
     const notionTokens = await auth.getNotionAccountTokens(session.user.id).catch(() => null);

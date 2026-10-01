@@ -513,6 +513,56 @@ describe('logout lifecycle route', () => {
     expect(response.headers.get('set-cookie')).toBeNull();
     expect(completeAttempts).toBe(2);
   });
+
+  it('fails closed when the serialized logout migration is unavailable', async () => {
+    const sessionToken = 'logout-migration-missing-session';
+    const accountId = 'notion:user-logout-migration-missing';
+    const calls: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      const method = init?.method ?? (input instanceof Request ? input.method : 'GET');
+      calls.push(`${method} ${url.pathname}`);
+      if (url.pathname.endsWith('/session') && method === 'GET') {
+        return new Response(JSON.stringify([{
+          id: 'session-id-logout-migration-missing',
+          token: createHash('sha256').update(sessionToken).digest('hex'),
+          expiresAt: new Date(Date.now() + 60_000).toISOString(),
+          userId: accountId,
+          user: { id: accountId, name: 'Test user', email: 'test@example.test', image: null, emailVerified: false },
+        }]), { headers: { 'Content-Type': 'application/json' } });
+      }
+      if (url.pathname.endsWith('/rpc/begin_inkwell_notion_logout')) {
+        return new Response(JSON.stringify({ message: 'function not found' }), {
+          status: 404,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      return new Response('[]', { headers: { 'Content-Type': 'application/json' } });
+    }));
+    initSingletons(env);
+
+    const response = await workerApp.request('/auth/notion/logout', {
+      method: 'POST',
+      headers: {
+        Origin: 'http://localhost:3000',
+        Cookie: `inkwell_session=${sessionToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: '{}',
+    }, env);
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({
+      connected: false,
+      loggedOut: false,
+      notionTokenRevoked: false,
+      serverDataCleanupComplete: false,
+      retryable: true,
+    });
+    expect(response.headers.get('set-cookie')).toBeNull();
+    expect(calls).not.toContain('GET /rest/v1/account');
+    expect(calls.some((call) => call.endsWith('/v1/oauth/revoke'))).toBe(false);
+  });
 });
 
 describe('connection deletion retry receipts', () => {

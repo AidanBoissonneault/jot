@@ -52,21 +52,6 @@ function fakeSupabase(failTable?: string) {
 }
 
 describe('server authentication data lifecycle', () => {
-  it('clears only the matching user’s Notion access and refresh tokens on logout', async () => {
-    const { calls, client } = fakeSupabase();
-    await createAuth(client).clearNotionAccountTokens('notion:user-42');
-
-    expect(calls).toContainEqual({
-      table: 'account', method: 'update', args: [{ accessToken: null, refreshToken: null }],
-    });
-    expect(calls.filter((call) => call.table === 'account' && call.method === 'eq')).toEqual([
-      { table: 'account', method: 'eq', args: ['userId', 'notion:user-42'] },
-      { table: 'account', method: 'eq', args: ['providerId', 'notion'] },
-    ]);
-    await expect(createAuth(fakeSupabase('account').client).clearNotionAccountTokens('notion:user-42'))
-      .rejects.toThrow('Unable to remove the stored Notion credentials.');
-  });
-
   it('serializes logout start with OAuth commits', async () => {
     const { calls, client } = fakeSupabase();
     await createAuth(client).beginNotionLogout('notion:user-42');
@@ -106,24 +91,6 @@ describe('server authentication data lifecycle', () => {
     expect(calls).toContainEqual({ table: 'inkwell_oauth_generation', method: 'eq', args: ['id', 1] });
     await expect(createAuth(fakeSupabase('inkwell_oauth_generation').client).getNotionOAuthGeneration())
       .rejects.toThrow('Unable to start a secure Notion connection.');
-  });
-
-  it('revokes queued sync access without deleting the installation row', async () => {
-    const { calls, client } = fakeSupabase();
-    await createAuth(client).revokeInstallation('notion:user-42');
-
-    expect(calls).toContainEqual({
-      table: 'notion_installations',
-      method: 'update',
-      args: [expect.objectContaining({ active: 0, revoked_at: expect.any(String) })],
-    });
-    expect(calls).toContainEqual({
-      table: 'notion_installations',
-      method: 'eq',
-      args: ['user_id', 'notion:user-42'],
-    });
-    await expect(createAuth(fakeSupabase('notion_installations').client).revokeInstallation('notion:user-42'))
-      .rejects.toThrow('Unable to revoke the Notion installation.');
   });
 
   it('revalidates a sync installation by ID and rejects an inactive row', async () => {
