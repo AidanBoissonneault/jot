@@ -20,7 +20,8 @@ export function useNotionConnection(
   let sessionPollTimer: number | undefined;
 
   const canLoginWithNotion = computed(
-    () => isLegalAcceptanceLoaded.value && hasAcceptedLegalTerms.value && !isSigningIn.value,
+    () => isLegalAcceptanceLoaded.value && hasAcceptedLegalTerms.value &&
+      !isSigningIn.value && !store.syncConfig.logoutCleanupPending,
   );
 
   async function loadLegalAcceptance() {
@@ -48,6 +49,10 @@ export function useNotionConnection(
   }
 
   async function loginWithNotion() {
+    if (store.syncConfig.logoutCleanupPending) {
+      uiMessage.value = 'Finish logout cleanup before reconnecting to Notion.';
+      return;
+    }
     if (!hasAcceptedLegalTerms.value) {
       uiMessage.value = 'Review and accept the Terms and Privacy Policy before connecting Notion.';
       return;

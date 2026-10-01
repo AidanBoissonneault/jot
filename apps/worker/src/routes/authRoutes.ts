@@ -241,13 +241,13 @@ export function registerAuthRoutes(app: Hono<{ Bindings: WorkerEnv }>): void {
     const session = await requireInkwellSession(c);
     if (!session) {
       deleteCookie(c, INKWELL_SESSION_COOKIE, { path: '/' });
-      return c.json({ connected: false, loggedOut: false, notionTokenRevoked: false }, 401);
+      return c.json({ connected: false, loggedOut: false, notionTokenRevoked: false, retryable: false }, 401);
     }
 
     const token = getCookie(c, INKWELL_SESSION_COOKIE);
     if (!token) {
       deleteCookie(c, INKWELL_SESSION_COOKIE, { path: '/' });
-      return c.json({ connected: false, loggedOut: false, notionTokenRevoked: false }, 401);
+      return c.json({ connected: false, loggedOut: false, notionTokenRevoked: false, retryable: false }, 401);
     }
 
     try {
@@ -265,7 +265,13 @@ export function registerAuthRoutes(app: Hono<{ Bindings: WorkerEnv }>): void {
       await auth.clearNotionAccountTokens(session.user.id).catch(() => undefined);
       await auth.deleteCustomSession(token).catch(() => undefined);
       deleteCookie(c, INKWELL_SESSION_COOKIE, { path: '/' });
-      return c.json({ connected: false, loggedOut: true, notionTokenRevoked, serverDataCleanupComplete: false });
+      return c.json({
+        connected: false,
+        loggedOut: true,
+        notionTokenRevoked,
+        serverDataCleanupComplete: false,
+        retryable: false,
+      });
     }
 
     const notionTokens = await auth.getNotionAccountTokens(session.user.id).catch(() => null);
@@ -288,11 +294,18 @@ export function registerAuthRoutes(app: Hono<{ Bindings: WorkerEnv }>): void {
         loggedOut: false,
         notionTokenRevoked,
         serverDataCleanupComplete: false,
+        retryable: true,
       }, 503);
     }
 
     deleteCookie(c, INKWELL_SESSION_COOKIE, { path: '/' });
-    return c.json({ connected: false, loggedOut: true, notionTokenRevoked, serverDataCleanupComplete: true });
+    return c.json({
+      connected: false,
+      loggedOut: true,
+      notionTokenRevoked,
+      serverDataCleanupComplete: true,
+      retryable: false,
+    });
   });
 
   /** Deletes Inkwell's account data and Notion connection while preserving Notion pages. */

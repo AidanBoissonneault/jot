@@ -106,6 +106,8 @@ export type SyncConfig = {
   userEmail?: string;
   workspaceId?: string;
   workspaceName?: string;
+  /** The server is finishing a logout and still accepts a logout retry. */
+  logoutCleanupPending?: boolean;
   selectedDatabaseId?: string;
   selectedDatabaseTitle?: string;
   selectedDataSourceId?: string;

@@ -100,6 +100,7 @@ describe('Inkwell connection data lifecycle', () => {
     const stored = readBrowserStorage();
 
     expect(result.syncConfig).toMatchObject({ authenticated: false, connected: false });
+    expect(result.syncConfig.logoutCleanupPending).toBe(false);
     expect(result.notionTokenRevoked).toBe(true);
     expect(stored.projects).toMatchObject([project]);
     expect(stored.pages).toEqual([page]);
@@ -343,10 +344,49 @@ describe('Inkwell connection data lifecycle', () => {
 
     expect(result.notionTokenRevoked).toBe(false);
     expect(result.serverDataCleanupComplete).toBe(false);
-    expect(result.syncConfig).toMatchObject({ authenticated: false, connected: false });
+    expect(result.syncConfig).toMatchObject({
+      authenticated: false,
+      connected: false,
+      logoutCleanupPending: true,
+    });
     expect(stored.syncConfig).toMatchObject({ authenticated: false, connected: false });
     expect(readBrowserStorage().projects).toMatchObject([project]);
     expect(stored.pages).toEqual([page]);
+  });
+
+  it('keeps logout retryable until the server confirms cleanup without deleting local work', async () => {
+    seedLocalWorkspace();
+    let requestCount = 0;
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      requestCount += 1;
+      return requestCount === 1
+        ? new Response(JSON.stringify({
+            connected: false,
+            loggedOut: false,
+            notionTokenRevoked: false,
+            serverDataCleanupComplete: false,
+            retryable: true,
+          }), { status: 503, headers: { 'Content-Type': 'application/json' } })
+        : new Response(JSON.stringify({
+            connected: false,
+            loggedOut: true,
+            notionTokenRevoked: true,
+            serverDataCleanupComplete: true,
+            retryable: false,
+          }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }));
+
+    const first = await notionClient.logoutSyncSession();
+    expect(first.syncConfig.logoutCleanupPending).toBe(true);
+    expect(readBrowserStorage().projects).toMatchObject([project]);
+    expect(readBrowserStorage().pages).toEqual([page]);
+
+    const retry = await notionClient.logoutSyncSession();
+    expect(retry.serverDataCleanupComplete).toBe(true);
+    expect(retry.syncConfig.logoutCleanupPending).toBe(false);
+    expect(requestCount).toBe(2);
+    expect(readBrowserStorage().projects).toMatchObject([project]);
+    expect(readBrowserStorage().pages).toEqual([page]);
   });
 
   it('does not restore a signed-out device from a lingering server cookie', async () => {
@@ -358,6 +398,7 @@ describe('Inkwell connection data lifecycle', () => {
       serverDataCleanupComplete: false,
     });
     await notionClient.logoutSyncSession();
+    expect((readBrowserStorage().syncConfig as SyncConfig).logoutCleanupPending).toBe(false);
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
 

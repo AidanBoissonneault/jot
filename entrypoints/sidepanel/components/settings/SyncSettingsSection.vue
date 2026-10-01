@@ -98,12 +98,24 @@ async function assignUnknownQueueToCurrentAccount() {
       type="button"
       class="icon-label-button"
       :disabled="!canLoginWithNotion"
-      :title="isSigningIn ? 'Connecting' : 'Continue with Notion'"
-      :aria-label="isSigningIn ? 'Connecting' : 'Continue with Notion'"
+      :title="isSigningIn ? 'Connecting' : store.syncConfig.logoutCleanupPending ? 'Retry logout cleanup before reconnecting' : 'Continue with Notion'"
+      :aria-label="isSigningIn ? 'Connecting' : store.syncConfig.logoutCleanupPending ? 'Retry logout cleanup before reconnecting' : 'Continue with Notion'"
       @click="loginWithNotion"
     >
       <font-awesome-icon :icon="['fas', 'cloud-arrow-up']" fixed-width />
       <span>{{ isSigningIn ? 'Connecting...' : 'Continue with Notion' }}</span>
+    </button>
+    <button
+      v-if="store.syncConfig.logoutCleanupPending"
+      type="button"
+      class="icon-label-button secondary-button"
+      :disabled="store.isRetryingLogoutCleanup"
+      :title="store.isRetryingLogoutCleanup ? 'Finishing logout' : 'Retry logout cleanup'"
+      :aria-busy="store.isRetryingLogoutCleanup"
+      @click="store.retryLogoutCleanup"
+    >
+      <font-awesome-icon :icon="['fas', 'rotate']" :class="{ 'sync-rotating-icon': store.isRetryingLogoutCleanup }" fixed-width />
+      <span>{{ store.isRetryingLogoutCleanup ? 'Finishing logout…' : 'Retry logout cleanup' }}</span>
     </button>
     <button
       v-if="store.syncConfig.authenticated || store.syncConfig.connected"

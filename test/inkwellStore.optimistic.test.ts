@@ -146,6 +146,39 @@ describe('logout credential cleanup', () => {
     expect(store.syncConfig.userId).toBe(connectedConfig.userId);
     expect(store.syncConfig.connected).toBe(false);
   });
+
+  test('exposes a retry path after local logout when server cleanup is pending', async () => {
+    const store = useInkwellStore();
+    store.syncConfig = { ...connectedConfig };
+    const logout = vi.spyOn(notionClient, 'logoutSyncSession')
+      .mockResolvedValueOnce({
+        notionTokenRevoked: false,
+        serverDataCleanupComplete: false,
+        syncConfig: {
+          ...connectedConfig,
+          authenticated: false,
+          connected: false,
+          logoutCleanupPending: true,
+        },
+      })
+      .mockResolvedValueOnce({
+        notionTokenRevoked: true,
+        serverDataCleanupComplete: true,
+        syncConfig: {
+          ...connectedConfig,
+          authenticated: false,
+          connected: false,
+          logoutCleanupPending: false,
+        },
+      });
+
+    await expect(store.logout()).resolves.toBe(true);
+    expect(store.syncConfig.logoutCleanupPending).toBe(true);
+
+    await expect(store.retryLogoutCleanup()).resolves.toBe(true);
+    expect(store.syncConfig.logoutCleanupPending).toBe(false);
+    expect(logout).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe('project metadata', () => {

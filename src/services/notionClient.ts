@@ -2695,18 +2695,21 @@ export const notionClient = {
       queueDeliveryTimer = undefined;
     }
 
-    let serverCleanup: { notionTokenRevoked: boolean; serverDataCleanupComplete: boolean } = {
+    let serverCleanup = {
+      loggedOut: false,
       notionTokenRevoked: false,
       serverDataCleanupComplete: false,
+      retryable: true,
     };
     try {
       await scrubLegacyExtensionSyncCredentials();
       const { syncConfig } = await readStorage();
-      const nextSyncConfig = await updateStoredSyncConfig({
+      await updateStoredSyncConfig({
         authenticated: false,
         userName: undefined,
         userEmail: undefined,
         connected: false,
+        logoutCleanupPending: false,
         workspaceId: undefined,
         workspaceName: undefined,
         selectedParentPageId: undefined,
@@ -2726,23 +2729,32 @@ export const notionClient = {
           loggedOut: boolean;
           notionTokenRevoked: boolean;
           serverDataCleanupComplete: boolean;
+          retryable?: boolean;
         }>('/auth/notion/logout', {
           method: 'POST',
           body: JSON.stringify({}),
         }, syncConfig);
         serverCleanup = {
+          loggedOut: response.loggedOut,
           notionTokenRevoked: response.notionTokenRevoked,
           serverDataCleanupComplete: response.serverDataCleanupComplete,
+          retryable: response.retryable ?? (!response.loggedOut && !response.serverDataCleanupComplete),
         };
-      } catch {
-        // A network or server failure must not keep this browser signed in locally.
-        // The status returned below tells the UI that remote revocation is unconfirmed.
+      } catch (error) {
+        // Keep local sign-out complete while allowing retry if the server kept its session.
+        serverCleanup.retryable = !(error instanceof SyncServerError && (
+          error.status === 401 || error.status === 403 || error.status === 404
+        ));
       }
+
+      const persistedSyncConfig = await updateStoredSyncConfig({
+        logoutCleanupPending: serverCleanup.retryable && !serverCleanup.serverDataCleanupComplete,
+      }, { hasExplicitlyLoggedOut: true });
 
       return {
         notionTokenRevoked: serverCleanup.notionTokenRevoked,
         serverDataCleanupComplete: serverCleanup.serverDataCleanupComplete,
-        syncConfig: nextSyncConfig,
+        syncConfig: persistedSyncConfig,
       };
     } catch {
       throw new Error('Unable to clear the local Inkwell account state.');

@@ -51,6 +51,7 @@ export const useInkwellStore = defineStore('inkwell', () => {
   const pullMessage = ref('');
   const pendingSyncCount = ref(0);
   const isOnline = ref(typeof navigator === 'undefined' || navigator.onLine !== false);
+  const isRetryingLogoutCleanup = ref(false);
   let pullMessageTimer: number | undefined;
   const syncConfig = ref<SyncConfig>({
     serverUrl: 'http://localhost:8787',
@@ -793,12 +794,53 @@ export const useInkwellStore = defineStore('inkwell', () => {
     };
     saveStatus.value = 'stale';
     errorMessage.value = !logoutResult.serverDataCleanupComplete
-      ? 'You are signed out on this device, but Inkwell could not confirm removal of all server credentials. Sign in again and retry logout.'
+      ? logoutResult.syncConfig.logoutCleanupPending
+        ? 'You are signed out on this device, but server logout is still pending. Retry logout cleanup when the server is available.'
+        : 'You are signed out on this device, but Inkwell could not confirm removal of all server credentials. Sign in again if you need to reconnect.'
       : !logoutResult.notionTokenRevoked
         ? 'You are signed out and Inkwell removed its stored credentials, but Notion did not confirm token revocation. Remove the Inkwell connection in Notion settings if it remains listed.'
         : '';
 
     return true;
+  }
+
+  async function retryLogoutCleanup(): Promise<boolean> {
+    if (!syncConfig.value.logoutCleanupPending || isRetryingLogoutCleanup.value) return false;
+    isRetryingLogoutCleanup.value = true;
+    saveStatus.value = 'saving';
+    errorMessage.value = '';
+    try {
+      const result = await notionClient.logoutSyncSession();
+      syncConfig.value = {
+        ...result.syncConfig,
+        authenticated: false,
+        userName: undefined,
+        userEmail: undefined,
+        connected: false,
+        workspaceId: undefined,
+        workspaceName: undefined,
+        selectedParentPageId: undefined,
+        selectedParentPageTitle: undefined,
+        selectedDatabaseId: undefined,
+        selectedDatabaseTitle: undefined,
+        selectedDataSourceId: undefined,
+      };
+      saveStatus.value = 'stale';
+      errorMessage.value = !result.serverDataCleanupComplete
+        ? result.syncConfig.logoutCleanupPending
+          ? 'Server logout is still pending. Keep your documents on this device and retry when online.'
+          : 'Inkwell could not confirm removal of all server credentials. Sign in again if you need to reconnect.'
+        : !result.notionTokenRevoked
+          ? 'Inkwell removed its stored credentials, but Notion did not confirm token revocation. Remove the Inkwell connection in Notion settings if it remains listed.'
+          : '';
+      return result.serverDataCleanupComplete;
+    } catch {
+      errorMessage.value = 'Server logout is still pending. Retry logout cleanup when the server is available.';
+      saveStatus.value = 'error';
+      return false;
+    } finally {
+      isRetryingLogoutCleanup.value = false;
+    }
   }
 
   async function deleteConnection(): Promise<{ notionTokenRevoked: boolean }> {
@@ -1052,6 +1094,8 @@ export const useInkwellStore = defineStore('inkwell', () => {
     loadProjectPages,
     loadNotionParentPages,
     logout,
+    retryLogoutCleanup,
+    isRetryingLogoutCleanup,
     notionParentPages,
     pages,
     pendingSyncCount,

@@ -435,6 +435,7 @@ describe('logout lifecycle route', () => {
       loggedOut: true,
       notionTokenRevoked: true,
       serverDataCleanupComplete: true,
+      retryable: false,
     });
     expect(response.headers.get('set-cookie')).toContain('Max-Age=0');
     const beginIndex = calls.findIndex((call) => call.pathname.endsWith('/rpc/begin_inkwell_notion_logout'));
@@ -507,6 +508,7 @@ describe('logout lifecycle route', () => {
       loggedOut: false,
       notionTokenRevoked: true,
       serverDataCleanupComplete: false,
+      retryable: true,
     });
     expect(response.headers.get('set-cookie')).toBeNull();
     expect(completeAttempts).toBe(2);
