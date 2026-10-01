@@ -5,7 +5,9 @@
  */
 
 import { createHash, randomBytes } from 'node:crypto';
+import type { Context } from 'hono';
 import type { NotionParentPage } from '../../../src/types/capture.js';
+import { notionApiHttpFailure } from './notionRequest.js';
 import type { JsonObject, NotionBlock, NotionBlockPayload, NotionObject, WorkerEnv, WorkerStore } from './types.js';
 
 export const MAX_SYNC_JSON_REQUEST_BYTES = 16 * 1024 * 1024;
@@ -112,6 +114,19 @@ export function safeErrorMetadata(error: unknown): Record<string, string | numbe
     result.code = record.code;
   }
   return result;
+}
+
+/** Builds a safe client response for a typed Notion API failure. */
+export function notionApiErrorResponse(
+  context: Context<{ Bindings: WorkerEnv }>,
+  error: unknown,
+): Response | undefined {
+  const failure = notionApiHttpFailure(error);
+  if (!failure) return undefined;
+  if (failure.retryAfter !== undefined) {
+    context.header('Retry-After', String(Math.ceil(failure.retryAfter)));
+  }
+  return context.json(failure.body, failure.status);
 }
 
 /** Detects a missing Notion object error. @param error - Unknown error. @returns Match result. */

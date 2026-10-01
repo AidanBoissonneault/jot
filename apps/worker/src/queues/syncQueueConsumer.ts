@@ -19,6 +19,7 @@ import type {
 } from '../types.js';
 import { isUnmappedNotionContentError } from '../managedBlocks.js';
 import { safeErrorMetadata } from '../workerUtils.js';
+import { notionApiHttpFailure } from '../notionRequest.js';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -212,9 +213,7 @@ export async function processSyncQueue(
             : undefined;
           const statusCode = typeof errorRecord?.status === 'number' ? errorRecord.status : undefined;
           const errorMessage = error instanceof Error ? error.message : String(error);
-          const userMessage = statusCode === 403
-            ? `${errorMessage} Check that Inkwell has access to this Notion page, then use Resync.`
-            : errorMessage;
+          const userMessage = notionApiHttpFailure(error)?.body.message ?? errorMessage;
           await doStub.fetch(new Request('http://do/notify', {
             method: 'POST',
             body: JSON.stringify({

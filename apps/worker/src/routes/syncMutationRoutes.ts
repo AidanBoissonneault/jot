@@ -37,6 +37,7 @@ import {
 } from '../services/workerRuntime.js';
 import {
   MAX_SYNC_JSON_REQUEST_BYTES,
+  notionApiErrorResponse,
   readLimitedJsonBody,
   safeErrorMetadata,
   stringValue,
@@ -181,6 +182,8 @@ export function registerSyncMutationRoutes(app: Hono<{ Bindings: WorkerEnv }>): 
         const response = error.getResponse();
         return c.newResponse(response.body, response);
       }
+      const notionResponse = notionApiErrorResponse(c, error);
+      if (notionResponse) return notionResponse;
       const message = error instanceof Error ? error.message : String(error);
       console.error('[sync/page/resync] failed:', safeErrorMetadata(error));
       if (isUnmappedNotionContentError(error)) {
@@ -216,6 +219,8 @@ export function registerSyncMutationRoutes(app: Hono<{ Bindings: WorkerEnv }>): 
         const response = error.getResponse();
         return c.newResponse(response.body, response);
       }
+      const notionResponse = notionApiErrorResponse(c, error);
+      if (notionResponse) return notionResponse;
       const message = error instanceof Error ? error.message : String(error);
       console.error('[sync/project] failed:', safeErrorMetadata(error));
       if (isUnmappedNotionContentError(error)) {
@@ -283,6 +288,8 @@ export function registerSyncMutationRoutes(app: Hono<{ Bindings: WorkerEnv }>): 
         const response = error.getResponse();
         return c.newResponse(response.body, response);
       }
+      const notionResponse = notionApiErrorResponse(c, error);
+      if (notionResponse) return notionResponse;
       const message = error instanceof Error ? error.message : String(error);
       console.error('[sync/project/source] failed:', safeErrorMetadata(error));
       if (isUnmappedNotionContentError(error)) {

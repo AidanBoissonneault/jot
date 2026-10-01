@@ -58,7 +58,7 @@ interface BackoffOptions {
 }
 
 /** Describes the notion api error contract used by this API feature. */
-class NotionApiError extends Error {
+export class NotionApiError extends Error {
   readonly code: string | undefined;
   readonly isNotionApiError = true;
   readonly retryAfter: number | undefined;
@@ -78,6 +78,49 @@ class NotionApiError extends Error {
     this.code = code;
     this.retryAfter = retryAfter;
   }
+}
+
+/** Describes a safe HTTP response for a failed upstream Notion request. */
+export interface NotionApiHttpFailure {
+  body: { status: 'error'; code: string; message: string };
+  retryAfter: number | undefined;
+  status: 400 | 403 | 404 | 409 | 429 | 502;
+}
+
+/** Converts a Notion API error into an actionable response without leaking credentials. */
+export function notionApiHttpFailure(error: unknown): NotionApiHttpFailure | undefined {
+  if (!(error instanceof NotionApiError)) return undefined;
+
+  let status: NotionApiHttpFailure['status'] = 502;
+  let code = 'notion_unavailable';
+  let message = 'Notion is temporarily unavailable. Please try again.';
+
+  if (error.status === 400) {
+    status = 400;
+    code = error.code ?? 'notion_validation_error';
+    message = error.message;
+  } else if (error.status === 401) {
+    code = 'notion_auth_rejected';
+    message = 'Notion rejected Inkwell’s connection. Reconnect Notion, then retry sync.';
+  } else if (error.status === 403) {
+    status = 403;
+    code = 'notion_access_denied';
+    message = 'Notion denied access. Check that the page is shared with Inkwell and the connection can edit content, then retry sync.';
+  } else if (error.status === 404) {
+    status = 404;
+    code = 'notion_object_not_found';
+    message = 'The Notion page or block was not found. Check that it still exists and is shared with Inkwell, then resync.';
+  } else if (error.status === 409) {
+    status = 409;
+    code = error.code ?? 'notion_conflict';
+    message = error.message;
+  } else if (error.status === 429) {
+    status = 429;
+    code = 'notion_rate_limited';
+    message = 'Notion is rate limiting requests. Please retry shortly.';
+  }
+
+  return { status, retryAfter: error.retryAfter, body: { status: 'error', code, message } };
 }
 
 /**
@@ -182,6 +225,9 @@ export function createNotionRequester({
  */
 function isSafeToRetry(method: string, endpoint: string): boolean {
   if (method === 'GET' || method === 'HEAD' || method === 'DELETE') return true;
+  if (method === 'POST') {
+    return endpoint === '/search' || endpoint.startsWith('/data_sources/') && endpoint.endsWith('/query');
+  }
   if (method !== 'PATCH') return false;
   return !/^\/blocks\/[^/]+\/children(?:\?|$)/.test(endpoint);
 }

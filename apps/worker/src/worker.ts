@@ -17,11 +17,22 @@ import { registerSyncQueryRoutes } from './routes/syncQueryRoutes.js';
 import { registerWebhookRoutes } from './routes/webhookRoutes.js';
 import { initSingletons } from './services/workerRuntime.js';
 import type { SyncQueueReference, WorkerEnv } from './types.js';
+import { notionApiErrorResponse } from './workerUtils.js';
 
 export { SyncEventsDO } from './syncEvents.js';
 
 /** Hono application containing every public Inkwell API feature. */
 export const app = new Hono<{ Bindings: WorkerEnv }>();
+
+app.use('*', async (c, next) => {
+  try {
+    await next();
+  } catch (error) {
+    const response = notionApiErrorResponse(c, error);
+    if (response) return response;
+    throw error;
+  }
+});
 
 registerAuthRoutes(app);
 registerNotionRoutes(app);

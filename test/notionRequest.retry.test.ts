@@ -1,5 +1,5 @@
 import { describe, expect, test, vi } from 'vitest';
-import { createNotionRequester } from '@/apps/worker/src/notionRequest';
+import { createNotionRequester, notionApiHttpFailure } from '@/apps/worker/src/notionRequest';
 import type { WorkerStore } from '@/apps/worker/src/types';
 
 const store = { tokens: { access_token: 'test-token' } } as WorkerStore;
@@ -72,6 +72,52 @@ describe('Notion request retry policy', () => {
 
     expect(result.id).toBe('loaded-block');
     expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  test('retries read-only Notion POST queries after transient failures', async () => {
+    for (const endpoint of ['/search', '/data_sources/source-id/query']) {
+      const fetchImpl = vi.fn()
+        .mockResolvedValueOnce(jsonResponse({ code: 'internal_server_error' }, 500))
+        .mockResolvedValueOnce(jsonResponse({ results: [] }));
+      const request = createNotionRequester({
+        fetchImpl: fetchImpl as typeof fetch,
+        sleep: vi.fn(async () => undefined),
+      });
+
+      await request(store, endpoint, { method: 'POST', body: { page_size: 10 } });
+
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+    }
+  });
+
+  test('does not retry a create POST after an ambiguous server error', async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse({ code: 'internal_server_error' }, 500));
+    const request = createNotionRequester({
+      fetchImpl: fetchImpl as typeof fetch,
+      sleep: vi.fn(async () => undefined),
+    });
+
+    await expect(request(store, '/pages', { method: 'POST', body: { parent: {} } })).rejects.toThrow();
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  test('maps a Notion 403 to an actionable access error', async () => {
+    const request = createNotionRequester({
+      fetchImpl: vi.fn(async () => jsonResponse({ code: 'restricted_resource', message: 'Access denied.' }, 403)) as typeof fetch,
+      sleep: vi.fn(async () => undefined),
+    });
+
+    let failure;
+    try {
+      await request(store, '/blocks/block-id', { method: 'DELETE' });
+    } catch (error) {
+      failure = notionApiHttpFailure(error);
+    }
+
+    expect(failure?.status).toBe(403);
+    expect(failure?.body.code).toBe('notion_access_denied');
+    expect(failure?.body.message).toContain('shared with Inkwell');
   });
 
   test('refuses endpoints that can leave the Notion API route tree', async () => {
