@@ -250,6 +250,7 @@ export function registerAuthRoutes(app: Hono<{ Bindings: WorkerEnv }>): void {
       return c.json({ connected: false, loggedOut: false, notionTokenRevoked: false, retryable: false }, 401);
     }
 
+    const activeInstallation = await auth.getActiveInstallation(session.user.id).catch(() => null);
     try {
       // The database lock invalidates older OAuth states and prevents a callback
       // from restoring credentials until this logout has fully completed.
@@ -262,6 +263,13 @@ export function registerAuthRoutes(app: Hono<{ Bindings: WorkerEnv }>): void {
         serverDataCleanupComplete: false,
         retryable: true,
       }, 503);
+    }
+
+    if (activeInstallation && c.env.SYNC_EVENTS) {
+      const events = c.env.SYNC_EVENTS.get(
+        c.env.SYNC_EVENTS.idFromName(String(activeInstallation.id)),
+      );
+      await events.fetch(new Request('http://do/disconnect', { method: 'POST' })).catch(() => undefined);
     }
 
     const notionTokens = await auth.getNotionAccountTokens(session.user.id).catch(() => null);

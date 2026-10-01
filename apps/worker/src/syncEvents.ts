@@ -43,6 +43,13 @@ export class SyncEventsDO {
       });
     }
 
+    if (url.pathname === '/disconnect' && request.method === 'POST') {
+      const sessions = [...this.sessions.values()];
+      this.sessions.clear();
+      await Promise.allSettled(sessions.map(({ writer }) => writer.close()));
+      return new Response('ok');
+    }
+
     if (url.pathname === '/notify' && request.method === 'POST') {
       const event: unknown = await request.json();
       const payload = `data: ${JSON.stringify(event)}\n\n`;

@@ -7,6 +7,7 @@ import {
   revokeNotionToken,
   verifyNotionWebhookSignature,
 } from '@/apps/worker/src/notionAuth';
+import { SyncEventsDO } from '@/apps/worker/src/syncEvents';
 import { app as workerApp } from '@/apps/worker/src/worker';
 import { initSingletons } from '@/apps/worker/src/services/workerRuntime';
 import { isTrustedOrigin, MAX_SYNC_JSON_REQUEST_BYTES, readLimitedJsonBody } from '@/apps/worker/src/workerUtils';
@@ -383,6 +384,13 @@ describe('logout lifecycle route', () => {
     const accountToken = 'logout-notion-token-test';
     const accountId = 'notion:user-42';
     const calls: Array<{ body: string; method: string; pathname: string }> = [];
+    const events = new SyncEventsDO();
+    const eventStream = await events.fetch(new Request('http://do/connect'));
+    const syncEvents = {
+      idFromName: (name: string) => name,
+      get: () => events,
+    } as unknown as WorkerEnv['SYNC_EVENTS'];
+    const requestEnv = { ...env, SYNC_EVENTS: syncEvents } as WorkerEnv;
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(input instanceof Request ? input.url : String(input));
       const method = init?.method ?? (input instanceof Request ? input.method : 'GET');
@@ -414,10 +422,18 @@ describe('logout lifecycle route', () => {
           headers: { 'Content-Type': 'application/json' },
         });
       }
+      if (url.pathname.endsWith('/notion_installations') && method === 'GET') {
+        return new Response(JSON.stringify([{
+          id: 42,
+          user_id: accountId,
+          workspace_id: 'workspace-test',
+          workspace_name: 'Test workspace',
+        }]), { headers: { 'Content-Type': 'application/json' } });
+      }
       if (['PATCH', 'DELETE'].includes(method)) return new Response(null, { status: 204 });
       return new Response('[]', { headers: { 'Content-Type': 'application/json' } });
     }));
-    initSingletons(env);
+    initSingletons(requestEnv);
 
     const response = await workerApp.request('/auth/notion/logout', {
       method: 'POST',
@@ -427,7 +443,7 @@ describe('logout lifecycle route', () => {
         'Content-Type': 'application/json',
       },
       body: '{}',
-    }, env);
+    }, requestEnv);
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
@@ -451,6 +467,7 @@ describe('logout lifecycle route', () => {
       p_user_id: accountId,
       p_session_token_hash: createHash('sha256').update(sessionToken).digest('hex'),
     });
+    await expect(eventStream.body!.getReader().read()).resolves.toEqual({ done: true, value: undefined });
   });
 
   it('keeps the session cookie available when atomic logout cleanup must be retried', async () => {
