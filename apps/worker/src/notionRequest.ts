@@ -376,6 +376,7 @@ function createNotionError(response: Response, payload: unknown): NotionApiError
  */
 function retryAfterHeader(response: Response): number | undefined {
   const value = response.headers.get('Retry-After');
+  if (!value?.trim()) return undefined;
   const seconds = Number(value);
   return Number.isFinite(seconds) && seconds >= 0 ? seconds : undefined;
 }
@@ -402,7 +403,7 @@ function shouldRetryError(error: NotionApiError): boolean {
  */
 function retryDelayMs(error: NotionApiError, attempt: number, options: BackoffOptions): number {
   if (error.status === 429 && error.retryAfter !== undefined) {
-    return error.retryAfter * 1_000;
+    return Math.min(options.maxBackoffMs, error.retryAfter * 1_000);
   }
 
   return backoffDelayMs(attempt, options);

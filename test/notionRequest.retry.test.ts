@@ -109,4 +109,47 @@ describe('Notion request retry policy', () => {
     })).toThrow('https://api.notion.com/v1');
     expect(fetchImpl).not.toHaveBeenCalled();
   });
+
+  test('uses exponential backoff when a rate-limit response omits Retry-After', async () => {
+    let now = 0;
+    const sleep = vi.fn(async (milliseconds: number) => {
+      now += milliseconds;
+    });
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ code: 'rate_limited' }, 429))
+      .mockResolvedValueOnce(jsonResponse({ id: 'page-id' }));
+    const request = createNotionRequester({
+      fetchImpl: fetchImpl as typeof fetch,
+      now: () => now,
+      requestsPerSecond: 1,
+      sleep,
+    });
+
+    await request(store, '/pages/page-id');
+
+    expect(sleep.mock.calls[0]?.[0]).toBe(250);
+  });
+
+  test('caps a server-supplied Retry-After delay', async () => {
+    let now = 0;
+    const sleep = vi.fn(async (milliseconds: number) => {
+      now += milliseconds;
+    });
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ code: 'rate_limited' }), {
+        status: 429,
+        headers: { 'Retry-After': '600' },
+      }))
+      .mockResolvedValueOnce(jsonResponse({ id: 'page-id' }));
+    const request = createNotionRequester({
+      fetchImpl: fetchImpl as typeof fetch,
+      now: () => now,
+      requestsPerSecond: 1,
+      sleep,
+    });
+
+    await request(store, '/pages/page-id');
+
+    expect(sleep.mock.calls[0]?.[0]).toBe(2_000);
+  });
 });
