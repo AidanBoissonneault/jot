@@ -45,24 +45,26 @@ export function createWorkerStorePersistence(supabase: WorkerSupabaseClient) {
 
   /** Ensures persisted synchronization state exists. */
   async function ensureInkwellSyncStateRow(installationId: Identifier): Promise<void> {
-    await supabase
+    const { error } = await supabase
       .from('inkwell_sync_state')
       .upsert(
         { installation_id: installationId },
         { onConflict: 'installation_id', ignoreDuplicates: true },
       );
+    if (error) throw new Error('Unable to ensure Inkwell synchronization state.');
   }
 
   /** Loads and normalizes persisted synchronization state. */
   async function readInkwellSyncState(installationId: Identifier): Promise<WorkerStore> {
     await ensureInkwellSyncStateRow(installationId);
 
-    const { data: row } = await supabase
+    const { data: row, error } = await supabase
       .from('inkwell_sync_state')
       .select('*')
       .eq('installation_id', installationId)
       .single();
 
+    if (error) throw new Error('Unable to read Inkwell synchronization state.');
     if (!row) return normalizeStore({});
 
     return normalizeStore({
@@ -101,7 +103,7 @@ export function createWorkerStorePersistence(supabase: WorkerSupabaseClient) {
     store: WorkerStore,
   ): Promise<void> {
     await ensureInkwellSyncStateRow(installationId);
-    await supabase
+    const { error } = await supabase
       .from('inkwell_sync_state')
       .update({
         inkwell_database_id: store.inkwellDatabase?.databaseId ?? store.inkwellRootPage?.id ?? null,
@@ -122,6 +124,7 @@ export function createWorkerStorePersistence(supabase: WorkerSupabaseClient) {
         updated_at: new Date().toISOString(),
       })
       .eq('installation_id', installationId);
+    if (error) throw new Error('Unable to save Inkwell synchronization state.');
   }
 
   return {

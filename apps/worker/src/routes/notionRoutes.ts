@@ -14,7 +14,7 @@ import {
   requireConnectedStore,
   writeStore,
 } from '../services/workerRuntime.js';
-import { titleFromPage } from '../workerUtils.js';
+import { MAX_CONTROL_JSON_REQUEST_BYTES, readLimitedJsonBody, titleFromPage } from '../workerUtils.js';
 import type { WorkerEnv } from '../types.js';
 import type { CreateNotionPageRequest } from '../../../../src/types/sync.js';
 
@@ -68,7 +68,9 @@ export function registerNotionRoutes(app: Hono<{ Bindings: WorkerEnv }>): void {
   
   /** Creates a selectable Notion workspace page. @param c - Hono context. @returns JSON response. */
   app.post('/notion/pages', async (c) => {
-    const body: Partial<CreateNotionPageRequest> = await c.req.json<CreateNotionPageRequest>().catch(() => ({}));
+    const parsed = await readLimitedJsonBody<CreateNotionPageRequest>(c.req.raw, MAX_CONTROL_JSON_REQUEST_BYTES);
+    if (parsed.tooLarge) return c.json({ error: 'Request is too large.' }, 413);
+    const body = (parsed.body ?? {}) as Partial<CreateNotionPageRequest>;
     const title = String(body?.title ?? '').trim() || 'Inkwell';
     const store = await requireConnectedStore(c);
     const page = await createWorkspacePage(store, title);

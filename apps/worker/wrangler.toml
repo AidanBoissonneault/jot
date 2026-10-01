@@ -29,6 +29,12 @@ max_retries       = 3
 max_concurrency   = 1
 dead_letter_queue = "inkwell-sync-dlq"
 
+[[queues.consumers]]
+queue             = "inkwell-sync-dlq"
+max_batch_size    = 100
+max_batch_timeout = 30
+max_retries       = 3
+
 [vars]
 NOTION_VERSION = "2026-03-11"
 INKWELL_ROOT_PAGE_TITLE = "Inkwell"
@@ -42,4 +48,7 @@ WORKER_URL = "https://sync.inkwell.byaidan.com"
 #   INKWELL_EXTENSION_ORIGIN      (chrome-extension://YOUR_EXTENSION_ID)
 #   SUPABASE_URL              (Project Settings → API → Project URL)
 #   SUPABASE_SERVICE_KEY      (Project Settings → API → service_role key)
-#   NOTION_WEBHOOK_SECRET     (the verification_token from Notion's webhook verification request)
+#   NOTION_WEBHOOK_SETUP_TOKEN (random 32+ byte bearer secret used by the protected setup endpoints)
+# Webhook setup: arm with POST /webhooks/notion/setup/arm, create the subscription in Notion,
+# retrieve once with GET /webhooks/notion/verification-token, then paste the token into Notion.
+# NOTION_WEBHOOK_SECRET remains an optional legacy fallback while moving secrets into Supabase.

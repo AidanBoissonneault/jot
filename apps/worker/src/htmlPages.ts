@@ -77,21 +77,23 @@ export function termsBody(): string {
 export function privacyBody(): string {
   return `
     <h1>Privacy Policy</h1>
-    <p class="updated"><strong>Last updated</strong> May 13, 2026</p>
+    <p class="updated"><strong>Last updated</strong> September 30, 2026</p>
     <p>This Privacy Policy explains how Inkwell collects, uses, stores, and shares information when you use the Inkwell browser extension and sync service.</p>
     <h2>Information Inkwell Handles</h2><ul>
       <li>Notion account and workspace information returned during Notion OAuth, such as account identifiers, name, email address, workspace ID, and workspace name.</li>
-      <li>Authentication and session metadata required to keep you logged in, including session tokens, IP address, user agent, and token expiry metadata.</li>
+      <li>Authentication and session metadata required to keep you logged in, including an HTTP-only browser session cookie, its server-side hash, IP address, user agent, and token expiry metadata.</li>
       <li>User-generated content you create or sync, including notes, highlights, page titles, source links, project metadata, images, audio, and other media you choose to add.</li>
       <li>Website content and browsing-related data you intentionally capture with the extension, such as selected text, source URLs, page titles, and highlight context.</li>
       <li>Synchronization metadata needed to map local Inkwell content to Notion pages, blocks, databases, and file uploads.</li>
     </ul>
     <h2>How Information Is Used</h2><p>Inkwell uses this information to authenticate with Notion, create and update your Inkwell workspace structure, synchronize content across devices, upload or refresh media, detect sync conflicts, provide user-facing capture features, prevent abuse, and maintain service security.</p>
-    <h2>Sharing</h2><p>Inkwell shares user data with Notion only as needed to provide the sync features you request. Inkwell uses Supabase and Cloudflare infrastructure to store and process authentication, session, and synchronization data. Inkwell does not sell user data and does not use user data for personalized advertising.</p>
-    <h2>Local Storage</h2><p>The extension stores local projects, pages, pending sync operations, server configuration, and legal acceptance metadata in browser storage and IndexedDB on your device.</p>
+    <h2>Sharing</h2><p>Inkwell shares user data with Notion only as needed to provide the sync features you request. Inkwell uses Supabase and Cloudflare infrastructure to store and process authentication, session, and synchronization data. If you configure a custom sync server, that server receives your Inkwell authentication data and any content you sync to it; review its operator's privacy and security practices. Inkwell does not sell user data and does not use user data for personalized advertising.</p>
+    <h2>Local Storage</h2><p>The extension stores local projects, pages, pending sync operations, server configuration, a non-secret account identifier used to keep retained documents bound to their original Notion account, and legal acceptance metadata in browser storage and IndexedDB on your device. The extension does not store Notion access or refresh tokens; those credentials are kept in server-side storage while connected.</p>
     <h2>Security</h2><p>Inkwell transmits data using HTTPS in production and stores authentication tokens in server-side storage. You should keep your browser profile, device, and Notion account secure.</p>
     <h2>Chrome Web Store Limited Use</h2><p>The use of information received from Google APIs will adhere to the Chrome Web Store User Data Policy, including the Limited Use requirements.</p>
-    <h2>Your Choices</h2><p>You can disconnect Notion from Inkwell by logging out in the extension. You can also revoke access from your Notion workspace settings and remove local extension data through your browser.</p>
+    <h2>Your Choices</h2><p>Logging out in the extension signs you out, asks Notion to revoke its access token, and removes Inkwell's stored Notion access and refresh tokens and active session. Local documents and queued edits remain in this browser and stay bound to their original Notion account. If server cleanup cannot be confirmed, the extension reports that result.</p>
+    <p>Delete connection in Settings removes the Inkwell account, sync data, and queued cloud payloads from Inkwell's server. After the server confirms deletion, the extension removes local Inkwell documents and storage from this browser. Pages already stored in Notion remain. Local copies on other browsers or devices are not remotely erased by this action and must be removed on those devices. Inkwell retains a minimal deletion receipt containing a one-way request hash, completion state, revocation result, and timestamps so an interrupted deletion can be retried; the receipt does not retain the account ID or document content.</p>
+    <p>You can also revoke Inkwell access from your Notion workspace settings.</p>
     <h2>Contact</h2><p>Questions about this policy can be sent to <a href="mailto:support@byaidan.com">support@byaidan.com</a>.</p>`;
 }
 

@@ -4,7 +4,8 @@
  * @lastModified September 2026
  */
 
-import type { Identifier, JsonObject, WorkerEnv, WorkerSupabaseClient } from './types.js';
+import { timingSafeEqual } from 'node:crypto';
+import type { JsonObject, WorkerEnv } from './types.js';
 
 /** Describes the notion oauth tokens contract used by this API feature. */
 export interface NotionOAuthTokens {
@@ -52,73 +53,39 @@ export async function computeHmacSignature(secret: string, body: string): Promis
     .join('');
 }
 
-/**
- * Registers the worker's callback URL and persists the returned webhook identifier.
- * @param env - Worker bindings and Notion configuration.
- * @param supabase - Privileged persistence client.
- * @param installationId - Active installation identifier.
- * @param accessToken - Notion access token.
- * @param baseUrl - Public worker base URL.
- * @returns A promise resolved after the best-effort registration.
- */
-export async function registerNotionWebhook(
-  env: WorkerEnv,
-  supabase: WorkerSupabaseClient,
-  installationId: Identifier,
-  accessToken: string,
-  baseUrl: string,
-): Promise<void> {
-  if (!env.NOTION_WEBHOOK_SECRET) return;
-  const response = await fetch('https://api.notion.com/v1/webhooks', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      'Content-Type': 'application/json',
-      'Notion-Version': env.NOTION_VERSION ?? '2026-03-11',
-    },
-    body: JSON.stringify({
-      url: `${baseUrl}/webhooks/notion`,
-      filter: { event_types: ['page.content_updated', 'page.properties_updated'] },
-    }),
-  });
-  if (!response.ok) return;
-  const data: unknown = await response.json().catch(() => ({}));
-  const webhookId = stringProperty(data, 'id');
-  if (webhookId) {
-    await supabase.from('notion_installations').update({ notion_webhook_id: webhookId }).eq('id', installationId);
-  }
+/** Verifies Notion's signed webhook header without a timing-sensitive string comparison. */
+export async function verifyNotionWebhookSignature(
+  secret: string,
+  body: string,
+  signature: string | undefined,
+): Promise<boolean> {
+  if (!signature || !/^sha256=[a-f0-9]{64}$/.test(signature)) return false;
+  const supplied = Buffer.from(signature.slice('sha256='.length), 'hex');
+  const expected = Buffer.from(await computeHmacSignature(secret, body), 'hex');
+  return supplied.byteLength === expected.byteLength && timingSafeEqual(supplied, expected);
 }
 
-/**
- * Deletes an installation's registered Notion webhook and clears its identifier.
- * @param env - Worker bindings and Notion configuration.
- * @param supabase - Privileged persistence client.
- * @param installationId - Active installation identifier.
- * @returns A promise resolved after best-effort deletion.
- */
-export async function deleteNotionWebhook(
-  env: WorkerEnv,
-  supabase: WorkerSupabaseClient,
-  installationId: Identifier,
-): Promise<void> {
-  const { data: row } = await supabase.from('notion_installations')
-    .select('notion_webhook_id').eq('id', installationId).maybeSingle();
-  if (!row?.notion_webhook_id) return;
-  const { data: installation } = await supabase.from('notion_installations')
-    .select('user_id').eq('id', installationId).maybeSingle();
-  if (!installation?.user_id) return;
-  const { data: account } = await supabase.from('account').select('accessToken')
-    .eq('userId', installation.user_id).eq('providerId', 'notion').maybeSingle();
-  if (!account?.accessToken) return;
-
-  await fetch(`https://api.notion.com/v1/webhooks/${row.notion_webhook_id}`, {
-    method: 'DELETE',
-    headers: {
-      Authorization: `Bearer ${account.accessToken}`,
-      'Notion-Version': env.NOTION_VERSION ?? '2026-03-11',
-    },
-  }).catch(() => undefined);
-  await supabase.from('notion_installations').update({ notion_webhook_id: null }).eq('id', installationId);
+/** Revokes an OAuth access token at Notion without changing any Notion pages. */
+export async function revokeNotionToken(env: WorkerEnv, accessToken: string): Promise<boolean> {
+  if (!env.NOTION_OAUTH_CLIENT_ID || !env.NOTION_OAUTH_CLIENT_SECRET) return false;
+  const credentials = Buffer.from(
+    `${env.NOTION_OAUTH_CLIENT_ID}:${env.NOTION_OAUTH_CLIENT_SECRET}`,
+  ).toString('base64');
+  try {
+    const response = await fetch('https://api.notion.com/v1/oauth/revoke', {
+      method: 'POST',
+      headers: {
+        Authorization: `Basic ${credentials}`,
+        'Content-Type': 'application/json',
+        'Notion-Version': env.NOTION_VERSION ?? '2026-03-11',
+      },
+      body: JSON.stringify({ token: accessToken }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
 }
 
 /**

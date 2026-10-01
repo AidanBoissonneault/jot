@@ -5,6 +5,7 @@
  */
 
 import type { Hono } from 'hono';
+import { HTTPException } from 'hono/http-exception';
 import type { Project } from '../../../../src/types/capture.js';
 import type {
   SyncPageRequest,
@@ -34,7 +35,12 @@ import {
   withFreshInstallationStore,
   writeStore,
 } from '../services/workerRuntime.js';
-import { stringValue } from '../workerUtils.js';
+import {
+  MAX_SYNC_JSON_REQUEST_BYTES,
+  readLimitedJsonBody,
+  safeErrorMetadata,
+  stringValue,
+} from '../workerUtils.js';
 import type { WorkerEnv } from '../types.js';
 import {
   isUnmappedNotionContentError,
@@ -51,7 +57,9 @@ export function registerSyncMutationRoutes(app: Hono<{ Bindings: WorkerEnv }>): 
   
   /** Queues page or block synchronization work. @param c - Hono context. @returns JSON response. */
   app.post('/sync/push', async (c) => {
-    const body: Partial<SyncPageRequest> = await c.req.json<SyncPageRequest>().catch(() => ({}));
+    const parsed = await readLimitedJsonBody<SyncPageRequest>(c.req.raw, MAX_SYNC_JSON_REQUEST_BYTES);
+    if (parsed.tooLarge) return c.json({ error: 'Sync request is too large.' }, 413);
+    const body = (parsed.body ?? {}) as Partial<SyncPageRequest>;
     const { page, project, selectedParentPageId } = body ?? {};
     const ops = Array.isArray(body?.ops) ? body.ops : [];
   
@@ -140,7 +148,9 @@ export function registerSyncMutationRoutes(app: Hono<{ Bindings: WorkerEnv }>): 
 
   /** Runs a user-requested page reconciliation immediately so its content diff can be returned. */
   app.post('/sync/page/resync', async (c) => {
-    const body: Partial<SyncPageRequest> = await c.req.json<SyncPageRequest>().catch(() => ({}));
+    const parsed = await readLimitedJsonBody<SyncPageRequest>(c.req.raw, MAX_SYNC_JSON_REQUEST_BYTES);
+    if (parsed.tooLarge) return c.json({ error: 'Sync request is too large.' }, 413);
+    const body = (parsed.body ?? {}) as Partial<SyncPageRequest>;
     const { page, project, selectedParentPageId } = body ?? {};
     if (!page?.id || !project?.id) {
       return c.json({ status: 'error', message: 'Missing page or project.' }, 400);
@@ -167,8 +177,12 @@ export function registerSyncMutationRoutes(app: Hono<{ Bindings: WorkerEnv }>): 
       }, { onConflict: 'installation_id,local_id' });
       return c.json(result);
     } catch (error) {
+      if (error instanceof HTTPException) {
+        const response = error.getResponse();
+        return c.newResponse(response.body, response);
+      }
       const message = error instanceof Error ? error.message : String(error);
-      console.error('[sync/page/resync] failed:', message, error);
+      console.error('[sync/page/resync] failed:', safeErrorMetadata(error));
       if (isUnmappedNotionContentError(error)) {
         // A mergeable sync conflict is a normal application result. Sending it
         // as HTTP 409 makes the browser log a failed request before the client
@@ -186,7 +200,9 @@ export function registerSyncMutationRoutes(app: Hono<{ Bindings: WorkerEnv }>): 
 
   /** Synchronizes project metadata immediately. @param c - Hono context. @returns JSON response. */
   app.post('/sync/project', async (c) => {
-    const body: Partial<SyncProjectRequest> = await c.req.json<SyncProjectRequest>().catch(() => ({}));
+    const parsed = await readLimitedJsonBody<SyncProjectRequest>(c.req.raw, MAX_SYNC_JSON_REQUEST_BYTES);
+    if (parsed.tooLarge) return c.json({ error: 'Sync request is too large.' }, 413);
+    const body = (parsed.body ?? {}) as Partial<SyncProjectRequest>;
     const { project, selectedParentPageId } = body ?? {};
   
     if (!project?.id) {
@@ -196,8 +212,12 @@ export function registerSyncMutationRoutes(app: Hono<{ Bindings: WorkerEnv }>): 
     try {
       return c.json(await syncProjectToNotion({ c, project, selectedParentPageId }));
     } catch (error) {
+      if (error instanceof HTTPException) {
+        const response = error.getResponse();
+        return c.newResponse(response.body, response);
+      }
       const message = error instanceof Error ? error.message : String(error);
-      console.error('[sync/project] failed:', message, error);
+      console.error('[sync/project] failed:', safeErrorMetadata(error));
       if (isUnmappedNotionContentError(error)) {
         return c.json({
           status: 'error',
@@ -212,7 +232,9 @@ export function registerSyncMutationRoutes(app: Hono<{ Bindings: WorkerEnv }>): 
   
   /** Synchronizes one project-state source block. @param c - Hono context. @returns JSON response. */
   app.post('/sync/project/source', async (c) => {
-    const body: Partial<SyncProjectSourceRequest> = await c.req.json<SyncProjectSourceRequest>().catch(() => ({}));
+    const parsed = await readLimitedJsonBody<SyncProjectSourceRequest>(c.req.raw, MAX_SYNC_JSON_REQUEST_BYTES);
+    if (parsed.tooLarge) return c.json({ error: 'Sync request is too large.' }, 413);
+    const body = (parsed.body ?? {}) as Partial<SyncProjectSourceRequest>;
     const { project, blockId, block, selectedParentPageId } = body ?? {};
   
     if (!project?.id || !blockId || !block) {
@@ -257,8 +279,12 @@ export function registerSyncMutationRoutes(app: Hono<{ Bindings: WorkerEnv }>): 
         return { status: 'saved', project };
       }));
     } catch (error) {
+      if (error instanceof HTTPException) {
+        const response = error.getResponse();
+        return c.newResponse(response.body, response);
+      }
       const message = error instanceof Error ? error.message : String(error);
-      console.error('[sync/project/source] failed:', message, error);
+      console.error('[sync/project/source] failed:', safeErrorMetadata(error));
       if (isUnmappedNotionContentError(error)) {
         return c.json({
           status: 'error',

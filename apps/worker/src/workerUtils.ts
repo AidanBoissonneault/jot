@@ -8,6 +8,47 @@ import { createHash, randomBytes } from 'node:crypto';
 import type { NotionParentPage } from '../../../src/types/capture.js';
 import type { JsonObject, NotionBlock, NotionBlockPayload, NotionObject, WorkerEnv, WorkerStore } from './types.js';
 
+export const MAX_SYNC_JSON_REQUEST_BYTES = 16 * 1024 * 1024;
+export const MAX_CONTROL_JSON_REQUEST_BYTES = 256 * 1024;
+
+/** Reads and parses JSON while enforcing a limit even when Content-Length is absent. */
+export async function readLimitedJsonBody<T>(
+  request: Request,
+  maxBytes: number,
+): Promise<{ body: T | null; tooLarge: boolean }> {
+  const contentLength = Number(request.headers.get('content-length'));
+  if (Number.isFinite(contentLength) && contentLength > maxBytes) {
+    return { body: null, tooLarge: true };
+  }
+  if (!request.body) return { body: null, tooLarge: false };
+
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    totalBytes += value.byteLength;
+    if (totalBytes > maxBytes) {
+      await reader.cancel().catch(() => undefined);
+      return { body: null, tooLarge: true };
+    }
+    chunks.push(value);
+  }
+
+  const bytes = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  try {
+    return { body: JSON.parse(new TextDecoder().decode(bytes)) as T, tooLarge: false };
+  } catch {
+    return { body: null, tooLarge: false };
+  }
+}
+
 /** Describes a Notion child insertion position. */
 export interface BlockPosition {
   after_block?: { id: string };
@@ -16,11 +57,28 @@ export interface BlockPosition {
 
 /** Checks whether a request origin is trusted. @param env - Worker bindings. @param origin - Request origin. @returns Trust decision. */
 export function isTrustedOrigin(env: WorkerEnv, origin: string | undefined): boolean {
-  if (!origin || origin.startsWith('chrome-extension://')) return true;
+  if (!origin) return false;
   const trusted = [env.WORKER_URL, env.INKWELL_EXTENSION_ORIGIN, ...(env.TRUSTED_ORIGINS?.split(',') ?? [])]
     .map((value: string | undefined): string | undefined => value?.trim())
+    .filter((value: string | undefined): value is string => Boolean(value))
+    .map(originKey)
     .filter((value: string | undefined): value is string => Boolean(value));
-  return trusted.includes(origin);
+  const requestOrigin = originKey(origin);
+  return Boolean(requestOrigin && trusted.includes(requestOrigin));
+}
+
+/** Normalizes an HTTP or extension origin without allowing arbitrary schemes. */
+function originKey(value: string): string | undefined {
+  try {
+    const url = new URL(value);
+    if (url.username || url.password) return undefined;
+    if (url.protocol === 'chrome-extension:' && url.host) {
+      return `${url.protocol}//${url.host}`;
+    }
+    return ['http:', 'https:'].includes(url.protocol) ? url.origin : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Resolves the public worker base URL. @param env - Worker bindings. @returns Worker URL. */
@@ -36,6 +94,24 @@ export function randomToken(byteLength = 32): string {
 /** Hashes a string with SHA-256. @param value - Input text. @returns Hex digest. */
 export function hash(value: string): string {
   return createHash('sha256').update(value).digest('hex');
+}
+
+/** Returns only bounded, non-message error metadata for persistent server logs. */
+export function safeErrorMetadata(error: unknown): Record<string, string | number> {
+  if (!error || typeof error !== 'object') return { type: typeof error };
+  const record = error as { code?: unknown; name?: unknown; status?: unknown };
+  const result: Record<string, string | number> = {
+    type: typeof record.name === 'string' && /^[A-Za-z0-9_.-]{1,64}$/.test(record.name)
+      ? record.name
+      : 'Error',
+  };
+  if (typeof record.status === 'number' && Number.isInteger(record.status)) {
+    result.status = record.status;
+  }
+  if (typeof record.code === 'string' && /^[A-Za-z0-9_.-]{1,64}$/.test(record.code)) {
+    result.code = record.code;
+  }
+  return result;
 }
 
 /** Detects a missing Notion object error. @param error - Unknown error. @returns Match result. */

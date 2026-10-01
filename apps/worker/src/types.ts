@@ -241,6 +241,11 @@ export interface ProjectQueueMessage extends SyncQueueMessageBase {
 /** Describes the discriminated union of synchronization queue messages. */
 export type SyncQueueMessage = BlockQueueMessage | PageQueueMessage | ProjectQueueMessage;
 
+/** The Cloudflare Queue carries only a random reference; document content stays in Supabase. */
+export interface SyncQueueReference {
+  jobId: string;
+}
+
 /** Describes Cloudflare bindings and configuration required by the API worker. */
 export interface WorkerEnv {
   INKWELL_EXTENSION_ORIGIN: string | undefined;
@@ -249,10 +254,11 @@ export interface WorkerEnv {
   NOTION_OAUTH_CLIENT_SECRET: string | undefined;
   NOTION_VERSION: string | undefined;
   NOTION_WEBHOOK_SECRET: string | undefined;
+  NOTION_WEBHOOK_SETUP_TOKEN: string | undefined;
   SUPABASE_SERVICE_KEY: string;
   SUPABASE_URL: string;
   SYNC_EVENTS: DurableObjectNamespace;
-  SYNC_QUEUE: Queue<SyncQueueMessage>;
+  SYNC_QUEUE: Queue<SyncQueueReference>;
   TRUSTED_ORIGINS: string | undefined;
   WORKER_URL: string | undefined;
 }

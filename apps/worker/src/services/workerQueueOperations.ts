@@ -13,6 +13,7 @@ import type {
   ManagedBlockOperation,
   NotionObject,
   SyncQueueMessage,
+  SyncQueueReference,
   WorkerEnv,
   WorkerStore,
 } from '../types.js';
@@ -77,7 +78,7 @@ export function createWorkerQueueOperations(dependencies: WorkerQueueDependencie
       .eq('local_id', job.localId)
       .maybeSingle();
 
-    await supabase.from('notion_block_sync').upsert(
+    const { error: syncStateError } = await supabase.from('notion_block_sync').upsert(
       {
         installation_id: job.installationId,
         local_id: job.localId,
@@ -88,9 +89,30 @@ export function createWorkerQueueOperations(dependencies: WorkerQueueDependencie
       },
       { onConflict: 'installation_id,local_id' },
     );
+    if (syncStateError) throw new Error('Unable to record the pending Inkwell sync.');
 
+    const jobId = crypto.randomUUID();
     const message: SyncQueueMessage = { ...job, queuedVersion: version };
-    await env.SYNC_QUEUE.send(message);
+    const { error: payloadError } = await supabase
+      .from('inkwell_sync_queue_payloads')
+      .insert({
+        id: jobId,
+        installation_id: job.installationId,
+        payload: message,
+        status: 'pending',
+      });
+    if (payloadError) throw new Error('Unable to store the pending sync payload.');
+
+    try {
+      const reference: SyncQueueReference = { jobId };
+      await env.SYNC_QUEUE.send(reference);
+    } catch {
+      await supabase
+        .from('inkwell_sync_queue_payloads')
+        .delete()
+        .eq('id', jobId);
+      throw new Error('Unable to publish the pending sync job.');
+    }
     return version;
   }
 
@@ -122,11 +144,33 @@ export function createWorkerQueueOperations(dependencies: WorkerQueueDependencie
     installationId: Identifier,
   ): Promise<WorkerStore> {
     const installation = await getInstallationById(installationId);
-    if (!installation) throw new Error('Installation not found or revoked.');
+    if (!installation) {
+      throw Object.assign(new Error('Installation is no longer active.'), {
+        code: 'installation_revoked',
+      });
+    }
     return freshConnectedStore({
       ...readStore(),
       installationId,
       tokens: installation.tokens,
+    });
+  }
+
+  /** Revalidates credentials after acquiring the per-installation mutation lock. */
+  async function withActiveInstallationStore<Result>(
+    store: WorkerStore,
+    operation: (freshStore: WorkerStore) => Promise<Result>,
+  ): Promise<Result> {
+    const installationId = store.installationId;
+    return withFreshInstallationStore(store, async (freshStore) => {
+      if (!installationId) throw new Error('Installation is no longer active.');
+      const installation = await getInstallationById(installationId);
+      if (!installation) {
+        throw Object.assign(new Error('Installation is no longer active.'), {
+          code: 'installation_revoked',
+        });
+      }
+      return operation({ ...freshStore, tokens: installation.tokens });
     });
   }
 
@@ -136,7 +180,7 @@ export function createWorkerQueueOperations(dependencies: WorkerQueueDependencie
     { page, project, selectedParentPageId }: PageSyncInput,
   ) {
     const store = await freshConnectedStoreForInstallation(installationId);
-    return withFreshInstallationStore(store, (freshStore) =>
+    return withActiveInstallationStore(store, (freshStore) =>
       pushPageCore({
         request: {},
         page,
@@ -167,7 +211,7 @@ export function createWorkerQueueOperations(dependencies: WorkerQueueDependencie
     { ops, page, project, selectedParentPageId }: BlockOpsInput,
   ) {
     const store = await freshConnectedStoreForInstallation(installationId);
-    return withFreshInstallationStore(store, async (freshStore) => {
+    return withActiveInstallationStore(store, async (freshStore) => {
       let notionPageId: string;
       let parentPageId: string;
       let refreshed: NotionObject;
@@ -271,7 +315,7 @@ export function createWorkerQueueOperations(dependencies: WorkerQueueDependencie
     { project, selectedParentPageId }: ProjectSyncInput,
   ) {
     const store = await freshConnectedStoreForInstallation(installationId);
-    return withFreshInstallationStore(store, (freshStore) =>
+    return withActiveInstallationStore(store, (freshStore) =>
       performSyncProjectFolder(freshStore, { project, selectedParentPageId }),
     );
   }

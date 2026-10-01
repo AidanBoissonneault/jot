@@ -23,7 +23,12 @@ import {
   withFreshInstallationStore,
   writeStore,
 } from '../services/workerRuntime.js';
-import { isBlockNotPageError } from '../workerUtils.js';
+import {
+  MAX_CONTROL_JSON_REQUEST_BYTES,
+  MAX_SYNC_JSON_REQUEST_BYTES,
+  isBlockNotPageError,
+  readLimitedJsonBody,
+} from '../workerUtils.js';
 import type { WorkerEnv } from '../types.js';
 
 /**
@@ -66,7 +71,9 @@ export function registerSyncQueryRoutes(app: Hono<{ Bindings: WorkerEnv }>): voi
   
   /** Compares client state with persisted versions and remote cache validity. @param c - Hono context. @returns JSON response. */
   app.post('/sync/validate', async (c) => {
-    const body: Partial<SyncValidationRequest> = await c.req.json<SyncValidationRequest>().catch(() => ({}));
+    const parsed = await readLimitedJsonBody<SyncValidationRequest>(c.req.raw, MAX_SYNC_JSON_REQUEST_BYTES);
+    if (parsed.tooLarge) return c.json({ error: 'Sync request is too large.' }, 413);
+    const body = (parsed.body ?? {}) as Partial<SyncValidationRequest>;
     const { pages = [], projects = [], knownVersions = {} } = body ?? {};
     const store = await requireConnectedStore(c);
     const result = await validateNotionCache(store, {
@@ -123,7 +130,9 @@ export function registerSyncQueryRoutes(app: Hono<{ Bindings: WorkerEnv }>): voi
   
   /** Reloads database-backed project state from Notion. @param c - Hono context. @returns JSON response. */
   app.post('/sync/reload', async (c) => {
-    const body: Partial<SyncReloadRequest> = await c.req.json<SyncReloadRequest>().catch(() => ({}));
+    const parsed = await readLimitedJsonBody<SyncReloadRequest>(c.req.raw, MAX_CONTROL_JSON_REQUEST_BYTES);
+    if (parsed.tooLarge) return c.json({ error: 'Request is too large.' }, 413);
+    const body = (parsed.body ?? {}) as Partial<SyncReloadRequest>;
     const { selectedParentPageId } = body ?? {};
     const store = await requireConnectedStore(c);
   
@@ -139,7 +148,9 @@ export function registerSyncQueryRoutes(app: Hono<{ Bindings: WorkerEnv }>): voi
   
   /** Pulls a linked page from Notion. @param c - Hono context. @returns JSON response. */
   app.post('/sync/pull', async (c) => {
-    const body: Partial<SyncPageRequest> = await c.req.json<SyncPageRequest>().catch(() => ({}));
+    const parsed = await readLimitedJsonBody<SyncPageRequest>(c.req.raw, MAX_SYNC_JSON_REQUEST_BYTES);
+    if (parsed.tooLarge) return c.json({ error: 'Sync request is too large.' }, 413);
+    const body = (parsed.body ?? {}) as Partial<SyncPageRequest>;
     const { page } = body ?? {};
   
     if (!page?.id || !page.notionPageId) {
@@ -176,7 +187,7 @@ export function registerSyncQueryRoutes(app: Hono<{ Bindings: WorkerEnv }>): voi
       });
     }
   
-    console.log('[sync/pull] importing blocks from Notion', page.notionPageId, 'revision changed', page.remoteRevision, '->', notionContainer.last_edited_time);
+    console.log('[sync/pull] importing blocks after a Notion revision change');
     const pulledContent = await importManagedBlocks(store, page);
   
     if (!pulledContent) {
@@ -210,7 +221,9 @@ export function registerSyncQueryRoutes(app: Hono<{ Bindings: WorkerEnv }>): voi
   
   /** Marks a stale synchronization row as current. @param c - Hono context. @returns JSON response. */
   app.post('/sync/clear-stale', async (c) => {
-    const body: { pageIds?: string[] } = await c.req.json<{ pageIds?: string[] }>().catch(() => ({}));
+    const parsed = await readLimitedJsonBody<{ pageIds?: string[] }>(c.req.raw, MAX_CONTROL_JSON_REQUEST_BYTES);
+    if (parsed.tooLarge) return c.json({ error: 'Request is too large.' }, 413);
+    const body = parsed.body ?? {};
     const pageIds = Array.isArray(body?.pageIds) ? body.pageIds : [];
     if (!pageIds.length) return c.json({ cleared: true });
   

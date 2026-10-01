@@ -13,7 +13,7 @@ This directory contains the Cloudflare Worker API and separates transport, featu
 - `routes/syncQueryRoutes.ts` — synchronization status, event streaming, validation, reload, pull, and stale-state recovery.
 - `routes/webhookRoutes.ts` — Notion webhook verification and remote-change notifications.
 - `routes/mediaRoutes.ts` — validated media upload and signed Notion URL refresh.
-- `queues/syncQueueConsumer.ts` — background synchronization execution, acknowledgement, retry, and status events.
+- `queues/syncQueueConsumer.ts` — loads installation-owned sync payloads from Supabase, executes them, and cleans up both normal and dead-letter queue references.
 - `services/workerRuntime.ts` — initializes shared services and exposes the runtime facade used by routes and queues.
 - `services/workerInstallationState.ts` — resolves sessions and connected installations, then locks state updates per installation.
 - `services/workerNotionOperations.ts` — composes Notion cache, block transport, managed-block sync, and page mutation helpers.
@@ -23,7 +23,7 @@ This directory contains the Cloudflare Worker API and separates transport, featu
 - `auth.ts` and `notionAuth.ts` — application authentication persistence and Notion OAuth/webhook lifecycle behavior.
 - `notionRequest.ts` — authenticated Notion transport, retry, backoff, rate limiting, and file upload.
 - `services/workerSyncOperations.ts` — authenticated HTTP page and project synchronization.
-- `services/workerQueueOperations.ts` — Queue publication, installation lookup, and background page, block, and project synchronization.
+- `services/workerQueueOperations.ts` — stores sync payloads in Supabase, publishes opaque Queue references, and performs background page, block, and project synchronization.
 - `blockConversion.ts` — stable exports for the focused converters in `blockConversion/`.
 - `blockConversion/tiptapToNotion.ts` and `blockConversion/notionToTiptap.ts` — separate outbound and inbound conversion; `valueReaders.ts` and `youtubeUrls.ts` contain shared helpers.
 - `managedBlocks.ts`, `managedBlockOperations.ts`, and `importManagedBlocks.ts` — full-document replacement, granular operations, and remote import.

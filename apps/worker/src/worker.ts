@@ -5,7 +5,10 @@
  */
 
 import { Hono } from 'hono';
-import { processSyncQueue } from './queues/syncQueueConsumer.js';
+import {
+  processSyncDeadLetterQueue,
+  processSyncQueue,
+} from './queues/syncQueueConsumer.js';
 import { registerAuthRoutes } from './routes/authRoutes.js';
 import { registerMediaRoutes } from './routes/mediaRoutes.js';
 import { registerNotionRoutes } from './routes/notionRoutes.js';
@@ -13,7 +16,7 @@ import { registerSyncMutationRoutes } from './routes/syncMutationRoutes.js';
 import { registerSyncQueryRoutes } from './routes/syncQueryRoutes.js';
 import { registerWebhookRoutes } from './routes/webhookRoutes.js';
 import { initSingletons } from './services/workerRuntime.js';
-import type { SyncQueueMessage, WorkerEnv } from './types.js';
+import type { SyncQueueReference, WorkerEnv } from './types.js';
 
 export { SyncEventsDO } from './syncEvents.js';
 
@@ -28,7 +31,7 @@ registerWebhookRoutes(app);
 registerMediaRoutes(app);
 
 /** Cloudflare Worker handlers for HTTP and synchronization Queue traffic. */
-const worker: ExportedHandler<WorkerEnv, SyncQueueMessage> = {
+const worker: ExportedHandler<WorkerEnv, SyncQueueReference> = {
   /**
    * Initializes request services and dispatches an HTTP request.
    * @param request - Incoming HTTP request.
@@ -42,7 +45,11 @@ const worker: ExportedHandler<WorkerEnv, SyncQueueMessage> = {
   },
 
   /** Processes a synchronization Queue batch. */
-  queue: processSyncQueue,
+  queue(batch, env) {
+    return batch.queue === 'inkwell-sync-dlq'
+      ? processSyncDeadLetterQueue(batch, env)
+      : processSyncQueue(batch, env);
+  },
 };
 
 export default worker;

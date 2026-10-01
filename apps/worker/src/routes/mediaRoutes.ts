@@ -11,17 +11,21 @@ import {
   requireConnectedStore,
 } from '../services/workerRuntime.js';
 import {
+  MAX_CONTROL_JSON_REQUEST_BYTES,
   findMappedNotionBlockId,
   findNotionBlockIdByFileUploadId,
   isBase64,
   isSupportedMediaMimeType,
   mediaUrlFromNotionBlock,
+  readLimitedJsonBody,
   sanitizeMediaFilename,
 } from '../workerUtils.js';
 import type { WorkerEnv } from '../types.js';
 import type { MediaRefreshRequest, MediaUploadRequest } from '../../../../src/types/sync.js';
 
 const MAX_MEDIA_UPLOAD_BYTES = 20 * 1024 * 1024;
+const MAX_MEDIA_UPLOAD_BASE64_LENGTH = Math.ceil(MAX_MEDIA_UPLOAD_BYTES / 3) * 4;
+const MAX_MEDIA_UPLOAD_REQUEST_BYTES = MAX_MEDIA_UPLOAD_BASE64_LENGTH + 64 * 1024;
 
 /**
  * Registers media upload and refresh routes.
@@ -33,11 +37,30 @@ export function registerMediaRoutes(app: Hono<{ Bindings: WorkerEnv }>): void {
   
   /** Uploads validated local media to Notion. @param c - Hono context. @returns JSON upload metadata. */
   app.post('/media/upload', async (c) => {
-    const body: Partial<MediaUploadRequest> = await c.req.json<MediaUploadRequest>().catch(() => ({}));
+    const contentLength = Number(c.req.header('content-length'));
+    if (Number.isFinite(contentLength) && contentLength > MAX_MEDIA_UPLOAD_REQUEST_BYTES) {
+      return c.json({ error: 'Media files must be 20 MB or smaller.' }, 413);
+    }
+    const rawBody = await readLimitedBody(c.req.raw, MAX_MEDIA_UPLOAD_REQUEST_BYTES);
+    if (rawBody === null) {
+      return c.json({ error: 'Media files must be 20 MB or smaller.' }, 413);
+    }
+    let body: Partial<MediaUploadRequest>;
+    try {
+      body = JSON.parse(rawBody) as Partial<MediaUploadRequest>;
+    } catch {
+      return c.json({ error: 'Invalid upload request.' }, 400);
+    }
     const { dataBase64, mimeType, filename } = body ?? {};
+    if (typeof dataBase64 !== 'string' || typeof mimeType !== 'string') {
+      return c.json({ error: 'Invalid upload request.' }, 400);
+    }
   
     if (!dataBase64 || !mimeType) return c.json({ error: 'Missing dataBase64 or mimeType.' }, 400);
     if (!isSupportedMediaMimeType(mimeType)) return c.json({ error: 'Only image and audio uploads are supported.' }, 400);
+    if (dataBase64.length > MAX_MEDIA_UPLOAD_BASE64_LENGTH) {
+      return c.json({ error: 'Media files must be 20 MB or smaller.' }, 413);
+    }
     if (!isBase64(dataBase64)) return c.json({ error: 'Invalid upload data.' }, 400);
   
     const store = await requireConnectedStore(c);
@@ -58,7 +81,9 @@ export function registerMediaRoutes(app: Hono<{ Bindings: WorkerEnv }>): void {
   
   /** Refreshes the signed URL for uploaded Notion media. @param c - Hono context. @returns JSON response. */
   app.post('/media/refresh', async (c) => {
-    const body: Partial<MediaRefreshRequest> = await c.req.json<MediaRefreshRequest>().catch(() => ({}));
+    const parsed = await readLimitedJsonBody<MediaRefreshRequest>(c.req.raw, MAX_CONTROL_JSON_REQUEST_BYTES);
+    if (parsed.tooLarge) return c.json({ error: 'Request is too large.' }, 413);
+    const body = (parsed.body ?? {}) as Partial<MediaRefreshRequest>;
     const fileUploadId = String(body?.fileUploadId ?? '').trim();
     const requestedBlockId = String(body?.notionBlockId ?? '').trim();
     if (!fileUploadId && !requestedBlockId) {
@@ -77,5 +102,36 @@ export function registerMediaRoutes(app: Hono<{ Bindings: WorkerEnv }>): void {
   
     return c.json({ url });
   });
+}
+
+/** Reads a request body without buffering more than the configured upload limit. */
+async function readLimitedBody(request: Request, maxBytes: number): Promise<string | null> {
+  if (!request.body) return '';
+
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      totalBytes += value.byteLength;
+      if (totalBytes > maxBytes) {
+        await reader.cancel();
+        return null;
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const body = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(body);
 }
 

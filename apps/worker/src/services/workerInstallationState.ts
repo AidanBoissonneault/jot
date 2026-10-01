@@ -1,6 +1,7 @@
 /** @file Resolves authenticated installations and serializes per-installation state updates. */
 import type { Context } from 'hono';
 import { getCookie } from 'hono/cookie';
+import { HTTPException } from 'hono/http-exception';
 import type { AuthService, AuthSessionResult } from '../auth.js';
 import type { ConnectedWorkerStore, Identifier, WorkerEnv, WorkerStore } from '../types.js';
 
@@ -47,7 +48,14 @@ export function createWorkerInstallationState({
   /** Resolves active Notion credentials and normalized state for an API request. */
   async function requireConnectedStore(context: ApiContext): Promise<ConnectedWorkerStore> {
     const session = await getInkwellSession(context);
-    if (!session) throw new Error('Log in to Inkwell before syncing Notion.');
+    if (!session) {
+      throw new HTTPException(401, {
+        res: context.json({
+          error: 'Unauthorized',
+          message: 'Log in to Inkwell first.',
+        }, 401),
+      });
+    }
 
     const [store, installation] = await Promise.all([
       readStore(),
@@ -55,7 +63,12 @@ export function createWorkerInstallationState({
     ]);
 
     if (!installation?.tokens?.access_token || !installation.id) {
-      throw new Error('Notion is not connected.');
+      throw new HTTPException(409, {
+        res: context.json({
+          error: 'NotionNotConnected',
+          message: 'Notion is not connected.',
+        }, 409),
+      });
     }
 
     const syncState = await readInkwellSyncState(installation.id);
