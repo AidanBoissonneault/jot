@@ -112,6 +112,60 @@ describe('Inkwell connection data lifecycle', () => {
     expect(stored.syncConfig).not.toHaveProperty('refresh_token');
   });
 
+  it('scrubs nested legacy credential fields from both local stores before returning config', async () => {
+    seedLocalWorkspace({
+      ...connectedConfig,
+      legacyAuth: {
+        accessToken: 'legacy-indexeddb-access-token',
+        nested: { authorization: 'legacy-nested-authorization' },
+      },
+    } as SyncConfig);
+
+    const syncConfig = await notionClient.getSyncConfig() as SyncConfig & Record<string, unknown>;
+    const indexedDbConfig = readBrowserStorage().syncConfig as Record<string, unknown>;
+    const extensionConfig = readExtensionStorage().syncConfig as Record<string, unknown>;
+
+    expect(syncConfig).not.toHaveProperty('legacyAuth.accessToken');
+    expect(syncConfig).not.toHaveProperty('legacyAuth.nested.authorization');
+    expect(indexedDbConfig).not.toHaveProperty('legacyAuth.accessToken');
+    expect(indexedDbConfig).not.toHaveProperty('legacyAuth.nested.authorization');
+    expect(extensionConfig).not.toHaveProperty('legacyAuth.accessToken');
+    expect(extensionConfig).not.toHaveProperty('legacyAuth.nested.authorization');
+    expect(readBrowserStorage().projects).toMatchObject([project]);
+    expect(readBrowserStorage().pages).toEqual([page]);
+  });
+
+  it('scrubs legacy extension token copies on logout when the migration marker already exists', async () => {
+    seedLocalWorkspace();
+    await idbSet('__legacy_sync_credentials_scrubbed__', true);
+    await browser.storage.local.set({
+      syncConfig: {
+        ...connectedConfig,
+        legacyCredentials: {
+          notionAccessToken: 'legacy-extension-access-token',
+          nested: { authorization: 'legacy-nested-authorization' },
+        },
+      },
+    });
+    stubJsonResponse({
+      connected: false,
+      loggedOut: true,
+      notionTokenRevoked: true,
+      serverDataCleanupComplete: true,
+    });
+
+    await notionClient.logoutSyncSession();
+
+    const extensionConfig = readExtensionStorage().syncConfig as Record<string, unknown>;
+    const indexedDbConfig = readBrowserStorage().syncConfig as Record<string, unknown>;
+    expect(extensionConfig).not.toHaveProperty('legacyCredentials.notionAccessToken');
+    expect(extensionConfig).not.toHaveProperty('legacyCredentials.nested.authorization');
+    expect(indexedDbConfig).not.toHaveProperty('accessToken');
+    expect(indexedDbConfig).not.toHaveProperty('legacyCredentials');
+    expect(readBrowserStorage().projects).toMatchObject([project]);
+    expect(readBrowserStorage().pages).toEqual([page]);
+  });
+
   it('removes all local Inkwell data after the server confirms connection deletion', async () => {
     seedLocalWorkspace();
     stubJsonResponse({ deleted: true, notionTokenRevoked: true });

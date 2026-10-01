@@ -329,21 +329,24 @@ async function migrateStorageToIdb(): Promise<void> {
     await idbSet('__idb_migrated__', true);
   }
 
-  // Older releases mirrored syncConfig in extension storage. Remove any
-  // credential fields there too, including after migration has already run.
+  // Older releases mirrored syncConfig in extension storage. Scrub this copy
+  // once during migration; logout rechecks it in case an older build restored it.
   const credentialsAlreadyScrubbed = await idbGet<boolean>(LEGACY_SYNC_CREDENTIALS_SCRUBBED_KEY);
   if (credentialsAlreadyScrubbed) return;
+  await scrubLegacyExtensionSyncCredentials();
+  await idbSet(LEGACY_SYNC_CREDENTIALS_SCRUBBED_KEY, true);
+}
+
+async function scrubLegacyExtensionSyncCredentials(): Promise<void> {
   const legacyStorage = await browser.storage.local.get('syncConfig') as { syncConfig?: unknown };
   const legacyConfig = legacyStorage.syncConfig;
   if (legacyConfig && typeof legacyConfig === 'object' && !Array.isArray(legacyConfig)) {
-    const record = legacyConfig as Record<string, unknown>;
-    if (Object.keys(record).some((key) => /(?:token|secret|credential|authorization)/i.test(key))) {
+    if (hasStoredSyncCredentials(legacyConfig)) {
       await browser.storage.local.set({
-        syncConfig: stripStoredSyncCredentials(record as SyncConfig),
+        syncConfig: stripStoredSyncCredentials(legacyConfig as SyncConfig),
       });
     }
   }
-  await idbSet(LEGACY_SYNC_CREDENTIALS_SCRUBBED_KEY, true);
 }
 
 /** Recovers the write fence after a crash between clearing local data and resuming IndexedDB. */
@@ -427,16 +430,22 @@ async function readStorage(): Promise<Required<InkwellStorage>> {
     JSON.stringify(stored.activePageIdsByProject ?? {});
   const hasCompatiblePageStatuses =
     !stored.pages || stored.pages.every((page) => page.status);
-  const syncConfig = {
+  const storedSyncConfig = {
     ...DEFAULT_SYNC_CONFIG,
     ...stored.syncConfig,
   };
+  const hasStoredSyncCredentials = containsSyncCredentials(stored.syncConfig);
+  const syncConfig = stripStoredSyncCredentials(storedSyncConfig);
   const hasExplicitlyLoggedOut = stored.hasExplicitlyLoggedOut ?? Boolean(
     stored.syncConfig && !stored.syncConfig.authenticated && !stored.syncConfig.connected,
   );
   const notionHydrationSource = stored.notionHydrationSource ?? (
     hasRemoteBackedData(projects, pages) ? hydrationSource(syncConfig) : ''
   );
+
+  if (hasStoredSyncCredentials) {
+    await idbSet('syncConfig', syncConfig);
+  }
 
   if (
     !stored.activePageIdsByProject ||
@@ -1811,11 +1820,49 @@ async function updateStoredSyncConfig(
 
 /** Removes legacy or injected credential fields when local auth state is rewritten. */
 export function stripStoredSyncCredentials(syncConfig: SyncConfig): SyncConfig {
-  const sanitized = { ...syncConfig } as SyncConfig & Record<string, unknown>;
-  for (const key of Object.keys(sanitized)) {
-    if (/(?:token|secret|credential|authorization)/i.test(key)) {
-      delete sanitized[key];
-    }
+  return stripCredentialFields(syncConfig, new WeakMap<object, unknown>()) as SyncConfig;
+}
+
+function containsSyncCredentials(value: unknown, seen = new WeakSet<object>()): boolean {
+  if (!value || typeof value !== 'object' || seen.has(value)) return false;
+  seen.add(value);
+  if (Array.isArray(value)) return value.some((item) => containsSyncCredentials(item, seen));
+
+  return Object.keys(value).some((key) =>
+    /(?:token|secret|credential|authorization)/i.test(key) ||
+    containsSyncCredentials((value as Record<string, unknown>)[key], seen),
+  );
+}
+
+function hasStoredSyncCredentials(value: unknown): boolean {
+  return containsSyncCredentials(value);
+}
+
+function stripCredentialFields(value: unknown, seen: WeakMap<object, unknown>): unknown {
+  if (!value || typeof value !== 'object') return value;
+  const prior = seen.get(value);
+  if (prior) return prior;
+
+  if (Array.isArray(value)) {
+    const sanitized: unknown[] = [];
+    seen.set(value, sanitized);
+    for (const item of value) sanitized.push(stripCredentialFields(item, seen));
+    return sanitized;
+  }
+
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) return value;
+
+  const sanitized = Object.create(prototype) as Record<string, unknown>;
+  seen.set(value, sanitized);
+  for (const key of Object.keys(value)) {
+    if (/(?:token|secret|credential|authorization)/i.test(key)) continue;
+    Object.defineProperty(sanitized, key, {
+      configurable: true,
+      enumerable: true,
+      value: stripCredentialFields((value as Record<string, unknown>)[key], seen),
+      writable: true,
+    });
   }
   return sanitized;
 }
@@ -2647,6 +2694,7 @@ export const notionClient = {
       serverDataCleanupComplete: false,
     };
     try {
+      await scrubLegacyExtensionSyncCredentials();
       const { syncConfig } = await readStorage();
       const nextSyncConfig = await updateStoredSyncConfig({
         authenticated: false,
