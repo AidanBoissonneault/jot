@@ -380,6 +380,16 @@ describe('connection deletion retry receipts', () => {
           return new Response(null, { status: 204 });
         }
       }
+      if (url.pathname.endsWith('/rpc/prepare_inkwell_connection_deletion')) {
+        const prepareBody = JSON.parse(body || '{}') as Record<string, unknown>;
+        receipt ??= {
+          request_id_hash: prepareBody.p_request_id_hash,
+          user_id: prepareBody.p_user_id,
+          status: 'pending',
+          notion_token_revoked: false,
+        };
+        return new Response(JSON.stringify(receipt), { headers: { 'Content-Type': 'application/json' } });
+      }
       if (url.pathname.endsWith('/account') && method === 'GET') {
         return new Response(JSON.stringify([{ accessToken: accountToken, refreshToken: 'refresh-token-test' }]), {
           headers: { 'Content-Type': 'application/json' },
@@ -410,6 +420,8 @@ describe('connection deletion retry receipts', () => {
     expect(receipt).toMatchObject({ request_id_hash: requestIdHash, user_id: null, status: 'completed' });
     expect(calls.some((call) => call.pathname.endsWith('/rpc/complete_inkwell_connection_deletion'))).toBe(true);
     expect(calls.some((call) => call.pathname.endsWith('/user') && call.method === 'DELETE')).toBe(false);
+    expect(calls.findIndex((call) => call.pathname.endsWith('/rpc/prepare_inkwell_connection_deletion')))
+      .toBeLessThan(calls.findIndex((call) => call.pathname.endsWith('/account') && call.method === 'GET'));
   });
 
   it('completes a confirmed deletion retry without needing the deleted session', async () => {
@@ -478,6 +490,9 @@ describe('connection deletion retry receipts', () => {
         const patchBody = JSON.parse(typeof init?.body === 'string' ? init.body : '{}') as Record<string, unknown>;
         receipt = { ...receipt, ...patchBody };
         return new Response(null, { status: 204 });
+      }
+      if (url.pathname.endsWith('/rpc/prepare_inkwell_connection_deletion')) {
+        return new Response(JSON.stringify(receipt), { headers: { 'Content-Type': 'application/json' } });
       }
       if (url.pathname.endsWith('/account') && method === 'GET') {
         return new Response(JSON.stringify([{ accessToken: accountToken, refreshToken: 'refresh-token-test' }]), {

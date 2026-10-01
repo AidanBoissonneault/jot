@@ -77,3 +77,7 @@ their table references, and removes direct access to the webhook setup table fro
 Apply `apps/worker/migrations/008_atomic_notion_oauth_session.sql` before deploying the latest
 OAuth callback. It commits the account credentials, installation, sync state, and hashed browser
 session in one service-role-only transaction, preserving the current connection when a login fails.
+
+Apply `apps/worker/migrations/009_serialize_connection_deletion.sql` after migration 008 and before
+deploying the latest Worker. It serializes OAuth commits with Delete connection, so deletion revokes
+the current Notion token and any OAuth callback that races with the deletion is rejected and revoked.

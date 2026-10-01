@@ -31,7 +31,18 @@ function fakeSupabase(failTable?: string) {
     },
     async rpc(functionName: string, args: unknown) {
       calls.push({ table: 'rpc', method: functionName, args: [args] });
-      return { data: functionName === 'commit_notion_oauth_session' ? 42 : true, error: rpcError };
+      const rpcArgs = args as Record<string, unknown>;
+      const data = functionName === 'commit_notion_oauth_session'
+        ? 42
+        : functionName === 'prepare_inkwell_connection_deletion'
+          ? {
+              request_id_hash: rpcArgs.p_request_id_hash,
+              user_id: rpcArgs.p_user_id,
+              status: 'pending',
+              notion_token_revoked: false,
+            }
+          : true;
+      return { data, error: rpcError };
     },
   };
   return { calls, client: client as unknown as WorkerSupabaseClient };
@@ -177,5 +188,50 @@ describe('server authentication data lifecycle', () => {
     });
     await expect(createAuth(fakeSupabase('rpc').client).completeConnectionDeletionReceipt(requestIdHash))
       .rejects.toThrow('Unable to complete the Inkwell connection deletion.');
+  });
+
+  it('prepares deletion under the OAuth serialization transaction', async () => {
+    const { calls, client } = fakeSupabase();
+    const requestIdHash = 'b'.repeat(64);
+
+    await expect(createAuth(client).prepareConnectionDeletionReceipt(requestIdHash, 'notion:user-42'))
+      .resolves.toEqual({
+        requestIdHash,
+        userId: 'notion:user-42',
+        status: 'pending',
+        notionTokenRevoked: false,
+      });
+
+    expect(calls).toContainEqual({
+      table: 'rpc',
+      method: 'prepare_inkwell_connection_deletion',
+      args: [{ p_request_id_hash: requestIdHash, p_user_id: 'notion:user-42' }],
+    });
+    await expect(createAuth(fakeSupabase('rpc').client)
+      .prepareConnectionDeletionReceipt(requestIdHash, 'notion:user-42'))
+      .rejects.toThrow('Unable to prepare the connection deletion.');
+  });
+
+  it('serializes OAuth persistence against pending connection deletion', () => {
+    const migration = readFileSync(
+      new URL('../apps/worker/migrations/009_serialize_connection_deletion.sql', import.meta.url),
+      'utf8',
+    );
+    const oauthFunction = migration.slice(
+      migration.indexOf('CREATE OR REPLACE FUNCTION public.commit_notion_oauth_session('),
+    );
+    const lock = oauthFunction.indexOf('pg_advisory_xact_lock');
+    const pendingCheck = oauthFunction.indexOf("receipt.status = 'pending'");
+    const persistUser = oauthFunction.indexOf('INSERT INTO public."user"');
+
+    expect(migration).toContain('CREATE OR REPLACE FUNCTION public.prepare_inkwell_connection_deletion(');
+    expect(migration).toContain('UPDATE public.notion_installations');
+    expect(migration).toContain('CREATE OR REPLACE FUNCTION public.commit_notion_oauth_session(');
+    expect(lock).toBeGreaterThanOrEqual(0);
+    expect(pendingCheck).toBeGreaterThan(lock);
+    expect(persistUser).toBeGreaterThan(pendingCheck);
+    expect(migration).toContain('CREATE OR REPLACE FUNCTION public.complete_inkwell_connection_deletion(');
+    expect(migration).toContain('REVOKE ALL ON FUNCTION public.prepare_inkwell_connection_deletion(TEXT, TEXT)');
+    expect(migration).toContain('TO service_role');
   });
 });

@@ -94,7 +94,7 @@ export interface AuthService {
   getNotionAccountTokens: (userId: string) => Promise<NotionAccountTokens | null>;
   clearNotionAccountTokens: (userId: string) => Promise<void>;
   getConnectionDeletionReceipt: (requestIdHash: string) => Promise<ConnectionDeletionReceipt | null>;
-  createConnectionDeletionReceipt: (requestIdHash: string, userId: string) => Promise<ConnectionDeletionReceipt>;
+  prepareConnectionDeletionReceipt: (requestIdHash: string, userId: string) => Promise<ConnectionDeletionReceipt>;
   updateConnectionDeletionRevocation: (requestIdHash: string, notionTokenRevoked: boolean) => Promise<void>;
   completeConnectionDeletionReceipt: (requestIdHash: string) => Promise<void>;
   hasInkwellUser: (userId: string) => Promise<boolean>;
@@ -127,8 +127,8 @@ export function createAuth(supabase: WorkerSupabaseClient): AuthService {
     clearNotionAccountTokens: (userId: string) => clearNotionAccountTokens(supabase, userId),
     /** Reads the retry receipt for a connection deletion request. */
     getConnectionDeletionReceipt: (requestIdHash: string) => getConnectionDeletionReceipt(supabase, requestIdHash),
-    /** Creates a pending receipt without overwriting an existing completed receipt. */
-    createConnectionDeletionReceipt: (requestIdHash: string, userId: string) => createConnectionDeletionReceipt(supabase, requestIdHash, userId),
+    /** Serializes OAuth persistence against deletion and pauses queue work. */
+    prepareConnectionDeletionReceipt: (requestIdHash: string, userId: string) => prepareConnectionDeletionReceipt(supabase, requestIdHash, userId),
     /** Records whether Notion revoked the token during this deletion attempt. */
     updateConnectionDeletionRevocation: (requestIdHash: string, notionTokenRevoked: boolean) => updateConnectionDeletionRevocation(supabase, requestIdHash, notionTokenRevoked),
     /** Atomically removes the user and completes the retry receipt. */
@@ -328,24 +328,34 @@ async function getConnectionDeletionReceipt(
   };
 }
 
-/** Creates a pending retry receipt while leaving any existing receipt unchanged. */
-async function createConnectionDeletionReceipt(
+/** Prepares deletion under the same per-user lock used by OAuth commits. */
+async function prepareConnectionDeletionReceipt(
   supabase: WorkerSupabaseClient,
   requestIdHash: string,
   userId: string,
 ): Promise<ConnectionDeletionReceipt> {
-  const { error } = await supabase
-    .from('inkwell_connection_deletion_receipts')
-    .upsert({
-      request_id_hash: requestIdHash,
-      user_id: userId,
-      status: 'pending',
-      notion_token_revoked: false,
-    }, { onConflict: 'request_id_hash', ignoreDuplicates: true });
-  if (error) throw new Error('Unable to prepare the connection deletion.');
-  const receipt = await getConnectionDeletionReceipt(supabase, requestIdHash);
-  if (!receipt) throw new Error('Unable to prepare the connection deletion.');
-  return receipt;
+  const { data, error } = await supabase.rpc('prepare_inkwell_connection_deletion', {
+    p_request_id_hash: requestIdHash,
+    p_user_id: userId,
+  });
+  if (error || !data || typeof data !== 'object' || Array.isArray(data)) {
+    throw new Error('Unable to prepare the connection deletion.');
+  }
+  const receipt = data as Record<string, unknown>;
+  if (
+    receipt.request_id_hash !== requestIdHash ||
+    !['pending', 'completed'].includes(String(receipt.status)) ||
+    typeof receipt.notion_token_revoked !== 'boolean' ||
+    (receipt.user_id !== null && typeof receipt.user_id !== 'string')
+  ) {
+    throw new Error('Unable to prepare the connection deletion.');
+  }
+  return {
+    requestIdHash,
+    userId: receipt.user_id as string | null,
+    status: receipt.status as 'pending' | 'completed',
+    notionTokenRevoked: receipt.notion_token_revoked,
+  };
 }
 
 /** Stores the current Notion revocation outcome before deleting the account rows. */

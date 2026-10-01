@@ -290,19 +290,19 @@ export function registerAuthRoutes(app: Hono<{ Bindings: WorkerEnv }>): void {
       return c.json({ deleted: false, error: 'Deletion request does not match this account.' }, 403);
     }
 
-    if (!receipt) {
-      try {
-        receipt = await auth.createConnectionDeletionReceipt(requestIdHash, session.user.id);
-      } catch {
-        return c.json({ deleted: false, error: 'Unable to prepare the deletion request.' }, 503);
-      }
-      if (receipt.userId && receipt.userId !== session.user.id) {
-        return c.json({ deleted: false, error: 'Deletion request does not match this account.' }, 403);
-      }
-      if (receipt.status === 'completed') {
-        deleteCookie(c, INKWELL_SESSION_COOKIE, { path: '/' });
-        return c.json({ deleted: true, notionTokenRevoked: receipt.notionTokenRevoked });
-      }
+    try {
+      // This transaction serializes with OAuth commits and stops queue work
+      // before we read the credential that must be revoked at Notion.
+      receipt = await auth.prepareConnectionDeletionReceipt(requestIdHash, session.user.id);
+    } catch {
+      return c.json({ deleted: false, error: 'Unable to prepare the deletion request.' }, 503);
+    }
+    if (receipt.userId && receipt.userId !== session.user.id) {
+      return c.json({ deleted: false, error: 'Deletion request does not match this account.' }, 403);
+    }
+    if (receipt.status === 'completed') {
+      deleteCookie(c, INKWELL_SESSION_COOKIE, { path: '/' });
+      return c.json({ deleted: true, notionTokenRevoked: receipt.notionTokenRevoked });
     }
 
     let notionTokens;
@@ -312,13 +312,6 @@ export function registerAuthRoutes(app: Hono<{ Bindings: WorkerEnv }>): void {
       return c.json({ deleted: false, error: 'Unable to verify the Notion connection.' }, 503);
     }
 
-    // Stop queue workers from starting new Notion requests while deletion is
-    // pending. The token is still present for the revocation attempt below.
-    try {
-      await auth.revokeInstallation(session.user.id);
-    } catch {
-      return c.json({ deleted: false, error: 'Unable to pause the Notion connection for deletion.' }, 503);
-    }
     const notionTokenRevoked = receipt.notionTokenRevoked || (
       notionTokens?.accessToken
         ? await revokeNotionToken(c.env, notionTokens.accessToken)
