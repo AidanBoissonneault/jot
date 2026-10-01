@@ -1,6 +1,7 @@
 import { vi } from 'vitest';
 
 type StorageData = Record<string, unknown>;
+const IDB_WRITE_CONTROL_KEY = '__inkwell_write_control__';
 
 // --- IndexedDB mock ---
 
@@ -24,6 +25,10 @@ function makeIdbObjectStore() {
       });
       return req;
     }),
+    clear: vi.fn(() => {
+      for (const key of Object.keys(idbData)) delete idbData[key];
+      return {};
+    }),
   };
 }
 
@@ -33,7 +38,7 @@ function makeIdbTransaction(mode: string) {
     objectStore: vi.fn(() => store),
   };
   if (mode === 'readwrite') {
-    Promise.resolve().then(() => {
+    Promise.resolve().then(() => Promise.resolve()).then(() => {
       if (typeof tx.oncomplete === 'function') (tx.oncomplete as () => void)();
     });
   }
@@ -119,6 +124,9 @@ vi.stubGlobal('browser', {
       set: vi.fn(async (values: StorageData) => {
         Object.assign(storageData, values);
       }),
+      clear: vi.fn(async () => {
+        for (const key of Object.keys(storageData)) delete storageData[key];
+      }),
     },
   },
   tabs: {
@@ -127,6 +135,7 @@ vi.stubGlobal('browser', {
 });
 
 export function resetBrowserStorage(values: StorageData = {}) {
+  const idbWriteControl = idbData[IDB_WRITE_CONTROL_KEY];
   for (const key of Object.keys(storageData)) {
     delete storageData[key];
   }
@@ -136,11 +145,22 @@ export function resetBrowserStorage(values: StorageData = {}) {
   for (const key of Object.keys(idbData)) {
     delete idbData[key];
   }
+  if (idbWriteControl !== undefined) {
+    idbData[IDB_WRITE_CONTROL_KEY] = idbWriteControl;
+  }
   Object.assign(idbData, values);
   idbData['__idb_migrated__'] = true;
 }
 
 export function readBrowserStorage() {
   // notionClient writes to IDB now — read from there
-  return idbData;
+  return Object.fromEntries(Object.entries(idbData).filter(([key]) =>
+    key !== IDB_WRITE_CONTROL_KEY &&
+    key !== '__idb_migrated__' &&
+    key !== '__legacy_sync_credentials_scrubbed__',
+  ));
+}
+
+export function readExtensionStorage() {
+  return { ...storageData };
 }

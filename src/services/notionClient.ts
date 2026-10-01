@@ -113,6 +113,7 @@ const DEFAULT_SYNC_CONFIG: SyncConfig = {
   connected: false,
 };
 const PENDING_CONNECTION_DELETION_KEY = 'inkwellPendingConnectionDeletion';
+const LEGACY_SYNC_CREDENTIALS_SCRUBBED_KEY = '__legacy_sync_credentials_scrubbed__';
 
 type PendingConnectionDeletion = {
   requestId: string;
@@ -320,12 +321,29 @@ function sortProjectsByUpdatedDesc(first: Project, second: Project) {
 
 async function migrateStorageToIdb(): Promise<void> {
   const done = await idbGet<boolean>('__idb_migrated__');
-  if (done) return;
-  const existing = (await browser.storage.local.get(STORAGE_KEYS)) as InkwellStorage;
-  if (Object.keys(existing).length > 0) {
-    await idbSetMany(existing as Record<string, unknown>);
+  if (!done) {
+    const existing = (await browser.storage.local.get(STORAGE_KEYS)) as InkwellStorage;
+    if (Object.keys(existing).length > 0) {
+      await idbSetMany(existing as Record<string, unknown>);
+    }
+    await idbSet('__idb_migrated__', true);
   }
-  await idbSet('__idb_migrated__', true);
+
+  // Older releases mirrored syncConfig in extension storage. Remove any
+  // credential fields there too, including after migration has already run.
+  const credentialsAlreadyScrubbed = await idbGet<boolean>(LEGACY_SYNC_CREDENTIALS_SCRUBBED_KEY);
+  if (credentialsAlreadyScrubbed) return;
+  const legacyStorage = await browser.storage.local.get('syncConfig') as { syncConfig?: unknown };
+  const legacyConfig = legacyStorage.syncConfig;
+  if (legacyConfig && typeof legacyConfig === 'object' && !Array.isArray(legacyConfig)) {
+    const record = legacyConfig as Record<string, unknown>;
+    if (Object.keys(record).some((key) => /(?:token|secret|credential|authorization)/i.test(key))) {
+      await browser.storage.local.set({
+        syncConfig: stripStoredSyncCredentials(record as SyncConfig),
+      });
+    }
+  }
+  await idbSet(LEGACY_SYNC_CREDENTIALS_SCRUBBED_KEY, true);
 }
 
 /** Recovers the write fence after a crash between clearing local data and resuming IndexedDB. */
