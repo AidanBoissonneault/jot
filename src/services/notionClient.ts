@@ -1533,7 +1533,13 @@ async function flushPendingSyncOps(options: { force?: boolean } = {}): Promise<v
     }
 
     if (forcedQueueDeliveryPromise) {
-      return forcedQueueDeliveryPromise;
+      // A later block exit may have queued edits after the active delivery
+      // already took its snapshot. Drain again after that delivery settles so
+      // the newer edits are included in this caller's forced flush.
+      const inFlightDelivery = forcedQueueDeliveryPromise;
+      return inFlightDelivery
+        .catch(() => undefined)
+        .then(() => flushPendingSyncOps(options));
     }
 
     const delivery = (async () => {

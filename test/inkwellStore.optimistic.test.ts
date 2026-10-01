@@ -664,6 +664,48 @@ describe('page title and content saves', () => {
     expect(await listPendingSyncOps()).toEqual([]);
   });
 
+  test('overlapping force flushes send edits queued during the first upload', async () => {
+    vi.useFakeTimers();
+    const firstPush = deferred<Response>();
+    const secondPush = deferred<Response>();
+    const firstRequestStarted = deferred<void>();
+    const secondRequestStarted = deferred<void>();
+    const fetchMock = vi.fn()
+      .mockImplementationOnce(async () => {
+        firstRequestStarted.resolve(undefined);
+        return firstPush.promise;
+      })
+      .mockImplementationOnce(async () => {
+        secondRequestStarted.resolve(undefined);
+        return secondPush.promise;
+      });
+    vi.stubGlobal('fetch', fetchMock);
+    const store = useInkwellStore();
+    const startingPage = { ...basePage, content: docWithBlock('focus-block', 'first') };
+
+    await setupStoreWithPages(store, [startingPage]);
+    store.currentPage = startingPage;
+    await store.saveCurrentPageContent(docWithBlock('focus-block', 'second'), {
+      preserveLocalContent: true,
+    });
+
+    const firstFlush = notionClient.flushPendingSyncOps({ force: true });
+    await firstRequestStarted.promise;
+    await store.saveCurrentPageContent(docWithBlock('focus-block', 'third'), {
+      preserveLocalContent: true,
+    });
+    const overlappingFlush = notionClient.flushPendingSyncOps({ force: true });
+
+    firstPush.resolve(jsonResponse({ queued: true, versions: { 'page-inkwell': 1 } }));
+    await secondRequestStarted.promise;
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    secondPush.resolve(jsonResponse({ queued: true, versions: { 'page-inkwell': 2 } }));
+    await Promise.all([firstFlush, overlappingFlush]);
+
+    expect(await listPendingSyncOps()).toEqual([]);
+  });
+
   test('failed force flushing keeps pending edits locally', async () => {
     vi.useFakeTimers();
     vi.stubGlobal('fetch', vi.fn(async () => {
