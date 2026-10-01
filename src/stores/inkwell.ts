@@ -70,6 +70,7 @@ export const useInkwellStore = defineStore('inkwell', () => {
   async function initialize() {
     isLoading.value = true;
     errorMessage.value = '';
+    let reloadDiscoveredPagesAfterQueueDrain = false;
 
     try {
       syncConfig.value = await notionClient.getSyncConfig();
@@ -105,20 +106,23 @@ export const useInkwellStore = defineStore('inkwell', () => {
         aheadPageIds.value = validateResult.aheadPageIds;
 
         let refreshedForNewPages = false;
-        if (
-          validateResult.newPageIds.length &&
-          await notionClient.pendingSyncEventCount() === 0
-        ) {
-          try {
-            const reloaded = await notionClient.reloadFromNotion({ force: true });
-            applyReloadedSnapshot(reloaded);
-            stalePageIds.value = [];
-            aheadPageIds.value = [];
-            refreshedForNewPages = true;
-          } catch (error) {
-            errorMessage.value = error instanceof Error
-              ? `Couldn't load new pages from Notion. ${error.message}`
-              : "Couldn't load new pages from Notion.";
+        if (validateResult.newPageIds.length) {
+          pendingSyncCount.value = await notionClient.pendingSyncEventCount();
+          if (pendingSyncCount.value === 0) {
+            try {
+              const reloaded = await notionClient.reloadFromNotion({ force: true });
+              applyReloadedSnapshot(reloaded);
+              stalePageIds.value = [];
+              aheadPageIds.value = [];
+              refreshedForNewPages = true;
+            } catch (error) {
+              errorMessage.value = error instanceof Error
+                ? `Couldn't load new pages from Notion. ${error.message}`
+                : "Couldn't load new pages from Notion.";
+            }
+          } else {
+            // Keep the remote page discovery alive while queued local edits finish syncing.
+            reloadDiscoveredPagesAfterQueueDrain = true;
           }
         }
 
@@ -137,7 +141,27 @@ export const useInkwellStore = defineStore('inkwell', () => {
       await loadCurrentPage();
       openSyncEvents();
       if (isOnline.value && syncConfig.value.connected && pendingSyncCount.value) {
-        void syncPendingChanges().catch(() => undefined);
+        if (reloadDiscoveredPagesAfterQueueDrain) {
+          void syncPendingChanges()
+            .then(async () => {
+              if (pendingSyncCount.value > 0) return;
+              try {
+                const reloaded = await notionClient.reloadFromNotion({ force: true });
+                applyReloadedSnapshot(reloaded);
+                stalePageIds.value = [];
+                aheadPageIds.value = [];
+                await loadCurrentPage();
+              } catch (error) {
+                errorMessage.value = error instanceof Error
+                  ? `Couldn't load new pages from Notion. ${error.message}`
+                  : "Couldn't load new pages from Notion.";
+                saveStatus.value = 'error';
+              }
+            })
+            .catch(() => undefined);
+        } else {
+          void syncPendingChanges().catch(() => undefined);
+        }
       }
     } catch (error) {
       errorMessage.value =

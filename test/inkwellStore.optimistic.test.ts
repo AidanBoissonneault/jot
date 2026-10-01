@@ -447,6 +447,85 @@ describe('project metadata', () => {
     }
   });
 
+  test('loads newly discovered server pages after queued local sync drains', async () => {
+    const remoteProject: Project = {
+      ...baseProject,
+      id: 'project-from-server',
+      name: 'Server project',
+    };
+    const remotePage: ProjectPage = {
+      ...basePage,
+      id: 'page-from-server',
+      projectId: remoteProject.id,
+      title: 'Page from server',
+    };
+    const workspaceConfig = { ...connectedConfig, workspaceId: 'workspace-main' };
+    const reloadOrder: string[] = [];
+    const reloadFromNotion = vi.spyOn(notionClient, 'reloadFromNotion')
+      .mockImplementation(async () => {
+        reloadOrder.push('reload');
+        return {
+          currentProjectId: remoteProject.id,
+          pages: [remotePage],
+          projects: [remoteProject],
+          syncConfig: workspaceConfig,
+        };
+      });
+    vi.spyOn(notionClient, 'refreshSyncSession').mockResolvedValue(workspaceConfig);
+    vi.spyOn(notionClient, 'prepareLocalWorkspaceForFirstSync').mockResolvedValue(false);
+    vi.spyOn(notionClient, 'needsInitialNotionHydration').mockResolvedValue(false);
+    vi.spyOn(notionClient, 'validateNotionCache').mockResolvedValue({
+      stalePageIds: [],
+      aheadPageIds: [],
+      failedPageIds: [],
+      newPageIds: [remotePage.id],
+    });
+    vi.spyOn(notionClient, 'pendingSyncEventCount')
+      .mockResolvedValueOnce(1)
+      .mockResolvedValueOnce(1)
+      .mockResolvedValueOnce(0);
+    vi.spyOn(notionClient, 'flushPendingSyncOps').mockImplementation(async () => {
+      reloadOrder.push('flush');
+    });
+    vi.spyOn(notionClient, 'listProjectPages').mockImplementation(async (projectId) =>
+      projectId === remoteProject.id ? [remotePage] : [basePage],
+    );
+    vi.spyOn(notionClient, 'getProjectPage').mockImplementation(async (projectId) =>
+      projectId === remoteProject.id ? remotePage : basePage,
+    );
+    vi.spyOn(notionClient, 'prefetchProjectPages').mockResolvedValue(undefined);
+    const originalEventSource = globalThis.EventSource;
+    globalThis.EventSource = class {
+      onerror = null;
+      onmessage = null;
+      onopen = null;
+      close() {}
+    } as unknown as typeof EventSource;
+    resetBrowserStorage({
+      activePageIdsByProject: { 'project-inkwell': 'page-inkwell' },
+      currentProjectId: 'project-inkwell',
+      hasMigratedCapturesToPages: true,
+      notionHydrationSource: 'http://localhost:8787::workspace-main',
+      pages: [basePage],
+      projects: [baseProject],
+      syncConfig: workspaceConfig,
+    });
+
+    try {
+      const store = useInkwellStore();
+      await store.initialize();
+      await waitFor(() => expect(reloadFromNotion).toHaveBeenCalledTimes(1));
+
+      expect(reloadOrder).toEqual(['flush', 'reload']);
+      expect(store.projects.map((project) => project.id)).toEqual([remoteProject.id]);
+      expect(store.pages.map((page) => page.id)).toEqual([remotePage.id]);
+      expect(store.currentPage?.id).toBe(remotePage.id);
+    } finally {
+      globalThis.EventSource = originalEventSource;
+      vi.restoreAllMocks();
+    }
+  });
+
   test('listProjects sorts by updated date descending', async () => {
     const olderProject = {
       ...baseProject,
