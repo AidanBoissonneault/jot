@@ -7,7 +7,15 @@ import type {
   SaveStatus,
   SyncConfig,
 } from '@/src/types/capture';
-import { idbGet, idbGetMany, idbSet, idbSetMany } from '@/src/services/idbStore';
+import {
+  idbClear,
+  idbGet,
+  idbGetMany,
+  idbSet,
+  idbSetMany,
+  pauseIdbWrites,
+  resumeIdbWrites,
+} from '@/src/services/idbStore';
 import { createInkwellBlockId, normalizeInkwellBlockIds } from '@/src/extensions/inkwellBlockIds';
 import { INKWELL_SOURCE_ATTR, storeInkwellSource } from '@/src/extensions/inkwellLink';
 import {
@@ -21,6 +29,7 @@ import type {
   SourceOpenPayload,
 } from '@/src/types/messages';
 import { normalizeCodeLanguage } from '@/src/lib/codeLanguages';
+import { cleanSyncServerUrl } from '@/src/lib/syncServerUrl';
 import { pruneOrphanedProjectStateSources } from '@/src/lib/projectStateSources';
 import { stripSyncConflictBlocks } from '@/src/lib/syncConflictReview';
 import type {
@@ -64,6 +73,7 @@ type InkwellStorage = {
   activePageIdsByProject?: Record<string, string>;
   captures?: Capture[];
   currentProjectId?: string;
+  hasExplicitlyLoggedOut?: boolean;
   hasMigratedCapturesToPages?: boolean;
   notionHydrationSource?: string;
   pages?: ProjectPage[];
@@ -87,6 +97,7 @@ const STORAGE_KEYS: Array<keyof InkwellStorage> = [
   'activePageIdsByProject',
   'captures',
   'currentProjectId',
+  'hasExplicitlyLoggedOut',
   'hasMigratedCapturesToPages',
   'notionHydrationSource',
   'pages',
@@ -95,9 +106,20 @@ const STORAGE_KEYS: Array<keyof InkwellStorage> = [
 ];
 
 const DEFAULT_SYNC_CONFIG: SyncConfig = {
-  serverUrl: import.meta.env.VITE_API_URL ?? 'http://localhost:8787',
+  serverUrl: import.meta.env.DEV
+    ? 'http://localhost:8787'
+    : import.meta.env.VITE_API_URL ?? '',
   authenticated: false,
   connected: false,
+};
+const PENDING_CONNECTION_DELETION_KEY = 'inkwellPendingConnectionDeletion';
+
+type PendingConnectionDeletion = {
+  requestId: string;
+  serverUrl: string;
+  userId?: string;
+  userEmail?: string;
+  workspaceId?: string;
 };
 
 const defaultProjects: Project[] = [
@@ -124,6 +146,11 @@ let queueDeliveryTimer: ReturnType<typeof setTimeout> | undefined;
 let forcedQueueDeliveryPromise: Promise<void> | undefined;
 let queueDeliveryRetryAttempt = 0;
 let queueDeliveryRetryDelayMs = 0;
+let isSessionLogoutPending = false;
+let isConnectionDeletionPending = false;
+let idbWriteRecoveryPromise: Promise<void> | undefined;
+let currentProjectSelectionRevision = 0;
+let requestedCurrentProjectId: string | undefined;
 
 function emptyDocument(): DocumentContent {
   return normalizeInkwellBlockIds({
@@ -301,7 +328,31 @@ async function migrateStorageToIdb(): Promise<void> {
   await idbSet('__idb_migrated__', true);
 }
 
+/** Recovers the write fence after a crash between clearing local data and resuming IndexedDB. */
+async function recoverIdbWriteFence(): Promise<void> {
+  if (!idbWriteRecoveryPromise) {
+    idbWriteRecoveryPromise = (async () => {
+      const deletionState = await browser.storage.local.get(PENDING_CONNECTION_DELETION_KEY) as Record<
+        string,
+        PendingConnectionDeletion | undefined
+      >;
+      if (deletionState[PENDING_CONNECTION_DELETION_KEY]) {
+        isConnectionDeletionPending = true;
+        await pauseIdbWrites();
+        return;
+      }
+
+      await resumeIdbWrites({ adoptCurrentEpoch: true });
+    })().catch((error) => {
+      idbWriteRecoveryPromise = undefined;
+      throw error;
+    });
+  }
+  await idbWriteRecoveryPromise;
+}
+
 async function readStorage(): Promise<Required<InkwellStorage>> {
+  await recoverIdbWriteFence();
   await migrateStorageToIdb();
   const stored = (await idbGetMany(STORAGE_KEYS)) as InkwellStorage;
 
@@ -362,6 +413,9 @@ async function readStorage(): Promise<Required<InkwellStorage>> {
     ...DEFAULT_SYNC_CONFIG,
     ...stored.syncConfig,
   };
+  const hasExplicitlyLoggedOut = stored.hasExplicitlyLoggedOut ?? Boolean(
+    stored.syncConfig && !stored.syncConfig.authenticated && !stored.syncConfig.connected,
+  );
   const notionHydrationSource = stored.notionHydrationSource ?? (
     hasRemoteBackedData(projects, pages) ? hydrationSource(syncConfig) : ''
   );
@@ -374,6 +428,7 @@ async function readStorage(): Promise<Required<InkwellStorage>> {
     !stored.currentProjectId ||
     stored.notionHydrationSource === undefined ||
     !stored.syncConfig ||
+    (stored.hasExplicitlyLoggedOut === undefined && hasExplicitlyLoggedOut) ||
     shouldCreatePages ||
     stored.hasMigratedCapturesToPages !== true ||
     sourceMigrationChanged
@@ -384,6 +439,7 @@ async function readStorage(): Promise<Required<InkwellStorage>> {
       currentProjectId,
       pages,
       syncConfig,
+      hasExplicitlyLoggedOut,
       notionHydrationSource,
       hasMigratedCapturesToPages: true,
     });
@@ -392,6 +448,7 @@ async function readStorage(): Promise<Required<InkwellStorage>> {
   return {
     captures,
     currentProjectId,
+    hasExplicitlyLoggedOut,
     activePageIdsByProject,
     hasMigratedCapturesToPages: true,
     pages,
@@ -413,9 +470,16 @@ function hasRemoteBackedData(projects: Project[], pages: ProjectPage[]) {
 }
 
 function hydrationSource(syncConfig: SyncConfig) {
-  const serverUrl = cleanServerUrl(syncConfig.serverUrl);
+  const serverUrl = cleanSyncServerUrl(syncConfig.serverUrl);
   const workspace = syncConfig.workspaceId?.trim() || 'connected-workspace';
   return `${serverUrl}::${workspace}`;
+}
+
+function syncQueueBelongsToActiveAccount(syncConfig: SyncConfig): boolean {
+  return syncConfig.syncQueueOwnerUserId !== null && (
+    syncConfig.syncQueueOwnerUserId === undefined ||
+    syncConfig.syncQueueOwnerUserId === syncConfig.userId
+  );
 }
 
 function isLegacyStubProjectSet(projects: Project[]) {
@@ -703,10 +767,6 @@ function uncachePageNotionMetadata(page: ProjectPage): ProjectPage {
   };
 }
 
-function cleanServerUrl(url: string) {
-  return url.trim().replace(/\/+$/, '') || DEFAULT_SYNC_CONFIG.serverUrl;
-}
-
 function isBrowserOffline() {
   return typeof navigator !== 'undefined' && navigator.onLine === false;
 }
@@ -743,11 +803,24 @@ async function requestServer<T>(
   config?: SyncConfig,
 ): Promise<T> {
   const syncConfig = config ?? (await readStorage()).syncConfig;
+  const requiresAccountBinding = path.startsWith('/sync/') || path.startsWith('/media/');
+  if (requiresAccountBinding) {
+    if (!syncConfig.userId) {
+      throw new Error('Refresh the Notion session before syncing local data.');
+    }
+    if (
+      syncConfig.syncQueueOwnerUserId === null ||
+      (syncConfig.syncQueueOwnerUserId && syncConfig.syncQueueOwnerUserId !== syncConfig.userId)
+    ) {
+      throw new Error('Local data is locked to its original Notion account. Reconnect that account to sync it.');
+    }
+  }
   const headers = {
     ...(init?.body ? { 'Content-Type': 'application/json' } : {}),
+    ...(requiresAccountBinding ? { 'X-Inkwell-Account': syncConfig.userId } : {}),
     ...init?.headers,
   };
-  const response = await fetch(`${cleanServerUrl(syncConfig.serverUrl)}${path}`, {
+  const response = await fetch(`${cleanSyncServerUrl(syncConfig.serverUrl)}${path}`, {
     ...init,
     headers,
     credentials: 'include',
@@ -1006,7 +1079,7 @@ async function enqueuePageSync(
 }
 
 function triggerQueueDelivery(): void {
-  if (queueDeliveryPromise) return;
+  if (isSessionLogoutPending || isConnectionDeletionPending || queueDeliveryPromise) return;
   scheduleNextQueueDelivery(Math.max(
     LOCAL_QUEUE_DELIVERY_DELAY_MS,
     queueDeliveryRetryDelayMs,
@@ -1014,7 +1087,7 @@ function triggerQueueDelivery(): void {
 }
 
 function runQueueDelivery(): void {
-  if (queueDeliveryPromise || forcedQueueDeliveryPromise) return;
+  if (isSessionLogoutPending || isConnectionDeletionPending || queueDeliveryPromise || forcedQueueDeliveryPromise) return;
   const delivery = deliverPendingSyncOps({ force: false }).catch((error) => {
     recordQueueDeliveryFailure(error);
     throw error;
@@ -1027,11 +1100,14 @@ function runQueueDelivery(): void {
 }
 
 async function scheduleQueueDeliveryIfNeeded(): Promise<void> {
+  if (isSessionLogoutPending || isConnectionDeletionPending) return;
+  if (await hasPendingConnectionDeletion()) return;
   const [{ syncConfig, pages }, pendingOps, projectEvents] = await Promise.all([
     readStorage(),
     listPendingSyncOps(),
     listPendingProjectSyncEvents(),
   ]);
+  if (!syncQueueBelongsToActiveAccount(syncConfig)) return;
   const hasDeliverableWork = pendingOps.some((op) => !op.deliveryBlocked) ||
     projectEvents.some((event) => !event.deliveryBlocked) ||
     pages.some((page) => countPendingLocalMedia(page.content) > 0);
@@ -1058,7 +1134,7 @@ export function connectSyncEvents(
   syncConfig: SyncConfig,
   onEvent: (event: SyncEventMessage) => void,
 ): EventSource {
-  const es = new EventSource(`${syncConfig.serverUrl}/sync/events`, { withCredentials: true });
+  const es = new EventSource(`${cleanSyncServerUrl(syncConfig.serverUrl)}/sync/events`, { withCredentials: true });
   es.onmessage = (e) => {
     try {
       onEvent(JSON.parse(e.data as string) as SyncEventMessage);
@@ -1269,7 +1345,14 @@ async function replaceTempProject({
   realPage: ProjectPage;
   realProject: Project;
 }) {
+  const selectionRevisionAtStart = currentProjectSelectionRevision;
   const { activePageIdsByProject, currentProjectId, pages, projects } = await readStorage();
+  const resolvedCurrentProjectId = currentProjectIdForTempProject(
+    currentProjectId,
+    tempProject.id,
+    realProject.id,
+    selectionRevisionAtStart,
+  );
   const nextActivePageIds = { ...activePageIdsByProject };
   const tempActivePageId = nextActivePageIds[tempProject.id];
 
@@ -1279,7 +1362,7 @@ async function replaceTempProject({
 
   await writeStorage({
     activePageIdsByProject: nextActivePageIds,
-    currentProjectId: currentProjectId === tempProject.id ? realProject.id : currentProjectId,
+    currentProjectId: resolvedCurrentProjectId,
     pages: pages.map((page) =>
       page.id === tempPage.id
         ? {
@@ -1307,14 +1390,21 @@ async function rollbackTempProject(
   previousProjectId: string,
   message: string,
 ) {
+  const selectionRevisionAtStart = currentProjectSelectionRevision;
   const { activePageIdsByProject, currentProjectId, pages, projects } = await readStorage();
+  const resolvedCurrentProjectId = currentProjectIdForTempProject(
+    currentProjectId,
+    tempProject.id,
+    previousProjectId,
+    selectionRevisionAtStart,
+  );
   const nextActivePageIds = { ...activePageIdsByProject };
   delete nextActivePageIds[tempProject.id];
   pendingTempPageSaves.delete(tempPage.id);
 
   await writeStorage({
     activePageIdsByProject: nextActivePageIds,
-    currentProjectId: currentProjectId === tempProject.id ? previousProjectId : currentProjectId,
+    currentProjectId: resolvedCurrentProjectId,
     pages: pages.filter((page) => page.projectId !== tempProject.id),
     projects: projects
       .filter((project) => project.id !== tempProject.id)
@@ -1325,6 +1415,18 @@ async function rollbackTempProject(
       )
       .sort(sortProjectsByUpdatedDesc),
   });
+}
+
+function currentProjectIdForTempProject(
+  storedProjectId: string,
+  tempProjectId: string,
+  resolvedProjectId: string,
+  selectionRevisionAtStart: number,
+): string {
+  const selectedProjectId = selectionRevisionAtStart === currentProjectSelectionRevision
+    ? storedProjectId
+    : requestedCurrentProjectId ?? storedProjectId;
+  return selectedProjectId === tempProjectId ? resolvedProjectId : selectedProjectId;
 }
 
 async function replaceTempPage(tempPage: ProjectPage, realPage: ProjectPage) {
@@ -1394,6 +1496,9 @@ async function replayTempPageSave(tempPageId: string, realPage: ProjectPage) {
 }
 
 async function flushPendingSyncOps(options: { force?: boolean } = {}): Promise<void> {
+  if (isSessionLogoutPending || isConnectionDeletionPending) return;
+  if (await hasPendingConnectionDeletion()) return;
+
   if (options.force) {
     if (queueDeliveryTimer) {
       clearTimeout(queueDeliveryTimer);
@@ -1427,9 +1532,27 @@ async function flushPendingSyncOps(options: { force?: boolean } = {}): Promise<v
   triggerQueueDelivery();
 }
 
+async function hasPendingConnectionDeletion(): Promise<boolean> {
+  const stored = await browser.storage.local.get(PENDING_CONNECTION_DELETION_KEY) as Record<
+    string,
+    PendingConnectionDeletion | undefined
+  >;
+  const pending = Boolean(stored[PENDING_CONNECTION_DELETION_KEY]);
+  if (pending) {
+    isConnectionDeletionPending = true;
+    if (queueDeliveryTimer) {
+      clearTimeout(queueDeliveryTimer);
+      queueDeliveryTimer = undefined;
+    }
+  }
+  return pending;
+}
+
 async function deliverPendingSyncOps({ force }: { force: boolean }): Promise<void> {
+  if (isSessionLogoutPending || isConnectionDeletionPending || await hasPendingConnectionDeletion()) return;
   const { syncConfig } = await readStorage();
   if (!syncConfig.connected || isBrowserOffline()) return;
+  if (!syncQueueBelongsToActiveAccount(syncConfig)) return;
 
   await deliverPendingProjectSyncEvents(syncConfig);
   const hadMediaFailures = await uploadPendingLocalMedia(syncConfig);
@@ -1651,23 +1774,74 @@ function msUntilOldestOpIsEligible(ops: BlockSyncOp[], now = Date.now()): number
   return Math.max(0, LOCAL_QUEUE_DELIVERY_DELAY_MS - (now - oldestCreatedAt));
 }
 
-async function updateStoredSyncConfig(config: Partial<SyncConfig>): Promise<SyncConfig> {
+async function updateStoredSyncConfig(
+  config: Partial<SyncConfig>,
+  additionalStorage: Partial<InkwellStorage> = {},
+): Promise<SyncConfig> {
   const { syncConfig } = await readStorage();
-  const nextConfig = {
+  const nextConfig = stripStoredSyncCredentials({
     ...syncConfig,
     ...config,
     serverUrl: config.serverUrl
-      ? cleanServerUrl(config.serverUrl)
+      ? cleanSyncServerUrl(config.serverUrl)
       : syncConfig.serverUrl,
-  };
+  });
 
-  await writeStorage({ syncConfig: nextConfig });
+  await writeStorage({ syncConfig: nextConfig, ...additionalStorage });
   return nextConfig;
+}
+
+/** Removes legacy or injected credential fields when local auth state is rewritten. */
+export function stripStoredSyncCredentials(syncConfig: SyncConfig): SyncConfig {
+  const sanitized = { ...syncConfig } as SyncConfig & Record<string, unknown>;
+  for (const key of Object.keys(sanitized)) {
+    if (/(?:token|secret|credential|authorization)/i.test(key)) {
+      delete sanitized[key];
+    }
+  }
+  return sanitized;
+}
+
+function markConnectionDeletionPending(): void {
+  isConnectionDeletionPending = true;
+  if (queueDeliveryTimer) {
+    clearTimeout(queueDeliveryTimer);
+    queueDeliveryTimer = undefined;
+  }
 }
 
 export const notionClient = {
   flushPendingSyncOps,
   pendingSyncEventCount: pendingLocalWorkCount,
+
+  /** Stop queued network delivery and drain any request already in flight before a deletion. */
+  async prepareConnectionDeletion(): Promise<boolean> {
+    markConnectionDeletionPending();
+    await Promise.allSettled(
+      [queueDeliveryPromise, forcedQueueDeliveryPromise].filter(
+        (promise): promise is Promise<void> => Boolean(promise),
+      ),
+    );
+    await pauseIdbWrites();
+    return true;
+  },
+
+  /** Keep a retry-pending deletion from resuming queued server sync on worker startup. */
+  markConnectionDeletionPending,
+
+  /** Unfence this context after an unsuccessful request; pending deletion still blocks sync. */
+  async abortConnectionDeletion(): Promise<void> {
+    await resumeIdbWrites();
+    isConnectionDeletionPending = true;
+  },
+
+  /** Adopt the post-wipe IDB generation in the background worker. */
+  async completeConnectionDeletion(): Promise<void> {
+    await resumeIdbWrites({ adoptCurrentEpoch: true });
+    isConnectionDeletionPending = false;
+    queueDeliveryRetryAttempt = 0;
+    queueDeliveryRetryDelayMs = 0;
+  },
 
   async resyncPendingChanges(): Promise<{
     blockedMessage?: string;
@@ -1679,6 +1853,9 @@ export const notionClient = {
     const { syncConfig } = await readStorage();
     if (!syncConfig.connected || isBrowserOffline()) {
       throw new Error('Reconnect to Notion before resyncing. Your local changes remain saved.');
+    }
+    if (!syncQueueBelongsToActiveAccount(syncConfig)) {
+      throw new Error('Local data is locked to its original Notion account. Reconnect that account to send local documents.');
     }
 
     const hadPendingWork = await pendingLocalWorkCount() > 0;
@@ -1897,6 +2074,7 @@ export const notionClient = {
 
     if (
       !syncConfig.connected ||
+      !syncQueueBelongsToActiveAccount(syncConfig) ||
       storage.notionHydrationSource === hydrationSource(syncConfig) ||
       await pendingLocalWorkCount() === 0
     ) {
@@ -1933,7 +2111,11 @@ export const notionClient = {
   async needsInitialNotionHydration(): Promise<boolean> {
     const { notionHydrationSource, syncConfig } = await readStorage();
 
-    if (!syncConfig.connected || notionHydrationSource === hydrationSource(syncConfig)) {
+    if (
+      !syncConfig.connected ||
+      !syncQueueBelongsToActiveAccount(syncConfig) ||
+      notionHydrationSource === hydrationSource(syncConfig)
+    ) {
       return false;
     }
 
@@ -1971,12 +2153,18 @@ export const notionClient = {
   },
 
   async setCurrentProjectId(projectId: string): Promise<void> {
+    const selectionRevision = ++currentProjectSelectionRevision;
+    requestedCurrentProjectId = projectId;
     const { projects } = await readStorage();
 
     if (!projects.some((project) => project.id === projectId && project.status !== 'archived')) {
+      if (selectionRevision === currentProjectSelectionRevision) {
+        requestedCurrentProjectId = undefined;
+      }
       return;
     }
 
+    if (selectionRevision !== currentProjectSelectionRevision) return;
     await writeStorage({ currentProjectId: projectId });
   },
 
@@ -2151,28 +2339,86 @@ export const notionClient = {
     return { ...syncConfig };
   },
 
+  async assignUnmatchedPendingQueueToCurrentAccount(): Promise<SyncConfig> {
+    const { syncConfig } = await readStorage();
+    if (!syncConfig.connected || !syncConfig.userId || syncConfig.syncQueueOwnerUserId !== null) {
+      throw new Error('These queued changes cannot be assigned to the current Notion account.');
+    }
+    const nextConfig = await updateStoredSyncConfig({ syncQueueOwnerUserId: syncConfig.userId });
+    triggerQueueDelivery();
+    return nextConfig;
+  },
+
   async updateSyncConfig(config: Partial<SyncConfig>): Promise<SyncConfig> {
     return updateStoredSyncConfig(config);
   },
 
-  async refreshSyncSession(): Promise<SyncConfig> {
-    const { syncConfig } = await readStorage();
+  async refreshSyncSession(allowSignedOut = false): Promise<SyncConfig> {
+    const { hasExplicitlyLoggedOut, syncConfig } = await readStorage();
+    const pendingDeletionState = await browser.storage.local.get(PENDING_CONNECTION_DELETION_KEY) as Record<
+      string,
+      PendingConnectionDeletion | undefined
+    >;
+    if (pendingDeletionState[PENDING_CONNECTION_DELETION_KEY]) {
+      try {
+        await notionClient.deleteConnection();
+        return (await readStorage()).syncConfig;
+      } catch {
+        // The explicit deletion request stays available in settings for a safe retry.
+        return syncConfig;
+      }
+    }
+    if (!allowSignedOut && hasExplicitlyLoggedOut) {
+      return syncConfig;
+    }
+
     const session = await requestServer<SyncSessionResponse>(
       '/session',
       undefined,
       syncConfig,
     );
 
+    const pendingLocalWork = await pendingLocalWorkCount();
+    const workspace = await readStorage();
+    const hasRetainedLocalData = pendingLocalWork > 0 ||
+      Boolean(workspace.notionHydrationSource) ||
+      hasRemoteBackedData(workspace.projects, workspace.pages);
+    let syncQueueOwnerUserId = syncConfig.syncQueueOwnerUserId;
+    if (session.authenticated && session.userId) {
+      if (!hasRetainedLocalData) {
+        syncQueueOwnerUserId = session.userId;
+      } else if (syncQueueOwnerUserId === undefined) {
+        const matchesLegacyAccount = syncConfig.authenticated &&
+          syncConfig.userEmail === session.userEmail &&
+          (!syncConfig.workspaceId || syncConfig.workspaceId === session.workspaceId);
+        if (syncConfig.userId) {
+          syncQueueOwnerUserId = syncConfig.userId;
+        } else if (matchesLegacyAccount) {
+          syncQueueOwnerUserId = session.userId;
+        } else if (hasExplicitlyLoggedOut || syncConfig.userEmail || syncConfig.workspaceId) {
+          // Older releases cleared account identity on logout. Keep their queued
+          // content local until the user explicitly assigns it to this account.
+          syncQueueOwnerUserId = null;
+        } else {
+          // Local-only work created before the first Notion connection belongs
+          // to the account the user is connecting now.
+          syncQueueOwnerUserId = session.userId;
+        }
+      }
+    }
+
     const nextConfig = await updateStoredSyncConfig({
       authenticated: session.authenticated,
+      ...(session.authenticated && session.userId ? { userId: session.userId } : {}),
+      ...(session.authenticated && session.userId ? { syncQueueOwnerUserId } : {}),
       userName: session.userName,
       userEmail: session.userEmail,
       connected: session.connected,
       workspaceId: session.workspaceId,
       workspaceName: session.workspaceName,
-    });
+    }, session.authenticated ? { hasExplicitlyLoggedOut: false } : {});
 
-    if (session.connected) {
+    if (session.connected && syncQueueBelongsToActiveAccount(nextConfig)) {
       triggerQueueDelivery();
     }
 
@@ -2188,6 +2434,10 @@ export const notionClient = {
 
     if (!syncConfig.connected) {
       return { stalePageIds: [], aheadPageIds: [], failedPageIds: [] };
+    }
+
+    if (!syncQueueBelongsToActiveAccount(syncConfig)) {
+      throw new Error('Local data is locked to its original Notion account. Reconnect that account to send local documents.');
     }
 
     const knownVersions: Record<string, number> = {};
@@ -2363,25 +2613,170 @@ export const notionClient = {
     };
   },
 
-  async logoutSyncSession(): Promise<SyncConfig> {
-    const { syncConfig } = await readStorage();
+  async logoutSyncSession(): Promise<{
+    notionTokenRevoked: boolean;
+    serverDataCleanupComplete: boolean;
+    syncConfig: SyncConfig;
+  }> {
+    isSessionLogoutPending = true;
+    if (queueDeliveryTimer) {
+      clearTimeout(queueDeliveryTimer);
+      queueDeliveryTimer = undefined;
+    }
 
-    await requestServer<{ connected: false }>('/auth/notion/logout', {
-      method: 'POST',
-      body: JSON.stringify({}),
-    }, syncConfig).catch(() => undefined);
+    let serverCleanup: { notionTokenRevoked: boolean; serverDataCleanupComplete: boolean } = {
+      notionTokenRevoked: false,
+      serverDataCleanupComplete: false,
+    };
+    try {
+      const { syncConfig } = await readStorage();
+      const nextSyncConfig = await updateStoredSyncConfig({
+        authenticated: false,
+        userName: undefined,
+        userEmail: undefined,
+        connected: false,
+        workspaceId: undefined,
+        workspaceName: undefined,
+        selectedParentPageId: undefined,
+        selectedParentPageTitle: undefined,
+        selectedDatabaseId: undefined,
+        selectedDatabaseTitle: undefined,
+        selectedDataSourceId: undefined,
+      }, { hasExplicitlyLoggedOut: true });
+      await Promise.allSettled(
+        [queueDeliveryPromise, forcedQueueDeliveryPromise].filter(
+          (promise): promise is Promise<void> => Boolean(promise),
+        ),
+      );
+      try {
+        const response = await requestServer<{
+          connected: false;
+          loggedOut: boolean;
+          notionTokenRevoked: boolean;
+          serverDataCleanupComplete: boolean;
+        }>('/auth/notion/logout', {
+          method: 'POST',
+          body: JSON.stringify({}),
+        }, syncConfig);
+        serverCleanup = {
+          notionTokenRevoked: response.notionTokenRevoked,
+          serverDataCleanupComplete: response.serverDataCleanupComplete,
+        };
+      } catch {
+        // A network or server failure must not keep this browser signed in locally.
+        // The status returned below tells the UI that remote revocation is unconfirmed.
+      }
 
-    return updateStoredSyncConfig({
-      authenticated: false,
-      userName: undefined,
-      userEmail: undefined,
-      connected: false,
-      workspaceId: undefined,
-      workspaceName: undefined,
-      selectedDatabaseId: undefined,
-      selectedDatabaseTitle: undefined,
-      selectedDataSourceId: undefined,
-    });
+      return {
+        notionTokenRevoked: serverCleanup.notionTokenRevoked,
+        serverDataCleanupComplete: serverCleanup.serverDataCleanupComplete,
+        syncConfig: nextSyncConfig,
+      };
+    } catch {
+      throw new Error('Unable to clear the local Inkwell account state.');
+    } finally {
+      isSessionLogoutPending = false;
+    }
+  },
+
+  async deleteConnection(): Promise<{ notionTokenRevoked: boolean }> {
+    const { syncConfig: storedSyncConfig } = await readStorage();
+    const extensionStorage = await browser.storage.local.get(PENDING_CONNECTION_DELETION_KEY) as Record<
+      string,
+      PendingConnectionDeletion | undefined
+    >;
+    let pendingDeletion = extensionStorage[PENDING_CONNECTION_DELETION_KEY];
+    if (pendingDeletion) {
+      const isDifferentAuthenticatedConnection = storedSyncConfig.authenticated && (
+        cleanSyncServerUrl(storedSyncConfig.serverUrl) !== pendingDeletion.serverUrl ||
+        Boolean(pendingDeletion.userId && storedSyncConfig.userId !== pendingDeletion.userId) ||
+        Boolean(pendingDeletion.userEmail && storedSyncConfig.userEmail !== pendingDeletion.userEmail) ||
+        Boolean(pendingDeletion.workspaceId && storedSyncConfig.workspaceId !== pendingDeletion.workspaceId)
+      );
+      if (
+        !/^[A-Za-z0-9_-]{40,128}$/.test(pendingDeletion.requestId) ||
+        isDifferentAuthenticatedConnection
+      ) {
+        throw new Error('A previous Inkwell deletion is pending for another connection. Reconnect that account to finish it.');
+      }
+    } else {
+      if (!storedSyncConfig.authenticated || !storedSyncConfig.userId) {
+        throw new Error('Sign in to the Notion account that owns this Inkwell data before deleting the connection. Your local documents are unchanged.');
+      }
+      if (
+        storedSyncConfig.syncQueueOwnerUserId === null ||
+        (storedSyncConfig.syncQueueOwnerUserId &&
+          storedSyncConfig.syncQueueOwnerUserId !== storedSyncConfig.userId)
+      ) {
+        throw new Error('Reconnect the Notion account that owns this local data before deleting the connection. Your local documents are unchanged.');
+      }
+      pendingDeletion = {
+        requestId: `${crypto.randomUUID()}${crypto.randomUUID()}`,
+        serverUrl: cleanSyncServerUrl(storedSyncConfig.serverUrl),
+        userId: storedSyncConfig.userId,
+        ...(storedSyncConfig.userEmail ? { userEmail: storedSyncConfig.userEmail } : {}),
+        ...(storedSyncConfig.workspaceId ? { workspaceId: storedSyncConfig.workspaceId } : {}),
+      };
+      await browser.storage.local.set({
+        [PENDING_CONNECTION_DELETION_KEY]: pendingDeletion,
+      });
+    }
+    const syncConfig = {
+      ...storedSyncConfig,
+      serverUrl: pendingDeletion.serverUrl,
+    };
+    isConnectionDeletionPending = true;
+    if (queueDeliveryTimer) {
+      clearTimeout(queueDeliveryTimer);
+      queueDeliveryTimer = undefined;
+    }
+
+    let serverDeleted = false;
+    let localDataCleared = false;
+    try {
+      const prepared = await browser.runtime.sendMessage({
+        type: 'inkwell.prepareConnectionDeletion',
+      });
+      if (prepared === false) {
+        throw new Error('The background service could not pause Inkwell sync before deletion.');
+      }
+      await pauseIdbWrites();
+      await Promise.allSettled(
+        [queueDeliveryPromise, forcedQueueDeliveryPromise].filter(
+          (promise): promise is Promise<void> => Boolean(promise),
+        ),
+      );
+
+      const response = await requestServer<{
+        deleted: boolean;
+        notionTokenRevoked: boolean;
+      }>('/auth/notion/delete-connection', {
+        method: 'POST',
+        body: JSON.stringify({ requestId: pendingDeletion.requestId }),
+      }, syncConfig);
+      if (!response.deleted) throw new Error('The Inkwell connection could not be deleted.');
+      serverDeleted = true;
+
+      await idbClear();
+      await browser.storage.local.clear();
+      localDataCleared = true;
+      queueDeliveryRetryAttempt = 0;
+      queueDeliveryRetryDelayMs = 0;
+      return { notionTokenRevoked: response.notionTokenRevoked };
+    } finally {
+      if (!serverDeleted) {
+        await resumeIdbWrites();
+        void Promise.resolve(browser.runtime.sendMessage({
+          type: 'inkwell.abortConnectionDeletion',
+        })).catch(() => undefined);
+      } else if (localDataCleared) {
+        await resumeIdbWrites({ adoptCurrentEpoch: true });
+        isConnectionDeletionPending = false;
+        void Promise.resolve(browser.runtime.sendMessage({
+          type: 'inkwell.completeConnectionDeletion',
+        })).catch(() => undefined);
+      }
+    }
   },
 
   async listNotionParentPages(query = ''): Promise<NotionParentPage[]> {

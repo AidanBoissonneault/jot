@@ -7,12 +7,14 @@ import {
 } from '@/src/extensions/sourceRegistry';
 import {
   notionClient,
+  stripStoredSyncCredentials,
   connectSyncEvents,
   applySyncResult,
   clearStalePages,
   sourcePayloadFromCapture,
 } from '@/src/services/notionClient';
 import { onSyncQueueChange } from '@/src/services/syncQueue';
+import { cleanSyncServerUrl } from '@/src/lib/syncServerUrl';
 import type { SyncEventMessage } from '@/src/types/sync';
 import type {
   DocumentContent,
@@ -327,9 +329,9 @@ export const useInkwellStore = defineStore('inkwell', () => {
   async function saveCurrentPageContent(
     content: DocumentContent,
     options: SaveOptions = {},
-  ) {
+  ): Promise<boolean> {
     if (!currentPage.value) {
-      return;
+      return false;
     }
 
     saveStatus.value = 'saving';
@@ -352,7 +354,7 @@ export const useInkwellStore = defineStore('inkwell', () => {
       });
 
       if (currentPage.value?.id !== activePageId) {
-        return;
+        return true;
       }
 
       const currentRevision = currentPage.value.localRevision;
@@ -365,11 +367,13 @@ export const useInkwellStore = defineStore('inkwell', () => {
         storedPage.id === activePageId ? nextPage : storedPage,
       );
       applyPageSyncState(nextPage);
-      await refreshPendingSyncCount();
+      await refreshPendingSyncCount().catch(() => undefined);
+      return true;
     } catch (error) {
       errorMessage.value =
         error instanceof Error ? error.message : 'Unable to save this page.';
       saveStatus.value = 'error';
+      return false;
     }
   }
 
@@ -377,7 +381,7 @@ export const useInkwellStore = defineStore('inkwell', () => {
     page: ProjectPage,
     content: DocumentContent,
     options: SaveOptions = {},
-  ) {
+  ): Promise<boolean> {
     const activePageId = page.id;
     const optimisticPage = {
       ...page,
@@ -415,15 +419,17 @@ export const useInkwellStore = defineStore('inkwell', () => {
         currentPage.value = nextPage;
         applyPageSyncState(nextPage);
       }
-      await refreshPendingSyncCount();
+      await refreshPendingSyncCount().catch(() => undefined);
+      return true;
     } catch (error) {
       if (currentPage.value?.id !== activePageId) {
-        return;
+        return false;
       }
 
       errorMessage.value =
         error instanceof Error ? error.message : 'Unable to save this page.';
       saveStatus.value = 'error';
+      return false;
     }
   }
 
@@ -514,6 +520,21 @@ export const useInkwellStore = defineStore('inkwell', () => {
     }
 
     browser.runtime.onMessage.addListener((message: InkwellRuntimeMessage) => {
+      if (message?.type === 'inkwell.prepareConnectionDeletion') {
+        void notionClient.prepareConnectionDeletion().catch(() => undefined);
+        return false;
+      }
+
+      if (message?.type === 'inkwell.abortConnectionDeletion') {
+        void notionClient.abortConnectionDeletion().catch(() => undefined);
+        return false;
+      }
+
+      if (message?.type === 'inkwell.completeConnectionDeletion') {
+        globalThis.setTimeout(() => window.location.reload(), 0);
+        return false;
+      }
+
       if (message?.type === 'inkwell.insertCaptureRequest') {
         return captureInsertHandler?.(message.payload) ?? false;
       }
@@ -557,6 +578,11 @@ export const useInkwellStore = defineStore('inkwell', () => {
     syncEventsSource?.close();
     sseStatus.value = 'disconnected';
     if (!syncConfig.value.connected || !isOnline.value) return;
+    if (
+      syncConfig.value.syncQueueOwnerUserId === null ||
+      (syncConfig.value.syncQueueOwnerUserId &&
+        syncConfig.value.syncQueueOwnerUserId !== syncConfig.value.userId)
+    ) return;
     sseStatus.value = 'connecting';
     const es = connectSyncEvents(syncConfig.value, handleSyncEvent);
     es.onopen = () => { sseStatus.value = 'connected'; };
@@ -628,9 +654,20 @@ export const useInkwellStore = defineStore('inkwell', () => {
     syncConfig.value = await notionClient.updateSyncConfig({ serverUrl });
   }
 
-  async function refreshSyncSession() {
+  async function assignUnmatchedPendingQueueToCurrentAccount() {
     try {
-      syncConfig.value = await notionClient.refreshSyncSession();
+      syncConfig.value = await notionClient.assignUnmatchedPendingQueueToCurrentAccount();
+      await syncPendingChanges();
+    } catch (error) {
+      errorMessage.value = error instanceof Error ? error.message : 'Unable to assign queued changes.';
+      saveStatus.value = 'error';
+      throw error;
+    }
+  }
+
+  async function refreshSyncSession(allowSignedOut = false) {
+    try {
+      syncConfig.value = await notionClient.refreshSyncSession(allowSignedOut);
       if (syncConfig.value.connected) {
         const preparedLocalWorkspace = await notionClient.prepareLocalWorkspaceForFirstSync();
         if (!preparedLocalWorkspace && await hydrateInitialNotionSnapshot()) {
@@ -712,8 +749,8 @@ export const useInkwellStore = defineStore('inkwell', () => {
     sseStatus.value = 'disconnected';
   }
 
-  async function logout() {
-    syncConfig.value = {
+  async function logout(): Promise<boolean> {
+    syncConfig.value = stripStoredSyncCredentials({
       ...syncConfig.value,
       authenticated: false,
       userName: undefined,
@@ -721,20 +758,74 @@ export const useInkwellStore = defineStore('inkwell', () => {
       connected: false,
       workspaceId: undefined,
       workspaceName: undefined,
+      selectedParentPageId: undefined,
+      selectedParentPageTitle: undefined,
+      selectedDatabaseId: undefined,
+      selectedDatabaseTitle: undefined,
+      selectedDataSourceId: undefined,
+    });
+    syncEventsSource?.close();
+    syncEventsSource = undefined;
+    sseStatus.value = 'disconnected';
+
+    let logoutResult: Awaited<ReturnType<typeof notionClient.logoutSyncSession>>;
+    try {
+      logoutResult = await notionClient.logoutSyncSession();
+    } catch {
+      errorMessage.value = 'Could not clear the local Inkwell connection state. Try logging out again.';
+      saveStatus.value = 'error';
+      return false;
+    }
+
+    syncConfig.value = {
+      ...logoutResult.syncConfig,
+      authenticated: false,
+      userName: undefined,
+      userEmail: undefined,
+      connected: false,
+      workspaceId: undefined,
+      workspaceName: undefined,
+      selectedParentPageId: undefined,
+      selectedParentPageTitle: undefined,
       selectedDatabaseId: undefined,
       selectedDatabaseTitle: undefined,
       selectedDataSourceId: undefined,
     };
     saveStatus.value = 'stale';
-    errorMessage.value = '';
+    errorMessage.value = !logoutResult.serverDataCleanupComplete
+      ? 'You are signed out on this device, but Inkwell could not confirm removal of all server credentials. Sign in again and retry logout.'
+      : !logoutResult.notionTokenRevoked
+        ? 'You are signed out and Inkwell removed its stored credentials, but Notion did not confirm token revocation. Remove the Inkwell connection in Notion settings if it remains listed.'
+        : '';
+
+    return true;
+  }
+
+  async function deleteConnection(): Promise<{ notionTokenRevoked: boolean }> {
     syncEventsSource?.close();
     syncEventsSource = undefined;
     sseStatus.value = 'disconnected';
+    isOnline.value = false;
+    saveStatus.value = 'stale';
+    errorMessage.value = '';
 
     try {
-      await notionClient.logoutSyncSession();
-    } catch {
-      // best-effort
+      const result = await notionClient.deleteConnection();
+      syncConfig.value = await notionClient.getSyncConfig();
+      projects.value = await notionClient.listProjects();
+      currentProjectId.value = await notionClient.getCurrentProjectId();
+      await loadCurrentPage();
+      await refreshPendingSyncCount();
+      notionParentPages.value = [];
+      isOnline.value = typeof navigator === 'undefined' || navigator.onLine !== false;
+      errorMessage.value = '';
+      return result;
+    } catch (error) {
+      errorMessage.value = error instanceof Error
+        ? error.message
+        : 'Unable to delete the Inkwell connection.';
+      saveStatus.value = 'error';
+      throw error;
     }
   }
 
@@ -783,7 +874,7 @@ export const useInkwellStore = defineStore('inkwell', () => {
   }
 
   function getSyncLoginUrl() {
-    const serverUrl = syncConfig.value.serverUrl.replace(/\/+$/, '');
+    const serverUrl = cleanSyncServerUrl(syncConfig.value.serverUrl);
     return `${serverUrl}/auth/notion/start`;
   }
 
@@ -974,6 +1065,7 @@ export const useInkwellStore = defineStore('inkwell', () => {
     reloadFromNotion,
     refreshSelectedPage,
     refreshSyncSession,
+    deleteConnection,
     savePageContentSnapshot,
     saveCurrentPageContent,
     pullMessage,
@@ -989,6 +1081,7 @@ export const useInkwellStore = defineStore('inkwell', () => {
     startRuntimeListener,
     syncConfig,
     syncPendingChanges,
+    assignUnmatchedPendingQueueToCurrentAccount,
     resyncPendingChanges,
     updateServerUrl,
     getSyncLoginUrl,

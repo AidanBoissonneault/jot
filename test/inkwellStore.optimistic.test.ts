@@ -46,6 +46,8 @@ const connectedConfig: SyncConfig = {
   serverUrl: 'http://localhost:8787',
   authenticated: true,
   connected: true,
+  userId: 'notion:test-user',
+  syncQueueOwnerUserId: 'notion:test-user',
 };
 
 beforeEach(() => {
@@ -122,6 +124,27 @@ describe('optimistic project creation', () => {
     expect(store.currentProject?.name).toBe('Broken');
     expect(store.projects.some((project) => project.id === tempProjectId)).toBe(false);
     expect(await notionClient.pendingSyncEventCount()).toBeGreaterThan(0);
+  });
+});
+
+describe('logout credential cleanup', () => {
+  test('scrubs live account tokens even if durable local cleanup fails', async () => {
+    const store = useInkwellStore();
+    store.syncConfig = {
+      ...connectedConfig,
+      accessToken: 'legacy-live-access-token',
+      refresh_token: 'legacy-live-refresh-token',
+    } as SyncConfig;
+    vi.spyOn(notionClient, 'logoutSyncSession').mockRejectedValueOnce(
+      new Error('local storage unavailable'),
+    );
+
+    await expect(store.logout()).resolves.toBe(false);
+
+    expect(store.syncConfig).not.toHaveProperty('accessToken');
+    expect(store.syncConfig).not.toHaveProperty('refresh_token');
+    expect(store.syncConfig.userId).toBe(connectedConfig.userId);
+    expect(store.syncConfig.connected).toBe(false);
   });
 });
 
@@ -339,6 +362,7 @@ describe('project metadata', () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(jsonResponse({
         authenticated: true,
+        userId: 'notion:fresh-user',
         connected: true,
         workspaceId: 'workspace-main',
         workspaceName: 'Main workspace',
@@ -362,6 +386,7 @@ describe('project metadata', () => {
       close() {}
     } as unknown as typeof EventSource;
     resetBrowserStorage({
+      hasExplicitlyLoggedOut: false,
       syncConfig: {
         serverUrl: 'http://localhost:8787',
         authenticated: false,
@@ -504,6 +529,38 @@ describe('optimistic page creation', () => {
 });
 
 describe('page title and content saves', () => {
+  test('reports when a local page save fails so the editor can retry', async () => {
+    const store = useInkwellStore();
+    await seedStore(store);
+    vi.spyOn(notionClient, 'updateProjectPage').mockRejectedValueOnce(
+      new Error('local storage unavailable'),
+    );
+
+    const saved = await store.saveCurrentPageContent(docWithText('retry this edit'), {
+      preserveLocalContent: true,
+    });
+
+    expect(saved).toBe(false);
+    expect(store.saveStatus).toBe('error');
+  });
+
+  test('reports when an exit-time page snapshot fails to persist', async () => {
+    const store = useInkwellStore();
+    await seedStore(store);
+    vi.spyOn(notionClient, 'updateProjectPage').mockRejectedValueOnce(
+      new Error('local storage unavailable'),
+    );
+
+    const saved = await store.savePageContentSnapshot(
+      { ...store.currentPage! },
+      docWithText('retry this exit snapshot'),
+      { preserveLocalContent: true },
+    );
+
+    expect(saved).toBe(false);
+    expect(store.saveStatus).toBe('error');
+  });
+
   test('content saves can carry the latest draft title', async () => {
     const { fetchMock, store } = await setupTimerFetchStoreTest();
     await store.saveCurrentPageContent(docWithText('body edit'), {
