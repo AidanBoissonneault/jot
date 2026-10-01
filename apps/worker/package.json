@@ -9,10 +9,16 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.0.0",
-    "hono": "^4.7.0"
+    "@supabase/supabase-js": "^2.105.4",
+    "hono": "^4.13.10"
   },
   "devDependencies": {
-    "wrangler": "^4.0.0"
+    "wrangler": "4.130.0"
+  },
+  "overrides": {
+    "esbuild": "0.28.1",
+    "sharp": "0.35.4",
+    "undici": "7.29.1",
+    "ws": "8.21.0"
   }
 }
