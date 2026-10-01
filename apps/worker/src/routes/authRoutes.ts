@@ -9,18 +9,23 @@ import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import { randomUUID } from 'node:crypto';
 import { closePage, legalPage, privacyBody, termsBody } from '../htmlPages.js';
 import {
-  deleteNotionWebhook,
   exchangeNotionCode,
   notionUserFromToken,
-  registerNotionWebhook,
+  revokeNotionToken,
 } from '../notionAuth.js';
-import { isTrustedOrigin, randomToken, serverBaseUrl } from '../workerUtils.js';
+import {
+  MAX_CONTROL_JSON_REQUEST_BYTES,
+  hash,
+  isTrustedOrigin,
+  randomToken,
+  readLimitedJsonBody,
+  serverBaseUrl,
+} from '../workerUtils.js';
 import {
   INKWELL_SESSION_COOKIE,
   auth,
-  ensureInkwellSyncStateRow,
   getInkwellSession,
-  readStore,
+  readInkwellSyncState,
   requireInkwellSession,
   supabase,
 } from '../services/workerRuntime.js';
@@ -37,16 +42,56 @@ const SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 30;
 export function registerAuthRoutes(app: Hono<{ Bindings: WorkerEnv }>): void {
   /** Applies CORS headers and handles preflight requests. @param c - Hono context. @param next - Downstream middleware. @returns Middleware response. */
   app.use('*', async (c, next) => {
+    c.header('X-Content-Type-Options', 'nosniff');
+    c.header('Referrer-Policy', 'no-referrer');
+    c.header('Cache-Control', 'no-store');
+    if (c.req.path !== '/youtube/embed') c.header('X-Frame-Options', 'DENY');
+    if (serverBaseUrl(c.env).startsWith('https://')) {
+      c.header('Strict-Transport-Security', 'max-age=31536000');
+    }
+
     const origin = c.req.header('origin');
     const trusted = isTrustedOrigin(c.env, origin);
-  
-    c.header('Access-Control-Allow-Origin', trusted ? origin : '*');
-    c.header('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
-    c.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
-    c.header('Access-Control-Allow-Credentials', 'true');
-  
-    if (c.req.method === 'OPTIONS') return c.body(null, 204);
-  
+    const isWebhook =
+      c.req.path === '/webhooks/notion' ||
+      /^\/webhooks\/notion\/[A-Za-z0-9_-]+$/.test(c.req.path);
+    const isWebhookSetup =
+      (c.req.path === '/webhooks/notion/setup/arm' && c.req.method === 'POST') ||
+      (c.req.path === '/webhooks/notion/verification-token' &&
+        ['GET', 'DELETE'].includes(c.req.method));
+    const isMutation = !['GET', 'HEAD', 'OPTIONS'].includes(c.req.method);
+
+    if (trusted && origin) {
+      c.header('Access-Control-Allow-Origin', origin);
+      c.header('Access-Control-Allow-Methods', 'GET,POST,DELETE,OPTIONS');
+      c.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, X-Inkwell-Account');
+      c.header('Access-Control-Allow-Credentials', 'true');
+      c.header('Vary', 'Origin');
+    }
+
+    if (c.req.method === 'OPTIONS') return c.body(null, trusted ? 204 : 403);
+    if (isWebhookSetup && origin && !trusted) {
+      return c.json({ error: 'Untrusted origin.' }, 403);
+    }
+    if (isMutation && !isWebhook && !isWebhookSetup && !trusted) {
+      return c.json({ error: 'Untrusted origin.' }, 403);
+    }
+
+    const requiresAccountBinding =
+      (c.req.path.startsWith('/sync/') && c.req.path !== '/sync/events') ||
+      c.req.path.startsWith('/media/');
+    if (requiresAccountBinding && c.req.method !== 'OPTIONS') {
+      const session = await getInkwellSession(c);
+      if (!session) return c.json({ error: 'Unauthorized' }, 401);
+      const expectedAccountId = c.req.header('x-inkwell-account');
+      if (!expectedAccountId) {
+        return c.json({ error: 'Refresh the Inkwell session before syncing.' }, 428);
+      }
+      if (expectedAccountId !== session.user.id) {
+        return c.json({ error: 'The active Notion account changed. Refresh the Inkwell session before syncing.' }, 409);
+      }
+    }
+
     await next();
   });
   
@@ -114,12 +159,15 @@ export function registerAuthRoutes(app: Hono<{ Bindings: WorkerEnv }>): void {
       return c.html(closePage('Notion login could not be verified. You can close this tab and try again.'), 400);
     }
   
+    let exchangedAccessToken: string | undefined;
+    let sessionCommitted = false;
     try {
       const tokens = await exchangeNotionCode(env, code, `${serverBaseUrl(env)}/auth/notion/callback`);
+      exchangedAccessToken = tokens.access_token;
       const user = notionUserFromToken(tokens);
       const userId = `notion:${user.id}`;
   
-      const { sessionToken, installationId } = await auth.createNotionSession({
+      const { sessionToken } = await auth.createNotionSession({
         userId,
         notionAccountId: user.id,
         accessToken: tokens.access_token,
@@ -133,17 +181,7 @@ export function registerAuthRoutes(app: Hono<{ Bindings: WorkerEnv }>): void {
         sessionId: randomUUID(),
         SESSION_MAX_AGE_SECONDS,
       });
-  
-      if (installationId) {
-        await ensureInkwellSyncStateRow(installationId);
-        await registerNotionWebhook(
-          env,
-          supabase,
-          installationId,
-          tokens.access_token,
-          serverBaseUrl(env),
-        ).catch(() => undefined);
-      }
+      sessionCommitted = true;
   
       setCookie(c, INKWELL_SESSION_COOKIE, sessionToken, {
         httpOnly: true,
@@ -154,8 +192,11 @@ export function registerAuthRoutes(app: Hono<{ Bindings: WorkerEnv }>): void {
       });
   
       return c.html(closePage('You are logged in to Inkwell. You can return to the side panel.'));
-    } catch (err) {
-      console.error('Failed to complete Notion login', err);
+    } catch {
+      if (exchangedAccessToken && !sessionCommitted) {
+        await revokeNotionToken(env, exchangedAccessToken);
+      }
+      console.error('Failed to complete Notion login');
       return c.html(closePage('Notion login failed. You can close this tab and try again.'), 500);
     }
   });
@@ -169,6 +210,7 @@ export function registerAuthRoutes(app: Hono<{ Bindings: WorkerEnv }>): void {
   
     return c.json({
       authenticated: Boolean(session),
+      userId: session?.user.id,
       userName: session?.user.name,
       userEmail: session?.user.email,
       connected: Boolean(installation),
@@ -180,23 +222,127 @@ export function registerAuthRoutes(app: Hono<{ Bindings: WorkerEnv }>): void {
   /** Revokes the active installation and clears its session. @param c - Hono context. @returns JSON response. */
   app.post('/auth/notion/logout', async (c) => {
     const session = await requireInkwellSession(c);
-    if (!session) return;
-  
-    const token = getCookie(c, INKWELL_SESSION_COOKIE);
-    const installation = await auth.getActiveInstallation(session.user.id).catch(() => undefined);
-    if (installation?.id) {
-      await deleteNotionWebhook(c.env, supabase, installation.id).catch(() => undefined);
+    if (!session) {
+      deleteCookie(c, INKWELL_SESSION_COOKIE, { path: '/' });
+      return c.json({ connected: false, loggedOut: false, notionTokenRevoked: false }, 401);
     }
-    await auth.revokeInstallation(session.user.id);
-    await auth.deleteCustomSession(token);
+
+    const token = getCookie(c, INKWELL_SESSION_COOKIE);
+    const notionTokens = await auth.getNotionAccountTokens(session.user.id).catch(() => null);
+    let serverDataCleanupComplete = true;
+    await auth.revokeInstallation(session.user.id).catch(() => {
+      serverDataCleanupComplete = false;
+    });
+    const notionTokenRevoked = notionTokens?.accessToken
+      ? await revokeNotionToken(c.env, notionTokens.accessToken)
+      : false;
+    await auth.clearNotionAccountTokens(session.user.id).catch(() => {
+      serverDataCleanupComplete = false;
+    });
+    await auth.deleteCustomSession(token).catch(() => {
+      serverDataCleanupComplete = false;
+    });
     deleteCookie(c, INKWELL_SESSION_COOKIE, { path: '/' });
-  
-    return c.json({ connected: false });
+
+    return c.json({ connected: false, loggedOut: true, notionTokenRevoked, serverDataCleanupComplete });
+  });
+
+  /** Deletes Inkwell's account data and Notion connection while preserving Notion pages. */
+  app.post('/auth/notion/delete-connection', async (c) => {
+    const parsed = await readLimitedJsonBody<{ requestId?: unknown }>(c.req.raw, MAX_CONTROL_JSON_REQUEST_BYTES);
+    if (parsed.tooLarge) return c.json({ deleted: false, error: 'Deletion request is too large.' }, 413);
+    const requestId = parsed.body?.requestId;
+    if (typeof requestId !== 'string' || !/^[A-Za-z0-9_-]{40,128}$/.test(requestId)) {
+      return c.json({ deleted: false, error: 'Invalid deletion request.' }, 400);
+    }
+
+    const requestIdHash = hash(requestId);
+    let receipt = null;
+    try {
+      receipt = await auth.getConnectionDeletionReceipt(requestIdHash);
+    } catch {
+      return c.json({ deleted: false, error: 'Unable to verify the deletion request.' }, 503);
+    }
+
+    if (receipt?.status === 'completed') {
+      deleteCookie(c, INKWELL_SESSION_COOKIE, { path: '/' });
+      return c.json({ deleted: true, notionTokenRevoked: receipt.notionTokenRevoked });
+    }
+
+    const session = await requireInkwellSession(c);
+    if (!session) {
+      if (receipt?.status === 'pending' && receipt.userId) {
+        try {
+          if (!(await auth.hasInkwellUser(receipt.userId))) {
+            await auth.completeConnectionDeletionReceipt(requestIdHash);
+            deleteCookie(c, INKWELL_SESSION_COOKIE, { path: '/' });
+            return c.json({ deleted: true, notionTokenRevoked: receipt.notionTokenRevoked });
+          }
+        } catch {
+          return c.json({ deleted: false, error: 'Unable to finish the deletion request.' }, 503);
+        }
+      }
+      deleteCookie(c, INKWELL_SESSION_COOKIE, { path: '/' });
+      return c.json({ deleted: false, notionTokenRevoked: false }, 401);
+    }
+
+    if (receipt?.userId && receipt.userId !== session.user.id) {
+      return c.json({ deleted: false, error: 'Deletion request does not match this account.' }, 403);
+    }
+
+    if (!receipt) {
+      try {
+        receipt = await auth.createConnectionDeletionReceipt(requestIdHash, session.user.id);
+      } catch {
+        return c.json({ deleted: false, error: 'Unable to prepare the deletion request.' }, 503);
+      }
+      if (receipt.userId && receipt.userId !== session.user.id) {
+        return c.json({ deleted: false, error: 'Deletion request does not match this account.' }, 403);
+      }
+      if (receipt.status === 'completed') {
+        deleteCookie(c, INKWELL_SESSION_COOKIE, { path: '/' });
+        return c.json({ deleted: true, notionTokenRevoked: receipt.notionTokenRevoked });
+      }
+    }
+
+    let notionTokens;
+    try {
+      notionTokens = await auth.getNotionAccountTokens(session.user.id);
+    } catch {
+      return c.json({ deleted: false, error: 'Unable to verify the Notion connection.' }, 503);
+    }
+
+    // Stop queue workers from starting new Notion requests while deletion is
+    // pending. The token is still present for the revocation attempt below.
+    try {
+      await auth.revokeInstallation(session.user.id);
+    } catch {
+      return c.json({ deleted: false, error: 'Unable to pause the Notion connection for deletion.' }, 503);
+    }
+    const notionTokenRevoked = receipt.notionTokenRevoked || (
+      notionTokens?.accessToken
+        ? await revokeNotionToken(c.env, notionTokens.accessToken)
+        : false
+    );
+
+    try {
+      await auth.updateConnectionDeletionRevocation(requestIdHash, notionTokenRevoked);
+      await auth.completeConnectionDeletionReceipt(requestIdHash);
+    } catch {
+      return c.json({ deleted: false, notionTokenRevoked }, 500);
+    }
+
+    deleteCookie(c, INKWELL_SESSION_COOKIE, { path: '/' });
+    return c.json({ deleted: true, notionTokenRevoked });
   });
   
   /** Returns recent installation diagnostics. @param c - Hono context. @returns JSON response. */
   app.get('/logs', async (c) => {
-    const store = await readStore();
+    const session = await requireInkwellSession(c);
+    if (!session) return c.json({ error: 'Unauthorized' }, 401);
+    const installation = await auth.getActiveInstallation(session.user.id).catch(() => null);
+    if (!installation) return c.json({ logs: [] });
+    const store = await readInkwellSyncState(installation.id);
     return c.json({ logs: store.logs.slice(-100) });
   });
 }
