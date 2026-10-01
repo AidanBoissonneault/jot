@@ -77,6 +77,7 @@ export async function createNotionOAuthState(secret: string, generation: string)
 
 /** Verifies signed OAuth state and returns its generation, or null for invalid state. */
 export async function notionOAuthGenerationFromState(secret: string, state: string): Promise<string | null> {
+  if (state.length > 120) return null;
   const match = /^v1\.(0|[1-9]\d{0,18})\.([A-Za-z0-9_-]{32})\.([a-f0-9]{64})$/.exec(state);
   if (!match || BigInt(match[1]) > 9_223_372_036_854_775_807n) return null;
 

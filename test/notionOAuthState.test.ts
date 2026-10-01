@@ -18,4 +18,8 @@ describe('signed Notion OAuth state', () => {
     await expect(createNotionOAuthState('client-secret-test', '9223372036854775808'))
       .rejects.toThrow('Invalid OAuth generation.');
   });
+
+  it('rejects oversized state before verifying its signature', async () => {
+    await expect(notionOAuthGenerationFromState('client-secret-test', 'x'.repeat(121))).resolves.toBeNull();
+  });
 });
