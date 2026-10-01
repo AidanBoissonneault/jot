@@ -64,6 +64,7 @@ function handleConnectionDeletionMessage(message: InkwellRuntimeMessage) {
     void notionClient.abortConnectionDeletion().catch(() => undefined);
   } else if (message.type === 'inkwell.completeConnectionDeletion') {
     void notionClient.completeConnectionDeletion()
+      .catch(() => undefined)
       .finally(() => window.location.reload());
   }
 }

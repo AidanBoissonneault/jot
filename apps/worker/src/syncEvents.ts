@@ -33,10 +33,11 @@ export class SyncEventsDO {
           this.sessions.delete(id);
         });
       }, 25_000);
-      writer.closed.finally((): void => {
+      const removeSession = (): void => {
         clearInterval(heartbeat);
         this.sessions.delete(id);
-      });
+      };
+      void writer.closed.then(removeSession, removeSession);
       return new Response(readable, {
         headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no' },
       });
