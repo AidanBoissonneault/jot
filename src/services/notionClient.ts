@@ -2500,11 +2500,12 @@ export const notionClient = {
     stalePageIds: string[];
     aheadPageIds: string[];
     failedPageIds: string[];
+    newPageIds: string[];
   }> {
     const { pages, projects, syncConfig } = await readStorage();
 
     if (!syncConfig.connected) {
-      return { stalePageIds: [], aheadPageIds: [], failedPageIds: [] };
+      return { stalePageIds: [], aheadPageIds: [], failedPageIds: [], newPageIds: [] };
     }
 
     if (!syncQueueBelongsToActiveAccount(syncConfig)) {
@@ -2573,6 +2574,7 @@ export const notionClient = {
       stalePageIds: response.stalePageIds ?? [],
       aheadPageIds: response.aheadPageIds ?? [],
       failedPageIds: response.failedPageIds ?? [],
+      newPageIds: response.newPageIds ?? [],
     };
   },
 
@@ -2592,12 +2594,13 @@ export const notionClient = {
     }
 
     const validation = options.force
-      ? { stalePageIds: [], aheadPageIds: [] }
+      ? { stalePageIds: [], aheadPageIds: [], newPageIds: [] }
       : await this.validateNotionCache();
     if (
       !options.force &&
       !validation.stalePageIds.length &&
-      !validation.aheadPageIds.length
+      !validation.aheadPageIds.length &&
+      !validation.newPageIds.length
     ) {
       return {
         currentProjectId,

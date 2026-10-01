@@ -245,7 +245,10 @@ export function createProjectDatabaseHelpers({
       }
 
       storeProjectPage(store, database, project, row);
-      const children = await listAllBlockChildren(store, row.id).catch(() => []);
+      // Abort the reload if any project row cannot be read. Returning a partial
+      // snapshot would make the client replace a complete local workspace with
+      // an incomplete one after a transient Notion failure.
+      const children = await listAllBlockChildren(store, row.id);
       const stateBlock = children.find(
         (block) =>
           block.type === 'toggle' && !block.archived && toggleTitle(block) === 'Project State',

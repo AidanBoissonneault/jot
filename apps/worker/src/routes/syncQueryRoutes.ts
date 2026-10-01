@@ -91,14 +91,20 @@ export function registerSyncQueryRoutes(app: Hono<{ Bindings: WorkerEnv }>): voi
     }
   
     // Fetch stale + version info from notion_block_sync
+    const knownPageIds = new Set(
+      (Array.isArray(pages) ? pages : [])
+        .map((page) => page?.id)
+        .filter((id): id is string => typeof id === 'string'),
+    );
     const { data: syncRows } = await supabase
       .from('notion_block_sync')
-      .select('local_id, local_version, is_stale, status')
+      .select('local_id, local_version, is_stale, status, entity_type')
       .eq('installation_id', store.installationId);
   
     const stalePageIds: string[] = [];
     const aheadPageIds: string[] = [];
     const failedPageIds: string[] = [];
+    const newPageIds: string[] = [];
     const serverVersions: Record<string, number> = {};
   
     for (const row of syncRows ?? []) {
@@ -114,6 +120,13 @@ export function registerSyncQueryRoutes(app: Hono<{ Bindings: WorkerEnv }>): voi
       ) {
         aheadPageIds.push(row.local_id);
       }
+      if (
+        row.status === 'synced' &&
+        (row.entity_type === 'page' || row.entity_type === 'block_op') &&
+        !knownPageIds.has(row.local_id)
+      ) {
+        newPageIds.push(row.local_id);
+      }
     }
   
     return c.json({
@@ -122,6 +135,7 @@ export function registerSyncQueryRoutes(app: Hono<{ Bindings: WorkerEnv }>): voi
       uncachedProjectIds: result.uncachedProjectIds,
       uncachedPageIds: result.uncachedPageIds,
       failedPageIds,
+      newPageIds,
       stalePageIds,
       aheadPageIds,
       serverVersions,

@@ -94,18 +94,44 @@ export const useInkwellStore = defineStore('inkwell', () => {
 
       if (!hydrated) {
         const validateResult = isOnline.value
-          ? await notionClient.validateNotionCache().catch(() => ({ stalePageIds: [], aheadPageIds: [] }))
-          : { stalePageIds: [], aheadPageIds: [] };
+          ? await notionClient.validateNotionCache().catch(() => ({
+              stalePageIds: [],
+              aheadPageIds: [],
+              failedPageIds: [],
+              newPageIds: [],
+            }))
+          : { stalePageIds: [], aheadPageIds: [], failedPageIds: [], newPageIds: [] };
         stalePageIds.value = validateResult.stalePageIds;
         aheadPageIds.value = validateResult.aheadPageIds;
-        syncConfig.value = await notionClient.getSyncConfig();
-        projects.value = await notionClient.listProjects();
-        const storedProjectId = await notionClient.getCurrentProjectId();
-        currentProjectId.value = projects.value.some(
-          (project) => project.id === storedProjectId,
-        )
-          ? storedProjectId
-          : projects.value[0]?.id ?? '';
+
+        let refreshedForNewPages = false;
+        if (
+          validateResult.newPageIds.length &&
+          await notionClient.pendingSyncEventCount() === 0
+        ) {
+          try {
+            const reloaded = await notionClient.reloadFromNotion({ force: true });
+            applyReloadedSnapshot(reloaded);
+            stalePageIds.value = [];
+            aheadPageIds.value = [];
+            refreshedForNewPages = true;
+          } catch (error) {
+            errorMessage.value = error instanceof Error
+              ? `Couldn't load new pages from Notion. ${error.message}`
+              : "Couldn't load new pages from Notion.";
+          }
+        }
+
+        if (!refreshedForNewPages) {
+          syncConfig.value = await notionClient.getSyncConfig();
+          projects.value = await notionClient.listProjects();
+          const storedProjectId = await notionClient.getCurrentProjectId();
+          currentProjectId.value = projects.value.some(
+            (project) => project.id === storedProjectId,
+          )
+            ? storedProjectId
+            : projects.value[0]?.id ?? '';
+        }
       }
 
       await loadCurrentPage();

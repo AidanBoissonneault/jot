@@ -162,6 +162,8 @@ export type SyncValidationResponse = {
   clearSelectedParentPage?: boolean;
   uncachedPageIds?: string[];
   uncachedProjectIds?: string[];
+  /** Pages known by the server but missing from this extension's local snapshot. */
+  newPageIds?: string[];
   failedPageIds?: string[];
   stalePageIds?: string[];
   aheadPageIds?: string[];
