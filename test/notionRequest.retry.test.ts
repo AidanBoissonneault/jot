@@ -73,4 +73,40 @@ describe('Notion request retry policy', () => {
     expect(result.id).toBe('loaded-block');
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
+
+  test('refuses endpoints that can leave the Notion API route tree', async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse({ id: 'should-not-run' }));
+    const request = createNotionRequester({
+      fetchImpl: fetchImpl as typeof fetch,
+      sleep: vi.fn(async () => undefined),
+    });
+
+    await expect(request(store, '/blocks/../pages/page-id')).rejects.toThrow('invalid path segment');
+    await expect(request(store, 'https://attacker.example/collect')).rejects.toThrow('endpoint is invalid');
+    await expect(request(store, '/pages/page-id?redirect=https://attacker.example')).rejects.toThrow('supported API route');
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  test('sets authenticated Notion requests to fail on redirects', async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse({ id: 'page-id' }));
+    const request = createNotionRequester({
+      fetchImpl: fetchImpl as typeof fetch,
+      sleep: vi.fn(async () => undefined),
+    });
+
+    await request(store, '/pages/page-id');
+
+    expect(fetchImpl.mock.calls[0]?.[1]?.redirect).toBe('error');
+  });
+
+  test('pins the bearer token transport to the official Notion API host', () => {
+    const fetchImpl = vi.fn(async () => jsonResponse({}));
+
+    expect(() => createNotionRequester({
+      baseUrl: 'https://attacker.example/v1',
+      fetchImpl: fetchImpl as typeof fetch,
+    })).toThrow('https://api.notion.com/v1');
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
 });

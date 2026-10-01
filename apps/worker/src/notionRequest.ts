@@ -100,6 +100,8 @@ export function createNotionRequester({
     throw new Error('A fetch implementation is required for Notion requests.');
   }
 
+  const apiBase = parseNotionApiBase(baseUrl);
+
   const limiter = createRateLimiter({
     requestsPerSecond,
     sleep,
@@ -122,6 +124,8 @@ export function createNotionRequester({
       throw new Error('A connected Notion token is required.');
     }
 
+    const requestUrl = notionApiUrl(apiBase, endpoint);
+
     const method = (init.method ?? 'GET').toUpperCase();
     const canRetryAmbiguousFailure = isSafeToRetry(method, endpoint);
     let attempt = 0;
@@ -130,7 +134,8 @@ export function createNotionRequester({
       await limiter.waitForTurn();
 
       try {
-        const response = await fetchImpl(`${baseUrl}${endpoint}`, {
+        const response = await fetchImpl(requestUrl, {
+          redirect: 'error',
           method: init.method ?? 'GET',
           headers: {
             Authorization: `Bearer ${store.tokens.access_token}`,
@@ -201,7 +206,10 @@ export async function uploadFileToNotion(
     throw new Error('A connected Notion token is required.');
   }
 
-  const sessionRes = await fetchImpl(`${baseUrl}/file_uploads`, {
+  const apiBase = parseNotionApiBase(baseUrl);
+
+  const sessionRes = await fetchImpl(notionApiUrl(apiBase, '/file_uploads'), {
+    redirect: 'error',
     method: 'POST',
     headers: {
       Authorization: `Bearer ${store.tokens.access_token}`,
@@ -228,7 +236,8 @@ export async function uploadFileToNotion(
   const body = new FormData();
   body.append('file', new Blob([data], { type: mimeType }), filename);
 
-  const uploadRes = await fetchImpl(`${baseUrl}/file_uploads/${id}/send`, {
+  const uploadRes = await fetchImpl(notionApiUrl(apiBase, `/file_uploads/${id}/send`), {
+    redirect: 'error',
     method: 'POST',
     headers: {
       Authorization: `Bearer ${store.tokens.access_token}`,
@@ -249,6 +258,70 @@ export async function uploadFileToNotion(
   }
 
   return id;
+}
+
+interface NotionApiBase {
+  origin: string;
+  pathname: string;
+}
+
+/** Validates the configured API base once before attaching any bearer token. */
+function parseNotionApiBase(baseUrl: string): NotionApiBase {
+  let url: URL;
+  try {
+    url = new URL(baseUrl);
+  } catch {
+    throw new Error('The Notion API base URL is invalid.');
+  }
+  if (
+    url.origin !== 'https://api.notion.com' ||
+    url.pathname.replace(/\/$/, '') !== '/v1' ||
+    url.protocol !== 'https:' ||
+    url.username ||
+    url.password ||
+    url.search ||
+    url.hash ||
+    url.pathname === '/'
+  ) {
+    throw new Error('The Notion API base URL must be https://api.notion.com/v1.');
+  }
+  return { origin: url.origin, pathname: url.pathname.replace(/\/$/, '') };
+}
+
+/** Keeps every authenticated request inside the configured API path. */
+function notionApiUrl(base: NotionApiBase, endpoint: string): string {
+  if (
+    !endpoint.startsWith('/') ||
+    endpoint.startsWith('//') ||
+    endpoint.includes('\\') ||
+    endpoint.includes('#') ||
+    /[\u0000-\u001f\u007f]/.test(endpoint)
+  ) {
+    throw new Error('The Notion API endpoint is invalid.');
+  }
+
+  const [path, ...queryParts] = endpoint.split('?');
+  const segments = path.slice(1).split('/');
+  if (segments.some((segment) => !/^[A-Za-z0-9_-]+$/.test(segment))) {
+    throw new Error('The Notion API endpoint contains an invalid path segment.');
+  }
+  const isResource = /^\/(?:pages|blocks|databases|data_sources|views)\/[A-Za-z0-9_-]+$/.test(path);
+  const isBlockChildren = /^\/blocks\/[A-Za-z0-9_-]+\/children$/.test(path);
+  const isDataSourceQuery = /^\/data_sources\/[A-Za-z0-9_-]+\/query$/.test(path);
+  const validPath = new Set([
+    '/search', '/pages', '/blocks', '/databases', '/data_sources', '/views', '/file_uploads',
+  ]).has(path) || isResource || isBlockChildren || isDataSourceQuery ||
+    /^\/file_uploads\/[A-Za-z0-9_-]+\/send$/.test(path);
+  const queryAllowed = path === '/views' || isBlockChildren;
+  if (!validPath || (queryParts.length > 0 && !queryAllowed)) {
+    throw new Error('The Notion API endpoint is not a supported API route.');
+  }
+  const query = queryParts.length ? `?${queryParts.join('?')}` : '';
+  const url = new URL(`${base.pathname}${path}${query}`, base.origin);
+  if (url.origin !== base.origin || !url.pathname.startsWith(`${base.pathname}/`)) {
+    throw new Error('The Notion API endpoint escapes the configured API path.');
+  }
+  return url.toString();
 }
 
 /**
