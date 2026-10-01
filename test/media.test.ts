@@ -2,6 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { InkwellYoutube, youtubeEmbedUrl } from '@/src/extensions/media';
 
 describe('media extensions', () => {
+  it('does not treat hostnames that only end with youtu.be as YouTube links', () => {
+    expect(youtubeEmbedUrl('https://notyoutu.be/dQw4w9WgXcQ')).toBe('');
+  });
+
   it('normalizes YouTube URLs to privacy-enhanced embed URLs', () => {
     expect(youtubeEmbedUrl('https://www.youtube.com/watch?v=dQw4w9WgXcQ')).toBe(
       'https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ?rel=1',

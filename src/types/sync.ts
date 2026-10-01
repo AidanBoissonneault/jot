@@ -18,6 +18,7 @@ export type SyncStatus = Exclude<SaveStatus, 'idle' | 'saving'>;
 /** Describes the current authentication and Notion connection state. */
 export type SyncSessionResponse = {
   authenticated?: boolean;
+  userId?: string;
   userName?: string;
   userEmail?: string;
   connected: boolean;

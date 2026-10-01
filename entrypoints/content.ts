@@ -18,7 +18,7 @@ const LARGE_TEXT_PX = 22;
 type HeadingLevel = 1 | 2 | 3 | 4 | 5 | 6;
 
 export default defineContentScript({
-  matches: ['<all_urls>'],
+  matches: ['http://*/*', 'https://*/*'],
   allFrames: true,
   main() {
     let selectedPayload: CaptureSelectionMessage['payload'] | null = null;
@@ -495,8 +495,10 @@ export default defineContentScript({
       event.preventDefault();
     });
 
-    button.addEventListener('click', async () => {
-      if (!selectedPayload) {
+    button.addEventListener('click', async (event) => {
+      // Page scripts can see this injected DOM button and call click() on it.
+      // Only a real user gesture may forward selected page text to Inkwell.
+      if (!event.isTrusted || !selectedPayload) {
         return;
       }
 
@@ -518,7 +520,7 @@ export default defineContentScript({
     document.addEventListener(
       'dragstart',
       (event) => {
-        if (!event.dataTransfer) {
+        if (!event.isTrusted || !event.dataTransfer) {
           return;
         }
 

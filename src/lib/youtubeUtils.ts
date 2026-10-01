@@ -37,7 +37,7 @@ export function youtubeVideoInfo(value: string): { id: string; start: number } |
     const host = url.hostname.toLowerCase();
     let id = '';
 
-    if (host.endsWith('youtu.be')) {
+    if (host === 'youtu.be' || host.endsWith('.youtu.be')) {
       id = url.pathname.split('/').filter(Boolean)[0] ?? '';
     } else if (
       host === 'youtube.com' ||

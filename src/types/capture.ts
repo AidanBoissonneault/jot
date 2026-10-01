@@ -98,6 +98,10 @@ export type ProjectPage = {
 export type SyncConfig = {
   serverUrl: string;
   authenticated?: boolean;
+  /** Current server-authenticated Inkwell account identifier. */
+  userId?: string;
+  /** Account that owns local documents and sync work; null means legacy data needs explicit assignment. */
+  syncQueueOwnerUserId?: string | null;
   userName?: string;
   userEmail?: string;
   workspaceId?: string;

@@ -15,14 +15,12 @@ export default defineConfig({
     version: '0.1.0',
     permissions: [
       'storage',
-      'activeTab',
       'sidePanel',
-      'tabs',
       'audioCapture',
       'clipboardRead',
       'clipboardWrite',
     ],
-    host_permissions: ['<all_urls>'],
+    host_permissions: ['http://*/*', 'https://*/*'],
     content_security_policy: {
       extension_pages:
         `script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; frame-src ${frameSrc};`,

@@ -5,10 +5,10 @@ import { Audio } from '@tiptap/extension-audio';
 import { NodeSelection } from '@tiptap/pm/state';
 import { INKWELL_IMAGE_MOVE_MIME, rememberInkwellImageMovePayload } from '@/src/extensions/inkwellImageMove';
 import { notionClient } from '@/src/services/notionClient';
+import { cleanSyncServerUrl } from '@/src/lib/syncServerUrl';
 import { youtubeEmbedUrl } from '@/src/lib/youtubeUtils';
 export { youtubeEmbedUrl } from '@/src/lib/youtubeUtils';
 
-const DEFAULT_SYNC_SERVER_URL = 'http://localhost:8787';
 const YOUTUBE_ALLOW =
   'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share';
 
@@ -442,17 +442,11 @@ async function setYoutubeIframeSource(iframe: HTMLIFrameElement, src: string) {
 
 async function youtubeProxyEmbedUrl(src: string): Promise<string> {
   const syncConfig = await notionClient.getSyncConfig();
-  const serverUrl = cleanServerUrl(syncConfig.serverUrl || DEFAULT_SYNC_SERVER_URL);
+  const serverUrl = cleanSyncServerUrl(syncConfig.serverUrl);
   const url = new URL('/youtube/embed', serverUrl);
   url.searchParams.set('src', src);
   return url.toString();
 }
-
-function cleanServerUrl(value: string) {
-  return value.trim().replace(/\/+$/, '') || DEFAULT_SYNC_SERVER_URL;
-}
-
-
 
 function normalizeImageWidth(value: unknown): string {
   const width = String(value ?? '').trim();

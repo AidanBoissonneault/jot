@@ -6,18 +6,21 @@ import type {
   ConsumeHeadingDragMessage,
   ConsumeTextDragMessage,
 } from '@/src/types/messages';
+import { parseCaptureSelectionPayload } from '@/src/lib/capturePayload';
 
 const INKWELL_DRAG_MIME = 'application/x-inkwell-capture';
 const INKWELL_HEADING_DRAG_MIME = 'application/x-inkwell-heading-capture';
 const INKWELL_CAPTURE_DATA_ATTR = 'data-inkwell-capture';
+const MAX_CAPTURE_DRAG_DATA_CHARS = 1024 * 1024;
 
 /** Reads a selection payload from custom drag data or its embedded HTML fallback. */
 export function readInkwellDropPayload(event: DragEvent): CaptureSelectionPayload | null {
   const rawPayload = event.dataTransfer?.getData(INKWELL_DRAG_MIME);
 
-  if (rawPayload) {
+  if (rawPayload && rawPayload.length <= MAX_CAPTURE_DRAG_DATA_CHARS) {
     try {
-      return JSON.parse(rawPayload) as CaptureSelectionPayload;
+      const parsed = parseCaptureSelectionPayload(JSON.parse(rawPayload) as unknown);
+      if (parsed) return parsed;
     } catch {
       // Cross-origin drags can expose the standard HTML flavor while hiding
       // or rewriting a custom MIME flavor. Try the embedded HTML payload.
@@ -26,12 +29,13 @@ export function readInkwellDropPayload(event: DragEvent): CaptureSelectionPayloa
 
   try {
     const html = event.dataTransfer?.getData('text/html');
-    if (!html) return null;
+    if (!html || html.length > MAX_CAPTURE_DRAG_DATA_CHARS) return null;
     const document = new DOMParser().parseFromString(html, 'text/html');
     const embedded = document
       .querySelector(`[${INKWELL_CAPTURE_DATA_ATTR}]`)
       ?.getAttribute(INKWELL_CAPTURE_DATA_ATTR);
-    return embedded ? (JSON.parse(embedded) as CaptureSelectionPayload) : null;
+    if (!embedded || embedded.length > MAX_CAPTURE_DRAG_DATA_CHARS) return null;
+    return parseCaptureSelectionPayload(JSON.parse(embedded) as unknown);
   } catch {
     return null;
   }

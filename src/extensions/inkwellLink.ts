@@ -91,6 +91,11 @@ export function safeInkwellSourceUrl(payload: SourceOpenPayload) {
   );
 }
 
+/** Allows ordinary editor links to open only web URLs. */
+export function safeExternalUrl(value: string) {
+  return safeHttpUrl(value);
+}
+
 function isStoredInkwellSource(value: unknown): value is StoredInkwellSource {
   if (!value || typeof value !== 'object') {
     return false;
@@ -160,6 +165,7 @@ function defaultTextFragmentLink(sourceUrl: string, text: string) {
 function safeHttpUrl(value: string) {
   try {
     const url = new URL(value);
+    if (url.username || url.password) return null;
     return url.protocol === 'http:' || url.protocol === 'https:'
       ? url.toString()
       : null;
