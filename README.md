@@ -82,3 +82,7 @@ Apply `apps/worker/migrations/009_serialize_connection_deletion.sql` after migra
 deploying the latest Worker. It serializes OAuth commits with Delete connection, so deletion revokes
 the current Notion token and advances the global signed OAuth generation when deletion completes.
 OAuth flows already in progress must restart after a wipe; a new flow after completion can connect.
+
+Apply `apps/worker/migrations/010_serialize_notion_logout.sql` after migration 009 and before
+deploying the updated logout route. It serializes logout with OAuth callbacks, disables sync first,
+and clears server-side Notion tokens and the current session together. Local documents remain intact.
