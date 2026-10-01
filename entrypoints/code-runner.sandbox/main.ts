@@ -1,9 +1,9 @@
-type RunRequest = {
-  type: 'inkwell.codeRunner.run';
-  token: string;
-  language: 'javascript' | 'html';
-  code: string;
-};
+import { safeHtmlPreviewDocument } from '@/src/lib/safeHtmlPreview';
+import {
+  isCodeRunnerRequest,
+  MAX_CODE_OUTPUT_LENGTH,
+  MAX_CODE_OUTPUT_MESSAGES,
+} from '@/src/lib/codeRunnerSecurity';
 
 type WorkerResponse = {
   type: 'log' | 'result' | 'error' | 'complete';
@@ -19,55 +19,105 @@ let timeoutId: number | undefined;
 
 applyBaseStyles();
 
-window.addEventListener('message', (event: MessageEvent<RunRequest>) => {
-  if (event.source !== window.parent || event.data?.type !== 'inkwell.codeRunner.run') {
+window.addEventListener('message', (event: MessageEvent<unknown>) => {
+  if (event.source !== window.parent || !isCodeRunnerRequest(event.data)) {
     return;
   }
 
   activeToken = event.data.token;
+  const runToken = activeToken;
   cleanupWorker();
 
   if (!output) {
-    complete();
+    complete(runToken);
     return;
   }
 
   output.replaceChildren();
+  document.body.classList.toggle('html-preview', event.data.language === 'html');
 
   if (event.data.language === 'html') {
-    renderHtml(event.data.code);
+    renderHtml(event.data.code, runToken);
     return;
   }
 
-  runJavaScript(event.data.code);
+  runJavaScript(event.data.code, runToken);
 });
 
-function runJavaScript(code: string) {
+function runJavaScript(code: string, runToken: string) {
   if (!output) {
     return;
   }
 
-  const workerBlob = new Blob([javascriptWorkerSource()], { type: 'text/javascript' });
-  const workerUrl = URL.createObjectURL(workerBlob);
-  const worker = new Worker(workerUrl);
+  let worker: Worker;
+  const workerUrl = URL.createObjectURL(
+    new Blob([javascriptWorkerSource()], { type: 'text/javascript' }),
+  );
+  try {
+    worker = new Worker(workerUrl);
+  } catch {
+    URL.revokeObjectURL(workerUrl);
+    appendLine('The code runner could not start.', 'error');
+    announceSize(runToken);
+    complete(runToken);
+    return;
+  }
   URL.revokeObjectURL(workerUrl);
   activeWorker = worker;
+  let outputMessageCount = 0;
 
   worker.addEventListener('message', (event: MessageEvent<WorkerResponse>) => {
     const message = event.data;
+    if (
+      activeWorker !== worker ||
+      !message ||
+      typeof message !== 'object' ||
+      !['log', 'result', 'error', 'complete'].includes(message.type)
+    ) {
+      return;
+    }
+
+    if (message.type !== 'complete') {
+      outputMessageCount += 1;
+      if (outputMessageCount > MAX_CODE_OUTPUT_MESSAGES) {
+        appendLine('Output stopped after 100 messages.', 'error');
+        cleanupWorker();
+        announceSize(runToken);
+        complete(runToken);
+        return;
+      }
+    }
 
     if (message.type === 'log') {
-      appendLine(message.values?.join(' ') ?? '', `log-${message.level ?? 'log'}`);
-      announceSize();
+      const values: string[] = [];
+      let remainingOutputLength = MAX_CODE_OUTPUT_LENGTH;
+      if (Array.isArray(message.values)) {
+        for (const value of message.values) {
+          if (remainingOutputLength <= 0) break;
+          if (typeof value !== 'string') continue;
+          const boundedValue = value.slice(0, remainingOutputLength);
+          values.push(boundedValue);
+          remainingOutputLength -= boundedValue.length;
+        }
+      }
+      const level = ['log', 'info', 'warn', 'error'].includes(message.level ?? '')
+        ? message.level
+        : 'log';
+      appendLine(values.join(' ').slice(0, MAX_CODE_OUTPUT_LENGTH), `log-${level}`);
+      announceSize(runToken);
       return;
     }
 
     if (message.type === 'result' && message.value !== 'undefined') {
-      appendLine(message.value ?? '', 'result');
+      appendLine(typeof message.value === 'string'
+        ? message.value.slice(0, MAX_CODE_OUTPUT_LENGTH)
+        : '', 'result');
     }
 
     if (message.type === 'error') {
-      appendLine(message.value ?? 'Execution failed.', 'error');
+      appendLine(typeof message.value === 'string'
+        ? message.value.slice(0, MAX_CODE_OUTPUT_LENGTH)
+        : 'Execution failed.', 'error');
     }
 
     if (message.type === 'complete') {
@@ -75,29 +125,31 @@ function runJavaScript(code: string) {
         appendLine('Completed without output.', 'empty');
       }
       cleanupWorker();
-      announceSize();
-      complete();
+      announceSize(runToken);
+      complete(runToken);
     }
   });
 
   worker.addEventListener('error', (event) => {
+    if (activeWorker !== worker) return;
     appendLine(event.message || 'Execution failed.', 'error');
     cleanupWorker();
-    announceSize();
-    complete();
+    announceSize(runToken);
+    complete(runToken);
   });
 
   timeoutId = window.setTimeout(() => {
+    if (activeWorker !== worker) return;
     appendLine('Execution stopped after 5 seconds.', 'error');
     cleanupWorker();
-    announceSize();
-    complete();
+    announceSize(runToken);
+    complete(runToken);
   }, 5000);
 
   worker.postMessage({ code });
 }
 
-function renderHtml(code: string) {
+function renderHtml(code: string, runToken: string) {
   if (!output) {
     return;
   }
@@ -105,16 +157,18 @@ function renderHtml(code: string) {
   document.body.classList.add('html-preview');
   const preview = document.createElement('iframe');
   preview.title = 'HTML preview';
-  preview.sandbox.add('allow-scripts');
-  preview.srcdoc = code;
+  preview.setAttribute('sandbox', '');
+  preview.srcdoc = safeHtmlPreviewDocument(code);
   preview.addEventListener('load', () => {
-    announceSize();
-    complete();
+    if (!output?.contains(preview)) return;
+    announceSize(runToken);
+    complete(runToken);
   }, { once: true });
   output.append(preview);
   window.setTimeout(() => {
-    announceSize();
-    complete();
+    if (!output.contains(preview)) return;
+    announceSize(runToken);
+    complete(runToken);
   }, 400);
 }
 
@@ -136,36 +190,41 @@ function cleanupWorker() {
   activeWorker = undefined;
 }
 
-function announceSize() {
+function announceSize(token = activeToken) {
   window.parent.postMessage({
     type: 'inkwell.codeRunner.resize',
-    token: activeToken,
+    token,
     height: Math.ceil(document.documentElement.scrollHeight),
   }, '*');
 }
 
-function complete() {
+function complete(token = activeToken) {
   window.parent.postMessage({
     type: 'inkwell.codeRunner.complete',
-    token: activeToken,
+    token,
   }, '*');
 }
 
 function javascriptWorkerSource() {
   return String.raw`
+    const MAX_OUTPUT_LENGTH = ${MAX_CODE_OUTPUT_LENGTH};
+    const limitOutput = (value) => value.length > MAX_OUTPUT_LENGTH
+      ? value.slice(0, MAX_OUTPUT_LENGTH) + '… (truncated)'
+      : value;
+
     const serialize = (value) => {
-      if (typeof value === 'string') return value;
+      if (typeof value === 'string') return limitOutput(value);
       if (typeof value === 'undefined') return 'undefined';
-      if (typeof value === 'function') return value.toString();
-      if (value instanceof Error) return value.stack || value.message;
+      if (typeof value === 'function') return limitOutput(value.toString());
+      if (value instanceof Error) return limitOutput(value.stack || value.message);
       try {
         const json = JSON.stringify(value, (_key, item) =>
           typeof item === 'bigint' ? item.toString() + 'n' : item,
           2,
         );
-        return json === undefined ? String(value) : json;
+        return limitOutput(json === undefined ? String(value) : json);
       } catch {
-        return String(value);
+        return limitOutput(String(value));
       }
     };
 
@@ -173,9 +232,21 @@ function javascriptWorkerSource() {
       console[level] = (...values) => self.postMessage({
         type: 'log',
         level,
-        values: values.map(serialize),
+        values: serializeLogArguments(values),
       });
     }
+
+    const serializeLogArguments = (values) => {
+      const serialized = [];
+      let remaining = MAX_OUTPUT_LENGTH;
+      for (const value of values.slice(0, 20)) {
+        if (remaining <= 0) break;
+        const bounded = serialize(value).slice(0, remaining);
+        serialized.push(bounded);
+        remaining -= bounded.length;
+      }
+      return serialized;
+    };
 
     self.onmessage = async ({ data }) => {
       const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;

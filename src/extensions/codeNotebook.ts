@@ -10,6 +10,7 @@ import {
   codeLanguageLabel,
   normalizeCodeLanguage,
 } from '@/src/lib/codeLanguages';
+import { MAX_CODE_RUN_LENGTH } from '@/src/lib/codeRunnerSecurity';
 
 type RunnerMessage = {
   type?: string;
@@ -183,11 +184,17 @@ export const CodeNotebook = CodeBlock.extend({
         }
 
         clearOutput();
+        output.hidden = false;
+        clearButton.hidden = false;
+        const codeText = currentNode.textContent;
+        if (codeText.length > MAX_CODE_RUN_LENGTH) {
+          output.append(document.createTextNode('Code previews are limited to 256 KB.'));
+          return;
+        }
+
         runnerToken = crypto.randomUUID();
         runButton.disabled = true;
         runButton.textContent = 'Running…';
-        output.hidden = false;
-        clearButton.hidden = false;
 
         const frame = document.createElement('iframe');
         frame.className = 'inkwell-code-runner';
@@ -199,7 +206,7 @@ export const CodeNotebook = CodeBlock.extend({
             type: 'inkwell.codeRunner.run',
             token: runnerToken,
             language,
-            code: currentNode.textContent,
+            code: codeText,
           }, '*');
         }, { once: true });
         output.append(frame);
