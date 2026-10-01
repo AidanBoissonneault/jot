@@ -40,6 +40,8 @@ export function markUnrecoverableTransientMedia(content: DocumentContent): Docum
 function sanitizeNode(node: DocumentContent): DocumentContent | undefined {
   if (isUploadableMediaNode(node)) {
     const attrs = node.attrs ?? {};
+    const syncAttrs = { ...attrs };
+    delete syncAttrs.localSrc;
     const src = String(attrs.src ?? '');
     const hasUpload = Boolean(attrs.notionFileUploadId);
     const isTransient = isTransientUrl(src);
@@ -51,7 +53,7 @@ function sanitizeNode(node: DocumentContent): DocumentContent | undefined {
     return {
       ...node,
       attrs: {
-        ...attrs,
+        ...syncAttrs,
         ...(isTransient && hasUpload && /^data:/i.test(src) ? { src: '' } : {}),
         ...(isTransient && hasUpload ? { uploadState: 'done' } : {}),
       },
@@ -81,11 +83,13 @@ function mergeNode(localNode: DocumentContent, syncedNode: DocumentContent): Doc
     const syncedSrc = String(syncedAttrs.src ?? '');
 
     if (isHttpUrl(syncedSrc)) {
+      const localSource = localImageSource(localNode);
       return {
         ...localNode,
         attrs: {
           ...localNode.attrs,
           src: syncedSrc,
+          ...(localSource ? { localSrc: localSource } : {}),
           uploadState: 'done',
         },
       };
@@ -215,4 +219,12 @@ function nodeId(node: DocumentContent) {
 function mediaSrc(node: DocumentContent) {
   const value = node.attrs?.src;
   return typeof value === 'string' && value ? value : undefined;
+}
+
+function localImageSource(node: DocumentContent) {
+  if (!node.attrs?.notionFileUploadId) return undefined;
+  const localSrc = String(node.attrs.localSrc ?? '');
+  if (/^data:image\//i.test(localSrc)) return localSrc;
+  const src = String(node.attrs.src ?? '');
+  return /^data:image\//i.test(src) ? src : undefined;
 }

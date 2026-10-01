@@ -22,6 +22,11 @@ export const InkwellImage = Image.extend({
       notionFileUploadId: { default: '' },
       notionBlockId: { default: '' },
       filename: { default: '' },
+      localSrc: {
+        default: '',
+        parseHTML: () => '',
+        renderHTML: () => ({}),
+      },
       width: {
         default: '',
         parseHTML: (element: HTMLElement) => element.getAttribute('data-width') ?? '',
@@ -71,7 +76,7 @@ export const InkwellImage = Image.extend({
         }
 
         if (!fileUploadId && !notionBlockId) {
-          showImageFallback(wrapper, img, failedSrc);
+          if (!restoreLocalImageSource()) showImageFallback(wrapper, img, failedSrc);
           return;
         }
 
@@ -109,12 +114,28 @@ export const InkwellImage = Image.extend({
             }
           })
           .catch(() => {
-            showImageFallback(wrapper, img, failedSrc);
+            if (!restoreLocalImageSource()) showImageFallback(wrapper, img, failedSrc);
           })
           .finally(() => {
             isRefreshing = false;
             wrapper.classList.remove('is-uploading');
           });
+      };
+
+      const restoreLocalImageSource = () => {
+        const localSrc = String(currentNode.attrs.localSrc ?? '');
+        const originalSrc = String(currentNode.attrs.src ?? '');
+        const hasStableUpload = Boolean(currentNode.attrs.notionFileUploadId);
+        const fallbackSrc = /^data:image\//i.test(localSrc)
+          ? localSrc
+          : hasStableUpload && /^data:image\//i.test(originalSrc)
+            ? originalSrc
+            : '';
+        if (!fallbackSrc) return false;
+
+        restoreImageElement(wrapper, img);
+        img.src = fallbackSrc;
+        return true;
       };
 
       img.addEventListener('error', onImageError);

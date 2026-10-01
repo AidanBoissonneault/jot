@@ -50,6 +50,25 @@ describe('media content helpers', () => {
     });
   });
 
+  it('keeps an uploaded image source locally after replacing its preview URL', () => {
+    const original = 'data:image/png;base64,YQ==';
+    const local = doc([
+      image({
+        src: original,
+        notionFileUploadId: 'upload-id',
+      }),
+    ]);
+    const synced = doc([image({ src: 'https://secure.notion-static.com/image.png?expires=1' })]);
+
+    const merged = mergeSyncedMediaContent(local, synced);
+    expect(merged.content?.[0].attrs).toMatchObject({
+      src: 'https://secure.notion-static.com/image.png?expires=1',
+      localSrc: original,
+      notionFileUploadId: 'upload-id',
+    });
+    expect(sanitizeMediaForSync(merged).content?.[0].attrs).not.toHaveProperty('localSrc');
+  });
+
   it('marks existing unsynced blob images as unrecoverable', () => {
     const content = markUnrecoverableTransientMedia(
       doc([image({ src: 'blob:chrome-extension://stale' })]),
