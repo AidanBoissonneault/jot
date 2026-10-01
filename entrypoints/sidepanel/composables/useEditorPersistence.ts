@@ -133,11 +133,13 @@ export function useEditorPersistence(
           return;
         }
 
-        lastAppliedContent = serializedContent;
-        await store.saveCurrentPageContent(content, {
+        const saved = await store.saveCurrentPageContent(content, {
           preserveLocalContent: true,
           title,
         });
+        if (saved && activePageId === currentPage.id && store.currentPage?.id === currentPage.id) {
+          lastAppliedContent = serializedContent;
+        }
       } while (
         shouldSaveAgainAfterCurrentSave &&
         editor.value &&
@@ -168,17 +170,44 @@ export function useEditorPersistence(
       return;
     }
 
-    lastAppliedContent = serializedContent;
-    await store.savePageContentSnapshot(page, content, {
+    const saved = await store.savePageContentSnapshot(page, content, {
       preserveLocalContent: true,
       title,
     });
+    if (saved && activePageId === page.id && store.currentPage?.id === page.id) {
+      lastAppliedContent = serializedContent;
+    }
   }
 
   /** Flushes any scheduled save and waits for the latest snapshot to persist. */
   async function flushEditorContent() {
     window.clearTimeout(saveTimer.value);
     await saveEditorContentOptimistically();
+  }
+
+  /** Replaces the visible editor snapshot after local documents have been deleted. */
+  function resetEditorToCurrentPage() {
+    window.clearTimeout(saveTimer.value);
+    saveTimer.value = undefined;
+    shouldSaveAgainAfterCurrentSave = false;
+    pendingSaveVersion += 1;
+
+    const page = store.currentPage;
+    if (!editor.value || !page) return;
+
+    const content = contentWithSyncConflictBlocks(
+      page.content,
+      page.id,
+      store.currentProject?.syncConflicts,
+    );
+    activePageId = page.id;
+    lastAppliedContent = JSON.stringify(page.content);
+    isApplyingStoredContent.value = true;
+    try {
+      editor.value.commands.setContent(content, { emitUpdate: false });
+    } finally {
+      isApplyingStoredContent.value = false;
+    }
   }
 
   /** Flushes local content and queued sync operations on panel exit. */
@@ -202,5 +231,6 @@ export function useEditorPersistence(
     handleVisibilityChange,
     saveEditorContentInBackground,
     saveEditorContentOptimistically,
+    resetEditorToCurrentPage,
   };
 }

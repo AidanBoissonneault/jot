@@ -2,14 +2,18 @@
 import { useEditor } from '@tiptap/vue-3';
 import StarterKit from '@tiptap/starter-kit';
 import { ref } from 'vue';
+import type { Editor } from '@tiptap/core';
 import type { Ref } from 'vue';
 import type { EditorView } from '@tiptap/pm/view';
+import { NodeSelection } from '@tiptap/pm/state';
 import { CodeNotebook } from '@/src/extensions/codeNotebook';
 import { InkwellBlockIds } from '@/src/extensions/inkwellBlockIds';
+import { notionClient } from '@/src/services/notionClient';
 import {
   decodeInkwellSource,
   INKWELL_SOURCE_ATTR,
   InkwellLink,
+  safeExternalUrl,
 } from '@/src/extensions/inkwellLink';
 import { MediaKit } from '@/src/extensions/media';
 import { InkwellSyncConflict } from '@/src/extensions/syncConflictBlock';
@@ -24,13 +28,12 @@ export interface InkwellEditorHandlers {
   showContextMenu: (view: EditorView, event: MouseEvent) => void;
 }
 
-/** Reactive state required by the editor lifecycle and debounced local saves. */
+/** Reactive state required by the editor lifecycle and block-boundary saves. */
 interface InkwellEditorOptions {
   editorStateVersion: Ref<number>;
   handlers: InkwellEditorHandlers;
   isApplyingStoredContent: Ref<boolean>;
   saveEditorContent: () => Promise<void>;
-  saveTimer: Ref<number | undefined>;
   resolveSyncConflict: (
     conflict: SyncContentConflict,
     content: DocumentContent,
@@ -43,10 +46,17 @@ export function useInkwellEditor({
   handlers,
   isApplyingStoredContent,
   saveEditorContent,
-  saveTimer,
   resolveSyncConflict,
 }: InkwellEditorOptions) {
   const shouldSkipNextUpdateSave = ref(false);
+  let focusedBlockKey: string | undefined;
+
+  function flushEditorSave() {
+    void saveEditorContent()
+      .then(() => notionClient.flushPendingSyncOps({ force: true }))
+      .catch(() => undefined);
+  }
+
   const editor = useEditor({
     extensions: [
       StarterKit.configure({
@@ -65,6 +75,9 @@ export function useInkwellEditor({
     content: {
       type: 'doc',
       content: [{ type: 'paragraph' }],
+    },
+    onCreate: ({ editor: createdEditor }) => {
+      focusedBlockKey = focusedBlockKeyForSelection(createdEditor.state.selection);
     },
     editorProps: {
       attributes: { 'aria-label': 'Project page editor' },
@@ -98,7 +111,9 @@ export function useInkwellEditor({
           return true;
         }
 
-        void browser.tabs.create({ active: true, url: anchor.href });
+        const safeUrl = safeExternalUrl(anchor.href);
+        if (!safeUrl) return true;
+        void browser.tabs.create({ active: true, url: safeUrl });
         return true;
       },
       handleDrop: (view, event) => handlers.handleDrop(view, event),
@@ -114,14 +129,27 @@ export function useInkwellEditor({
         shouldSkipNextUpdateSave.value = false;
         return;
       }
-
-      window.clearTimeout(saveTimer.value);
-      saveTimer.value = window.setTimeout(() => {
-        void saveEditorContent();
-      }, 450);
     },
-    onSelectionUpdate: () => {
+    onSelectionUpdate: ({ editor: activeEditor }) => {
       editorStateVersion.value += 1;
+      const nextBlockKey = focusedBlockKeyForSelection(activeEditor.state.selection);
+      const leftFocusedBlock =
+        focusedBlockKey !== undefined && nextBlockKey !== focusedBlockKey;
+      focusedBlockKey = nextBlockKey;
+
+      if (leftFocusedBlock && !isApplyingStoredContent.value) {
+        flushEditorSave();
+      }
+    },
+    onFocus: ({ editor: activeEditor }) => {
+      focusedBlockKey = focusedBlockKeyForSelection(activeEditor.state.selection);
+    },
+    onBlur: () => {
+      const hadFocusedBlock = focusedBlockKey !== undefined;
+      focusedBlockKey = undefined;
+      if (hadFocusedBlock && !isApplyingStoredContent.value) {
+        flushEditorSave();
+      }
     },
   });
 
@@ -137,6 +165,18 @@ export function useInkwellEditor({
   }
 
   return { editor, skipNextEditorUpdate, clearEditorUpdateSkip };
+}
+
+/** Identifies the block containing the selection head, including node selections. */
+function focusedBlockKeyForSelection(selection: Editor['state']['selection']): string {
+  if (selection instanceof NodeSelection) {
+    return `${selection.node.type.name}:${selection.from}`;
+  }
+
+  const head = selection.$head;
+  if (head.depth === 0) return `${head.node().type.name}:0`;
+  const block = head.node(head.depth);
+  return `${block.type.name}:${head.before(head.depth)}`;
 }
 
 function kebabCase(value: string): string {
