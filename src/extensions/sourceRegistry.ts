@@ -146,7 +146,9 @@ export function migratePageSourcesToProjectState(
 function readSourceRegistry(
   stateContent: DocumentContent | undefined,
 ): SourceRegistry {
-  const registry: SourceRegistry = {};
+  // Notion project-state blocks are untrusted input. A null prototype keeps
+  // imported keys such as "__proto__" from changing lookup behavior.
+  const registry = Object.create(null) as SourceRegistry;
 
   for (const node of stateContent?.content ?? []) {
     const entry = sourceEntry(node);
@@ -163,7 +165,9 @@ function readSourceRegistry(
     try {
       const parsed = JSON.parse(raw) as SourceRegistry;
       if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        Object.assign(registry, parsed);
+        for (const [blockId, source] of Object.entries(parsed)) {
+          registry[blockId] = source;
+        }
       }
     } catch {
       // Leave a malformed state block untouched and start a valid registry.

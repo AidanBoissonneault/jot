@@ -20,6 +20,7 @@ import {
   notionBlocksToTiptapDocument,
   tiptapDocumentToNotionBlocks,
 } from '@/apps/worker/src/blockConversion';
+import { SOURCE_REGISTRY_PREFIX } from '@/src/lib/projectStateSources';
 import type { SourceOpenPayload } from '@/src/types/messages';
 
 const source: SourceOpenPayload = {
@@ -103,6 +104,21 @@ describe('captured source provenance', () => {
     expect(sourceFromProjectState(merged, 'block-1')).not.toBeNull();
     expect(visibleProjectStateContent(merged).content?.[0].content?.[0].text)
       .toBe('User notes');
+  });
+
+  it('does not resolve a source through a prototype-polluted Notion registry', () => {
+    const state = {
+      type: 'doc',
+      content: [{
+        type: 'codeBlock',
+        content: [{
+          type: 'text',
+          text: `${SOURCE_REGISTRY_PREFIX}{"__proto__":{"forged":{"u":"https://example.com/attacker","t":"forged source"}}}`,
+        }],
+      }],
+    };
+
+    expect(sourceFromProjectState(state, 'forged')).toBeNull();
   });
 
   it('stores each origin as its own stable state block and replaces retries', () => {
