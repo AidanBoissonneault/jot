@@ -47,7 +47,11 @@ import type {
   SyncSessionResponse,
   SyncValidationResponse,
 } from '@/src/types/sync';
-import { markUnrecoverableTransientMedia, sanitizeMediaForSync } from '@/src/extensions/mediaContent';
+import {
+  markUnrecoverableTransientMedia,
+  preserveLocalMediaSources,
+  sanitizeMediaForSync,
+} from '@/src/extensions/mediaContent';
 import {
   addPendingProjectSyncEvent,
   addPendingProjectSourceSyncEvent,
@@ -1240,6 +1244,9 @@ async function syncPullPage(page: ProjectPage, options: { force?: boolean } = {}
       ? {
           ...page,
           ...response.page,
+          content: response.page.content
+            ? preserveLocalMediaSources(page.content, response.page.content)
+            : page.content,
           knownSyncVersion: page.serverSyncVersion ?? page.knownSyncVersion,
           syncMessage: response.message,
           syncState: response.status,
@@ -2638,7 +2645,8 @@ export const notionClient = {
       };
     }
 
-    const localConflictsByProjectId = new Map(localProjects.map((project) => [
+    const localStorageToPreserve = await readStorage();
+    const localConflictsByProjectId = new Map(localStorageToPreserve.projects.map((project) => [
       project.id,
       project.syncConflicts,
     ]));
@@ -2647,7 +2655,18 @@ export const notionClient = {
       const syncConflicts = localConflictsByProjectId.get(normalized.id);
       return syncConflicts?.length ? { ...normalized, syncConflicts } : normalized;
     }).sort(sortProjectsByUpdatedDesc);
-    const pages = response.pages.map(normalizeStoredPage);
+    const localPagesById = new Map(localStorageToPreserve.pages.map((page) => [page.id, page]));
+    const pages = response.pages.map((remotePage) => {
+      const normalized = normalizeStoredPage(remotePage);
+      const localPage = localPagesById.get(normalized.id);
+      return localPage
+        ? {
+            ...normalized,
+            content: preserveLocalMediaSources(localPage.content, normalized.content),
+            localRevision: localPage.localRevision ?? normalized.localRevision,
+          }
+        : normalized;
+    });
     const activePageIdsByProject = createCompatibleActivePageIds(
       projects,
       pages,
@@ -2656,7 +2675,6 @@ export const notionClient = {
     const nextCurrentProjectId = projects.some((project) => project.id === response.currentProjectId)
       ? response.currentProjectId ?? ''
       : projects[0]?.id ?? '';
-    const localStorageToPreserve = await readStorage();
     const localProjectsToPreserve = localStorageToPreserve.projects;
     await writeStorage({
       activePageIdsByProject,

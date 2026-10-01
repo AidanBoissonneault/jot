@@ -33,6 +33,16 @@ export function mergeSyncedMediaContent(
   return mergeNode(localContent, syncedContent);
 }
 
+/** Keeps embedded local media backups while replacing content with a Notion snapshot. */
+export function preserveLocalMediaSources(
+  localContent: DocumentContent,
+  syncedContent: DocumentContent,
+): DocumentContent {
+  const localMediaByIdentity = new Map<string, DocumentContent>();
+  collectLocalMedia(localContent, localMediaByIdentity);
+  return retainLocalMediaSources(syncedContent, localMediaByIdentity);
+}
+
 export function markUnrecoverableTransientMedia(content: DocumentContent): DocumentContent {
   return markNode(content);
 }
@@ -83,11 +93,16 @@ function mergeNode(localNode: DocumentContent, syncedNode: DocumentContent): Doc
     const syncedSrc = String(syncedAttrs.src ?? '');
 
     if (isHttpUrl(syncedSrc)) {
+      if (!mediaNodesShareIdentity(localNode, syncedNode)) return syncedNode;
       const localSource = localImageSource(localNode);
+      const localAttrs = localNode.attrs ?? {};
+      const identityAttrs = mediaIdentityAttributes(localAttrs, syncedAttrs);
       return {
         ...localNode,
         attrs: {
+          ...syncedAttrs,
           ...localNode.attrs,
+          ...identityAttrs,
           src: syncedSrc,
           ...(localSource ? { localSrc: localSource } : {}),
           uploadState: 'done',
@@ -104,6 +119,117 @@ function mergeNode(localNode: DocumentContent, syncedNode: DocumentContent): Doc
     ...localNode,
     content: mergeContent(localNode.content, syncedNode.content),
   };
+}
+
+function collectLocalMedia(
+  node: DocumentContent,
+  mediaByIdentity: Map<string, DocumentContent>,
+): void {
+  if (node.type === 'image') {
+    for (const identity of mediaIdentities(node)) {
+      mediaByIdentity.set(identity, node);
+    }
+  }
+  node.content?.forEach((child) => collectLocalMedia(child, mediaByIdentity));
+}
+
+function retainLocalMediaSources(
+  node: DocumentContent,
+  localMediaByIdentity: Map<string, DocumentContent>,
+): DocumentContent {
+  let nextNode = node;
+  if (node.type === 'image') {
+    const localNode = localMediaForSyncedNode(node, localMediaByIdentity);
+    const localSource = localNode ? embeddedLocalMediaSource(localNode) : undefined;
+    if (localSource) {
+      nextNode = {
+        ...node,
+        attrs: { ...node.attrs, localSrc: localSource },
+      };
+    }
+  }
+  if (!nextNode.content?.length) return nextNode;
+  return {
+    ...nextNode,
+    content: nextNode.content.map((child) =>
+      retainLocalMediaSources(child, localMediaByIdentity),
+    ),
+  };
+}
+
+function mediaIdentities(node: DocumentContent): string[] {
+  const attrs = node.attrs ?? {};
+  const identities: string[] = [];
+  const add = (kind: string, value: unknown) => {
+    if (typeof value === 'string' && value.trim()) identities.push(`${kind}:${value}`);
+  };
+  add('upload', attrs.notionFileUploadId);
+  add('block', attrs.notionBlockId);
+  add('inkwell', attrs.inkwellBlockId);
+  return identities;
+}
+
+function mediaNodesShareIdentity(localNode: DocumentContent, syncedNode: DocumentContent): boolean {
+  const localAttrs = localNode.attrs ?? {};
+  const syncedAttrs = syncedNode.attrs ?? {};
+  const localUploadId = nonEmptyString(localAttrs.notionFileUploadId);
+  const syncedUploadId = nonEmptyString(syncedAttrs.notionFileUploadId);
+  if (localUploadId && syncedUploadId) return localUploadId === syncedUploadId;
+
+  const localBlockId = nonEmptyString(localAttrs.notionBlockId);
+  const syncedBlockId = nonEmptyString(syncedAttrs.notionBlockId);
+  if (localBlockId && syncedBlockId) return localBlockId === syncedBlockId;
+
+  const localInkwellId = nonEmptyString(localAttrs.inkwellBlockId);
+  const syncedInkwellId = nonEmptyString(syncedAttrs.inkwellBlockId);
+  if (localInkwellId && syncedInkwellId) return localInkwellId === syncedInkwellId;
+
+  return !mediaIdentities(localNode).length || !mediaIdentities(syncedNode).length;
+}
+
+function mediaIdentityAttributes(
+  localAttrs: Record<string, unknown>,
+  syncedAttrs: Record<string, unknown>,
+): Record<string, string> {
+  const identityAttrs: Record<string, string> = {};
+  for (const key of ['notionFileUploadId', 'notionBlockId', 'inkwellBlockId']) {
+    const localValue = localAttrs[key];
+    const syncedValue = syncedAttrs[key];
+    const value = typeof syncedValue === 'string' && syncedValue.trim()
+      ? syncedValue
+      : localValue;
+    if (typeof value === 'string' && value.trim()) identityAttrs[key] = value;
+  }
+  return identityAttrs;
+}
+
+function localMediaForSyncedNode(
+  syncedNode: DocumentContent,
+  localMediaByIdentity: Map<string, DocumentContent>,
+): DocumentContent | undefined {
+  const attrs = syncedNode.attrs ?? {};
+  const uploadId = nonEmptyString(attrs.notionFileUploadId);
+  if (uploadId) return localMediaByIdentity.get(`upload:${uploadId}`);
+
+  const notionBlockId = nonEmptyString(attrs.notionBlockId);
+  if (notionBlockId) return localMediaByIdentity.get(`block:${notionBlockId}`);
+
+  const inkwellBlockId = nonEmptyString(attrs.inkwellBlockId);
+  return inkwellBlockId
+    ? localMediaByIdentity.get(`inkwell:${inkwellBlockId}`)
+    : undefined;
+}
+
+function nonEmptyString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value : undefined;
+}
+
+function embeddedLocalMediaSource(node: DocumentContent): string | undefined {
+  const attrs = node.attrs ?? {};
+  const localSrc = String(attrs.localSrc ?? '');
+  const src = String(attrs.src ?? '');
+  if (/^data:image\//i.test(localSrc)) return localSrc;
+  return /^data:image\//i.test(src) ? src : undefined;
 }
 
 function mergeContent(
