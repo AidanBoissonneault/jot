@@ -87,11 +87,15 @@ export function createWorkerInstallationState({
   ): Promise<Result> {
     const previous = installationMutationLocks.get(lockKey) ?? Promise.resolve();
     const current = previous.catch(() => undefined).then(operation);
-    const tracked = current.finally(() => {
+    let tracked: Promise<unknown>;
+    const releaseLock = () => {
       if (installationMutationLocks.get(lockKey) === tracked) {
         installationMutationLocks.delete(lockKey);
       }
-    });
+    };
+    // Consume both outcomes on the lock-tracking promise while returning the
+    // original promise so callers still observe their operation's failure.
+    tracked = current.then(releaseLock, releaseLock);
 
     installationMutationLocks.set(lockKey, tracked);
     return current;
@@ -105,7 +109,18 @@ export function createWorkerInstallationState({
     const lockKey = store.installationId ? String(store.installationId) : 'local';
     return withInstallationLock(lockKey, async () => {
       const freshStore = await freshConnectedStore(store);
-      return operation(freshStore);
+      if (!store.installationId) {
+        return operation(freshStore);
+      }
+
+      const installation = await auth.getActiveInstallationWithTokensById(store.installationId);
+      if (!installation?.tokens?.access_token) {
+        const error = new HTTPException(409, { message: 'Notion is no longer connected.' });
+        Object.assign(error, { code: 'installation_revoked' });
+        throw error;
+      }
+
+      return operation({ ...freshStore, tokens: installation.tokens });
     });
   }
 

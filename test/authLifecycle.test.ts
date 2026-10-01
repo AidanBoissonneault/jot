@@ -71,6 +71,21 @@ describe('server authentication data lifecycle', () => {
       .rejects.toThrow('Unable to revoke the Notion installation.');
   });
 
+  it('revalidates a sync installation by ID and rejects an inactive row', async () => {
+    const { calls, client } = fakeSupabase();
+
+    await expect(createAuth(client).getActiveInstallationWithTokensById(42))
+      .resolves.toBeUndefined();
+
+    expect(calls).toContainEqual({
+      table: 'notion_installations', method: 'eq', args: ['id', 42],
+    });
+    expect(calls).toContainEqual({
+      table: 'notion_installations', method: 'eq', args: ['active', 1],
+    });
+    expect(calls.some((call) => call.table === 'account')).toBe(false);
+  });
+
   it('commits the account and session by stable Notion user ID without linking by email', async () => {
     const { calls, client } = fakeSupabase();
     const auth = createAuth(client);

@@ -89,6 +89,7 @@ export interface AuthService {
   deleteCustomSession: (token: string | undefined) => Promise<void>;
   getActiveInstallation: (userId: string) => Promise<NotionInstallation | null>;
   getActiveInstallationWithTokens: (userId: string) => Promise<ConnectedNotionInstallation | undefined>;
+  getActiveInstallationWithTokensById: (installationId: Identifier) => Promise<ConnectedNotionInstallation | undefined>;
   getCustomSession: (token: string | undefined) => Promise<AuthSessionResult | null>;
   getNotionAccountTokens: (userId: string) => Promise<NotionAccountTokens | null>;
   clearNotionAccountTokens: (userId: string) => Promise<void>;
@@ -115,6 +116,9 @@ export function createAuth(supabase: WorkerSupabaseClient): AuthService {
     getActiveInstallation: (userId: string) => getActiveInstallation(supabase, userId),
     /** Returns an active Notion installation together with its access token. */
     getActiveInstallationWithTokens: (userId: string) => getActiveInstallationWithTokens(supabase, userId),
+    /** Revalidates one installation and its token immediately before sync work. */
+    getActiveInstallationWithTokensById: (installationId: Identifier) =>
+      getActiveInstallationWithTokensById(supabase, installationId),
     /** Resolves a valid custom session and its owning user. */
     getCustomSession: (token: string | undefined) => getCustomSession(supabase, token),
     /** Loads stored Notion credentials for remote revocation. */
@@ -452,4 +456,41 @@ async function getActiveInstallationWithTokens(
 
   if (!accountRow?.accessToken || !installRow) return undefined;
   return { ...installRow, tokens: { access_token: accountRow.accessToken } };
+}
+
+/**
+ * Revalidates an installation by its stable ID and returns its current token.
+ * @param supabase - Privileged database client.
+ * @param installationId - Installation identifier captured by the sync request.
+ * @returns The active installation and token, or undefined if it was revoked.
+ */
+async function getActiveInstallationWithTokensById(
+  supabase: WorkerSupabaseClient,
+  installationId: Identifier,
+): Promise<ConnectedNotionInstallation | undefined> {
+  const { data: installRow, error: installationError } = await supabase
+    .from('notion_installations')
+    .select('id, user_id, workspace_id, workspace_name')
+    .eq('id', installationId)
+    .eq('active', 1)
+    .maybeSingle();
+  if (installationError) throw new Error('Unable to verify the active Notion installation.');
+  if (!installRow) return undefined;
+
+  const { data: accountRow, error: accountError } = await supabase
+    .from('account')
+    .select('accessToken')
+    .eq('userId', installRow.user_id)
+    .eq('providerId', 'notion')
+    .limit(1)
+    .maybeSingle();
+  if (accountError) throw new Error('Unable to verify the active Notion credentials.');
+  if (!accountRow?.accessToken) return undefined;
+
+  return {
+    id: installRow.id,
+    workspace_id: installRow.workspace_id,
+    workspace_name: installRow.workspace_name,
+    tokens: { access_token: accountRow.accessToken },
+  };
 }
