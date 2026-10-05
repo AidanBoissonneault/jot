@@ -169,11 +169,11 @@ async function saveState(cwd: string, state: SmokeState): Promise<void> {
   state.updatedAt = new Date().toISOString();
   await mkdir(paths.directory, { recursive: true });
   const nextStateFile = `${paths.stateFile}.pending`;
-  const nextLatestFile = `${paths.latestFile}.pending`;
   await writeFile(nextStateFile, `${JSON.stringify(state, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
   await rename(nextStateFile, paths.stateFile);
-  await writeFile(nextLatestFile, `${state.runId}\n`, { encoding: 'utf8', mode: 0o600 });
-  await rename(nextLatestFile, paths.latestFile);
+  // Replacing an open pointer can fail with EPERM on Windows, so update this
+  // tiny non-secret file in place while keeping the larger state snapshot atomic.
+  await writeFile(paths.latestFile, `${state.runId}\n`, { encoding: 'utf8', mode: 0o600 });
 }
 
 async function loadState(cwd: string, runIdOption?: string): Promise<SmokeState> {
