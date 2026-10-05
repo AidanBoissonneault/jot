@@ -22,7 +22,7 @@ corepack pnpm dev:server
 corepack pnpm compile
 corepack pnpm typecheck
 corepack pnpm test
-corepack pnpm smoke:sync -- --help
+node --import tsx scripts/inkwell-sync-smoke.ts --help
 corepack pnpm build
 corepack pnpm zip
 ```
@@ -100,13 +100,13 @@ the Worker on port 8787, then set `INKWELL_SESSION_COOKIE` in your shell to the 
 cookie pair from your local authenticated session. The CLI does not print or persist this value.
 
 ```sh
-corepack pnpm smoke:sync -- create
-corepack pnpm smoke:sync -- edit --text "Updated paragraph one.\n\nUpdated paragraph two — café 東京 🧪."
-corepack pnpm smoke:sync -- status --wait
-corepack pnpm smoke:sync -- archive
+node --import tsx scripts/inkwell-sync-smoke.ts create
+node --import tsx scripts/inkwell-sync-smoke.ts edit --text "Updated paragraph one.\n\nUpdated paragraph two — café 東京 🧪."
+node --import tsx scripts/inkwell-sync-smoke.ts status --wait
+node --import tsx scripts/inkwell-sync-smoke.ts archive
 ```
 
 To run create, rapid edits, sync polling, and archival in one pass, use
-`corepack pnpm smoke:sync -- smoke`. Run `corepack pnpm smoke:sync -- help` for options. State is
+`node --import tsx scripts/inkwell-sync-smoke.ts smoke`. Run `node --import tsx scripts/inkwell-sync-smoke.ts help` for options. State is
 stored under the ignored `.tmp/inkwell-sync-smoke/` directory so an interrupted run can be archived
 later with the `archive` command.
