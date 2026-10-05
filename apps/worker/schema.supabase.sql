@@ -94,6 +94,9 @@ CREATE TABLE IF NOT EXISTS inkwell_sync_queue_payloads (
 CREATE INDEX IF NOT EXISTS idx_inkwell_sync_queue_payloads_created_at
   ON inkwell_sync_queue_payloads(created_at);
 
+CREATE INDEX IF NOT EXISTS idx_inkwell_sync_queue_payloads_installation_id
+  ON inkwell_sync_queue_payloads(installation_id);
+
 -- Atomically installs a Notion OAuth connection and its browser session.
 CREATE OR REPLACE FUNCTION public.commit_notion_oauth_session(
   p_user_id TEXT,
@@ -1002,5 +1005,15 @@ REVOKE ALL ON FUNCTION public.begin_inkwell_notion_logout(TEXT) FROM PUBLIC, ano
 REVOKE ALL ON FUNCTION public.complete_inkwell_notion_logout(TEXT, TEXT) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.begin_inkwell_notion_logout(TEXT) TO service_role;
 GRANT EXECUTE ON FUNCTION public.complete_inkwell_notion_logout(TEXT, TEXT) TO service_role;
+
+-- Keep direct API callers from invoking the helper without changing its active
+-- ensure_rls DDL event trigger. Older bootstrap targets may not have the helper.
+DO $$
+BEGIN
+  IF pg_catalog.to_regprocedure('public.rls_auto_enable()') IS NOT NULL THEN
+    EXECUTE 'REVOKE ALL ON FUNCTION public.rls_auto_enable() FROM PUBLIC, anon, authenticated, service_role';
+  END IF;
+END;
+$$;
 
 NOTIFY pgrst, 'reload schema';
