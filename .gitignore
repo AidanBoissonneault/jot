@@ -41,5 +41,6 @@ web-ext.config.ts
 
 .env
 tmp/
+.tmp/
 .wrangler/
 docs/

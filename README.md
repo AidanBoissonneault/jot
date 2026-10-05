@@ -22,6 +22,7 @@ corepack pnpm dev:server
 corepack pnpm compile
 corepack pnpm typecheck
 corepack pnpm test
+corepack pnpm smoke:sync -- --help
 corepack pnpm build
 corepack pnpm zip
 ```
@@ -86,3 +87,26 @@ OAuth flows already in progress must restart after a wipe; a new flow after comp
 Apply `apps/worker/migrations/010_serialize_notion_logout.sql` after migration 009 and before
 deploying the updated logout route. It serializes logout with OAuth callbacks, disables sync first,
 and clears server-side Notion tokens and the current session together. Local documents remain intact.
+
+After reconciling the connected database's migration history, apply
+`apps/worker/migrations/20261005031402_harden_rls_auto_enable_and_queue_index.sql`. It removes
+direct API execution grants from the RLS auto-enable helper without changing its DDL event trigger,
+and indexes queued payloads by installation.
+
+### Local sync smoke driver
+
+The CLI exercises the authenticated project and page routes against a loopback Worker only. Start
+the Worker on port 8787, then set `INKWELL_SESSION_COOKIE` in your shell to the `inkwell_session`
+cookie pair from your local authenticated session. The CLI does not print or persist this value.
+
+```sh
+corepack pnpm smoke:sync -- create
+corepack pnpm smoke:sync -- edit --text "Updated paragraph one.\n\nUpdated paragraph two — café 東京 🧪."
+corepack pnpm smoke:sync -- status --wait
+corepack pnpm smoke:sync -- archive
+```
+
+To run create, rapid edits, sync polling, and archival in one pass, use
+`corepack pnpm smoke:sync -- smoke`. Run `corepack pnpm smoke:sync -- help` for options. State is
+stored under the ignored `.tmp/inkwell-sync-smoke/` directory so an interrupted run can be archived
+later with the `archive` command.

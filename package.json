@@ -8,6 +8,7 @@
     "dev": "wxt",
     "dev:server": "pnpm --filter @inkwell/worker dev",
     "test": "vitest run",
+    "smoke:sync": "tsx scripts/inkwell-sync-smoke.ts",
     "build": "wxt build",
     "zip": "wxt zip",
     "compile": "vue-tsc --noEmit",
