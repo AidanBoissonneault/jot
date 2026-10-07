@@ -156,6 +156,8 @@ let isConnectionDeletionPending = false;
 let idbWriteRecoveryPromise: Promise<void> | undefined;
 let currentProjectSelectionRevision = 0;
 let requestedCurrentProjectId: string | undefined;
+let workspaceWriteVersion = 0;
+let workspaceWriteQueue: Promise<void> = Promise.resolve();
 
 function emptyDocument(): DocumentContent {
   return normalizeInkwellBlockIds({
@@ -519,8 +521,24 @@ function isLegacyStubProjectSet(projects: Project[]) {
   );
 }
 
-async function writeStorage(storage: Partial<InkwellStorage>) {
-  await idbSetMany(storage as Record<string, unknown>);
+async function writeStorage(
+  storage: Partial<InkwellStorage>,
+  options: { expectedVersion?: number } = {},
+): Promise<boolean> {
+  const write = workspaceWriteQueue.then(async () => {
+    if (
+      options.expectedVersion !== undefined &&
+      options.expectedVersion !== workspaceWriteVersion
+    ) {
+      return false;
+    }
+
+    await idbSetMany(storage as Record<string, unknown>);
+    workspaceWriteVersion += 1;
+    return true;
+  });
+  workspaceWriteQueue = write.then(() => undefined, () => undefined);
+  return write;
 }
 
 async function persistRebasedProjectSnapshots(
@@ -2617,6 +2635,7 @@ export const notionClient = {
       };
     }
 
+    const startingWorkspaceWriteVersion = workspaceWriteVersion;
     const response = await requestServer<SyncReloadResponse>('/sync/reload', {
       method: 'POST',
       body: JSON.stringify({
@@ -2676,7 +2695,7 @@ export const notionClient = {
       ? response.currentProjectId ?? ''
       : projects[0]?.id ?? '';
     const localProjectsToPreserve = localStorageToPreserve.projects;
-    await writeStorage({
+    const applied = await writeStorage({
       activePageIdsByProject,
       currentProjectId: nextCurrentProjectId,
       hasMigratedCapturesToPages: true,
@@ -2684,7 +2703,16 @@ export const notionClient = {
       projects,
       syncConfig: nextSyncConfig,
       notionHydrationSource: hydrationSource(nextSyncConfig),
-    });
+    }, { expectedVersion: startingWorkspaceWriteVersion });
+    if (!applied) {
+      const latestStorage = await readStorage();
+      return {
+        currentProjectId: latestStorage.currentProjectId,
+        pages: latestStorage.pages,
+        projects: latestStorage.projects,
+        syncConfig: latestStorage.syncConfig,
+      };
+    }
     const blockedProjectIds = new Set(await listBlockedProjectSyncIds());
     const blockedLocalProjects = localProjectsToPreserve.filter((project) => blockedProjectIds.has(project.id));
     if (blockedLocalProjects.length) {

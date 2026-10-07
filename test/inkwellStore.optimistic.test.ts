@@ -182,6 +182,28 @@ describe('logout credential cleanup', () => {
 });
 
 describe('project metadata', () => {
+  test('shows Notion page search loading and ignores stale search results', async () => {
+    const firstSearch = deferred<Awaited<ReturnType<typeof notionClient.listNotionParentPages>>>();
+    const secondSearch = deferred<Awaited<ReturnType<typeof notionClient.listNotionParentPages>>>();
+    vi.spyOn(notionClient, 'listNotionParentPages')
+      .mockReturnValueOnce(firstSearch.promise)
+      .mockReturnValueOnce(secondSearch.promise);
+    const store = useInkwellStore();
+
+    const firstRequest = store.loadNotionParentPages('first');
+    expect(store.isLoadingNotionParentPages).toBe(true);
+    const secondRequest = store.loadNotionParentPages('second');
+    secondSearch.resolve([{ id: 'new-result', title: 'Latest result' }]);
+    await secondRequest;
+
+    expect(store.isLoadingNotionParentPages).toBe(false);
+    expect(store.notionParentPages).toEqual([{ id: 'new-result', title: 'Latest result' }]);
+
+    firstSearch.resolve([{ id: 'old-result', title: 'Stale result' }]);
+    await firstRequest;
+    expect(store.notionParentPages).toEqual([{ id: 'new-result', title: 'Latest result' }]);
+  });
+
   test('makes a captured origin available before its network sync finishes', async () => {
     const sourceSync = deferred<Response>();
     vi.stubGlobal('fetch', vi.fn(() => sourceSync.promise));
@@ -379,6 +401,113 @@ describe('project metadata', () => {
     expect(readBrowserStorage().notionHydrationSource).toBe(
       'http://localhost:8787::workspace-new',
     );
+  });
+
+  test('local pages render before the session check resolves', async () => {
+    const session = deferred<Response>();
+    const fetchMock = vi.fn(() => session.promise);
+    vi.stubGlobal('fetch', fetchMock);
+    const localPage = {
+      ...basePage,
+      content: docWithText('cached local notes'),
+    };
+    resetBrowserStorage({
+      activePageIdsByProject: { 'project-inkwell': 'page-inkwell' },
+      currentProjectId: 'project-inkwell',
+      hasExplicitlyLoggedOut: false,
+      hasMigratedCapturesToPages: true,
+      pages: [localPage],
+      projects: [baseProject],
+      syncConfig: connectedConfig,
+    });
+
+    const store = useInkwellStore();
+    const initialization = store.initialize();
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+
+    expect(store.isLoading).toBe(false);
+    expect(store.isCheckingSync).toBe(true);
+    expect(stripInkwellBlockIds(store.currentPage?.content)).toEqual(localPage.content);
+
+    session.resolve(jsonResponse({ authenticated: false, connected: false }));
+    await initialization;
+
+    expect(store.isCheckingSync).toBe(false);
+    expect(stripInkwellBlockIds(store.currentPage?.content)).toEqual(localPage.content);
+  });
+
+  test('keeps local workspace available when session verification fails', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('connection refused')));
+    const localPage = {
+      ...basePage,
+      content: docWithText('still available offline'),
+    };
+    resetBrowserStorage({
+      activePageIdsByProject: { 'project-inkwell': 'page-inkwell' },
+      currentProjectId: 'project-inkwell',
+      hasExplicitlyLoggedOut: false,
+      hasMigratedCapturesToPages: true,
+      pages: [localPage],
+      projects: [baseProject],
+      syncConfig: connectedConfig,
+    });
+
+    const store = useInkwellStore();
+    await store.initialize();
+
+    expect(store.isLoading).toBe(false);
+    expect(store.isCheckingSync).toBe(false);
+    expect(store.syncCheckError).toContain('connection refused');
+    expect(stripInkwellBlockIds(store.currentPage?.content)).toEqual(localPage.content);
+  });
+
+  test('keeps edits made during remote hydration instead of replacing them', async () => {
+    const reload = deferred<Response>();
+    const fetchMock = vi.fn(() => reload.promise);
+    vi.stubGlobal('fetch', fetchMock);
+    const originalNavigator = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+    Object.defineProperty(globalThis, 'navigator', {
+      configurable: true,
+      value: { onLine: false },
+    });
+    resetBrowserStorage({
+      activePageIdsByProject: { 'project-inkwell': 'page-inkwell' },
+      currentProjectId: 'project-inkwell',
+      hasMigratedCapturesToPages: true,
+      pages: [basePage],
+      projects: [baseProject],
+      syncConfig: connectedConfig,
+    });
+
+    try {
+      const reloadPromise = notionClient.reloadFromNotion({ force: true });
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+      const editedPage = {
+        ...basePage,
+        content: docWithText('edited while server checks'),
+      };
+      await notionClient.updateProjectPage(editedPage);
+
+      reload.resolve(jsonResponse({
+        activePageIdsByProject: { 'project-inkwell': 'page-inkwell' },
+        currentProjectId: 'project-inkwell',
+        pages: [{ ...basePage, content: docWithText('older server snapshot') }],
+        projects: [baseProject],
+        status: 'saved',
+      }));
+      const result = await reloadPromise;
+      const storedPage = (readBrowserStorage().pages as ProjectPage[])[0];
+
+      expect(JSON.stringify(result.pages[0]?.content)).toContain('edited while server checks');
+      expect(JSON.stringify(storedPage.content)).toContain('edited while server checks');
+      expect(JSON.stringify(storedPage.content)).not.toContain('older server snapshot');
+    } finally {
+      if (originalNavigator) {
+        Object.defineProperty(globalThis, 'navigator', originalNavigator);
+      } else {
+        Reflect.deleteProperty(globalThis, 'navigator');
+      }
+    }
   });
 
   test('a fresh extension install hydrates all projects from its connected workspace', async () => {

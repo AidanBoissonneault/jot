@@ -165,6 +165,12 @@
   gap: 6px;
 }
 
+.item-list-status {
+  margin: 0;
+  color: var(--inkwell-muted);
+  font-size: 0.82rem;
+}
+
 .item-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;

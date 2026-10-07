@@ -5,8 +5,10 @@ import type { useInkwellStore } from '@/src/stores/inkwell';
 /** Groups the topbar's saved-state badge and workspace identity labels. */
 export function useTopBarStatus(store: ReturnType<typeof useInkwellStore>) {
   const saveLabel = computed(() => {
+    if (store.isLoading) return 'Loading workspace';
+    if (store.isCheckingSync) return 'Checking sync';
+    if (store.syncCheckError) return 'Sync unavailable';
     if (store.pullMessage) return store.pullMessage;
-    if (store.isLoading) return 'Loading';
     if (store.saveStatus === 'saving') return 'Saving';
     if (store.saveStatus === 'creating') return 'Creating';
     if (store.saveStatus === 'error') return 'Save failed';
@@ -19,6 +21,12 @@ export function useTopBarStatus(store: ReturnType<typeof useInkwellStore>) {
   });
 
   const syncBadgeTitle = computed(() => {
+    if (store.syncCheckError) {
+      return `Could not verify the sync server. Your local data is available. ${store.syncCheckError}`;
+    }
+    if (store.isCheckingSync) {
+      return 'Checking your sync connection. Your local data is available while this finishes.';
+    }
     if (store.errorMessage) return store.errorMessage;
     if (!store.isOnline) {
       return 'You are offline. Changes are saved on this device and will sync automatically when you reconnect.';
@@ -49,9 +57,11 @@ export function useTopBarStatus(store: ReturnType<typeof useInkwellStore>) {
 
   const syncBadgeClass = computed(() => ({
     'sync-badge': true,
+    checking: store.isCheckingSync,
     error: store.saveStatus === 'error',
     stale:
       store.saveStatus === 'stale' ||
+      Boolean(store.syncCheckError) ||
       !store.syncConfig.connected ||
       !store.isOnline ||
       store.pendingSyncCount > 0,

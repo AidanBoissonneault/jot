@@ -99,6 +99,7 @@ onBeforeUnmount(() => {
       :title="statusTitle"
       role="status"
       tabindex="0"
+      :aria-busy="context.store.isLoading || context.store.isCheckingSync"
       :aria-haspopup="pageConflicts.length ? 'menu' : undefined"
       :aria-expanded="pageConflicts.length ? isConflictMenuOpen : undefined"
       :aria-controls="pageConflicts.length ? 'sync-conflict-menu' : undefined"

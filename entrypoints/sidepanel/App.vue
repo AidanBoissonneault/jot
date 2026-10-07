@@ -853,8 +853,34 @@ const editorPageTitleContext: EditorPageTitleContext = {
 </script>
 
 <template>
-  <main class="shell">
+  <main class="shell" :aria-busy="store.isLoading">
     <TopBar :context="topBarContext" />
+
+    <section
+      v-if="store.isLoading"
+      class="workspace-loading"
+      role="status"
+      aria-live="polite"
+      aria-busy="true"
+    >
+      <span class="workspace-loading-spinner" aria-hidden="true" />
+      <p>Loading your workspace…</p>
+    </section>
+
+    <section
+      v-else-if="activeTab === 'editor' && !canUseEditor"
+      class="workspace-load-error"
+      role="alert"
+    >
+      <h1>Workspace unavailable</h1>
+      <p>{{ store.errorMessage || 'No local workspace is available on this device.' }}</p>
+      <div class="workspace-load-actions">
+        <button type="button" @click="store.initialize">Retry</button>
+        <button type="button" class="secondary-button" @click="activeTab = 'settings'">
+          Open settings
+        </button>
+      </div>
+    </section>
 
     <section
       v-if="canUseEditor && activeTab === 'editor'"
@@ -875,7 +901,7 @@ const editorPageTitleContext: EditorPageTitleContext = {
       <EditorContextMenu :context="editorContextMenuContext" />
     </section>
 
-    <SettingsPage v-if="canUseEditor && activeTab === 'settings'" :context="settingsPageContext" />
+    <SettingsPage v-if="!store.isLoading && activeTab === 'settings'" :context="settingsPageContext" />
 
     <ArchiveConfirmModal
       v-if="archiveTarget"

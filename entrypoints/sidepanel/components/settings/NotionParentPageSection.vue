@@ -27,12 +27,17 @@ const {
       <button
         type="submit"
         class="icon-label-button"
-        :disabled="!store.syncConfig.connected"
-        title="Search Notion pages"
-        aria-label="Search Notion pages"
+        :disabled="!store.syncConfig.connected || store.isLoadingNotionParentPages"
+        :title="store.isLoadingNotionParentPages ? 'Loading Notion pages' : 'Search Notion pages'"
+        :aria-label="store.isLoadingNotionParentPages ? 'Loading Notion pages' : 'Search Notion pages'"
+        :aria-busy="store.isLoadingNotionParentPages"
       >
-        <font-awesome-icon :icon="['fas', 'magnifying-glass']" fixed-width />
-        <span>Search</span>
+        <font-awesome-icon
+          :icon="['fas', 'magnifying-glass']"
+          :class="{ 'sync-rotating-icon': store.isLoadingNotionParentPages }"
+          fixed-width
+        />
+        <span>{{ store.isLoadingNotionParentPages ? 'Searching…' : 'Search' }}</span>
       </button>
     </form>
 
@@ -58,6 +63,7 @@ const {
     <NotionParentPageList
       :pages="store.notionParentPages"
       :selected-page-id="store.syncConfig.selectedParentPageId"
+      :loading="store.isLoadingNotionParentPages"
       :disabled="!store.syncConfig.connected"
       @select="selectParentPage"
     />

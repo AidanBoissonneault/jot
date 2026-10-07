@@ -6,13 +6,17 @@ defineProps<{
   pages: NotionParentPage[];
   selectedPageId: string | undefined;
   disabled?: boolean;
+  loading?: boolean;
 }>();
 
 const emit = defineEmits<{ select: [pageId: string] }>();
 </script>
 
 <template>
-  <div class="item-list">
+  <div class="item-list" :aria-busy="loading">
+    <p v-if="loading" class="item-list-status" role="status" aria-live="polite">
+      Loading Notion pages…
+    </p>
     <button
       v-for="page in pages"
       :key="page.id"

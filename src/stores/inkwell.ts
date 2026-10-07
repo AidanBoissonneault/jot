@@ -42,7 +42,9 @@ export const useInkwellStore = defineStore('inkwell', () => {
   const currentPage = ref<ProjectPage>();
   const currentProjectId = ref<string>('');
   const errorMessage = ref<string>('');
-  const isLoading = ref(false);
+  const isLoading = ref(true);
+  const isCheckingSync = ref(false);
+  const syncCheckError = ref('');
   const saveStatus = ref<SaveStatus>('idle');
   const sseStatus = ref<'disconnected' | 'connecting' | 'connected'>('disconnected');
   const stalePageIds = ref<string[]>([]);
@@ -53,6 +55,9 @@ export const useInkwellStore = defineStore('inkwell', () => {
   const isOnline = ref(typeof navigator === 'undefined' || navigator.onLine !== false);
   const isRetryingLogoutCleanup = ref(false);
   let pullMessageTimer: number | undefined;
+  let initializationPromise: Promise<void> | undefined;
+  let notionParentPageRequestId = 0;
+  const isLoadingNotionParentPages = ref(false);
   const syncConfig = ref<SyncConfig>({
     serverUrl: 'http://localhost:8787',
     authenticated: false,
@@ -68,9 +73,25 @@ export const useInkwellStore = defineStore('inkwell', () => {
   );
 
   async function initialize() {
+    if (initializationPromise) return initializationPromise;
+
+    const initialization = initializeWorkspace();
+    initializationPromise = initialization;
+    try {
+      await initialization;
+    } finally {
+      if (initializationPromise === initialization) {
+        initializationPromise = undefined;
+      }
+    }
+  }
+
+  async function initializeWorkspace() {
     isLoading.value = true;
     errorMessage.value = '';
-    let reloadDiscoveredPagesAfterQueueDrain = false;
+    syncCheckError.value = '';
+    isCheckingSync.value = false;
+    let localWorkspaceReady = false;
 
     try {
       syncConfig.value = await notionClient.getSyncConfig();
@@ -78,97 +99,135 @@ export const useInkwellStore = defineStore('inkwell', () => {
       stopQueueListener ??= onSyncQueueChange(() => {
         void refreshPendingSyncCount();
       });
-      await refreshPendingSyncCount();
-
-      if (isOnline.value) {
-        syncConfig.value = await notionClient
-          .refreshSyncSession()
-          .catch(() => syncConfig.value);
-      }
-
-      const preparedLocalWorkspace = syncConfig.value.connected
-        ? await notionClient.prepareLocalWorkspaceForFirstSync().catch(() => false)
-        : false;
-      const hydrated = isOnline.value && !preparedLocalWorkspace
-        ? await hydrateInitialNotionSnapshot().catch(() => false)
-        : false;
-
-      if (!hydrated) {
-        const validateResult = isOnline.value
-          ? await notionClient.validateNotionCache().catch(() => ({
-              stalePageIds: [],
-              aheadPageIds: [],
-              failedPageIds: [],
-              newPageIds: [],
-            }))
-          : { stalePageIds: [], aheadPageIds: [], failedPageIds: [], newPageIds: [] };
-        stalePageIds.value = validateResult.stalePageIds;
-        aheadPageIds.value = validateResult.aheadPageIds;
-
-        let refreshedForNewPages = false;
-        if (validateResult.newPageIds.length) {
-          pendingSyncCount.value = await notionClient.pendingSyncEventCount();
-          if (pendingSyncCount.value === 0) {
-            try {
-              const reloaded = await notionClient.reloadFromNotion({ force: true });
-              applyReloadedSnapshot(reloaded);
-              stalePageIds.value = [];
-              aheadPageIds.value = [];
-              refreshedForNewPages = true;
-            } catch (error) {
-              errorMessage.value = error instanceof Error
-                ? `Couldn't load new pages from Notion. ${error.message}`
-                : "Couldn't load new pages from Notion.";
-            }
-          } else {
-            // Keep the remote page discovery alive while queued local edits finish syncing.
-            reloadDiscoveredPagesAfterQueueDrain = true;
-          }
-        }
-
-        if (!refreshedForNewPages) {
-          syncConfig.value = await notionClient.getSyncConfig();
-          projects.value = await notionClient.listProjects();
-          const storedProjectId = await notionClient.getCurrentProjectId();
-          currentProjectId.value = projects.value.some(
-            (project) => project.id === storedProjectId,
-          )
-            ? storedProjectId
-            : projects.value[0]?.id ?? '';
-        }
-      }
-
+      const [pendingCount, localProjects, storedProjectId] = await Promise.all([
+        notionClient.pendingSyncEventCount(),
+        notionClient.listProjects(),
+        notionClient.getCurrentProjectId(),
+      ]);
+      pendingSyncCount.value = pendingCount;
+      projects.value = localProjects;
+      currentProjectId.value = localProjects.some(
+        (project) => project.id === storedProjectId,
+      )
+        ? storedProjectId
+        : localProjects[0]?.id ?? '';
       await loadCurrentPage();
-      openSyncEvents();
-      if (isOnline.value && syncConfig.value.connected && pendingSyncCount.value) {
-        if (reloadDiscoveredPagesAfterQueueDrain) {
-          void syncPendingChanges()
-            .then(async () => {
-              if (pendingSyncCount.value > 0) return;
-              try {
-                const reloaded = await notionClient.reloadFromNotion({ force: true });
-                applyReloadedSnapshot(reloaded);
-                stalePageIds.value = [];
-                aheadPageIds.value = [];
-                await loadCurrentPage();
-              } catch (error) {
-                errorMessage.value = error instanceof Error
-                  ? `Couldn't load new pages from Notion. ${error.message}`
-                  : "Couldn't load new pages from Notion.";
-                saveStatus.value = 'error';
-              }
-            })
-            .catch(() => undefined);
-        } else {
-          void syncPendingChanges().catch(() => undefined);
-        }
-      }
+      localWorkspaceReady = true;
     } catch (error) {
       errorMessage.value =
         error instanceof Error ? error.message : 'Unable to load Inkwell data.';
       saveStatus.value = 'error';
     } finally {
       isLoading.value = false;
+    }
+
+    if (!localWorkspaceReady || !isOnline.value) return;
+
+    isCheckingSync.value = true;
+    try {
+      await initializeRemoteWorkspace();
+    } catch (error) {
+      syncCheckError.value = error instanceof Error
+        ? error.message
+        : 'Unable to verify the sync server.';
+    } finally {
+      isCheckingSync.value = false;
+    }
+  }
+
+  async function initializeRemoteWorkspace() {
+    let reloadDiscoveredPagesAfterQueueDrain = false;
+    let sessionVerified = true;
+    try {
+      syncConfig.value = await notionClient.refreshSyncSession();
+    } catch (error) {
+      sessionVerified = false;
+      syncCheckError.value = error instanceof Error
+        ? error.message
+        : 'Unable to verify the sync server.';
+    }
+
+    const preparedLocalWorkspace = syncConfig.value.connected
+      ? await notionClient.prepareLocalWorkspaceForFirstSync().catch(() => false)
+      : false;
+    const hydrated = sessionVerified && isOnline.value && !preparedLocalWorkspace
+      ? await hydrateInitialNotionSnapshot().catch(() => false)
+      : false;
+
+    if (sessionVerified && !hydrated) {
+      const validateResult = isOnline.value
+        ? await notionClient.validateNotionCache().catch(() => ({
+            stalePageIds: [],
+            aheadPageIds: [],
+            failedPageIds: [],
+            newPageIds: [],
+          }))
+        : { stalePageIds: [], aheadPageIds: [], failedPageIds: [], newPageIds: [] };
+      stalePageIds.value = validateResult.stalePageIds;
+      aheadPageIds.value = validateResult.aheadPageIds;
+
+      let refreshedForNewPages = false;
+      if (validateResult.newPageIds.length) {
+        pendingSyncCount.value = await notionClient.pendingSyncEventCount();
+        if (pendingSyncCount.value === 0) {
+          try {
+            const reloaded = await notionClient.reloadFromNotion({ force: true });
+            applyReloadedSnapshot(reloaded);
+            stalePageIds.value = [];
+            aheadPageIds.value = [];
+            refreshedForNewPages = true;
+          } catch (error) {
+            errorMessage.value = error instanceof Error
+              ? `Couldn't load new pages from Notion. ${error.message}`
+              : "Couldn't load new pages from Notion.";
+          }
+        } else {
+          // Keep the remote page discovery alive while queued local edits finish syncing.
+          reloadDiscoveredPagesAfterQueueDrain = true;
+        }
+      }
+
+      if (!refreshedForNewPages) {
+        syncConfig.value = await notionClient.getSyncConfig();
+        projects.value = await notionClient.listProjects();
+        const storedProjectId = await notionClient.getCurrentProjectId();
+        currentProjectId.value = projects.value.some(
+          (project) => project.id === storedProjectId,
+        )
+          ? storedProjectId
+          : projects.value[0]?.id ?? '';
+      }
+    }
+
+    await loadCurrentPage();
+    if (isOnline.value && syncConfig.value.connected && pendingSyncCount.value === 0) {
+      // Catch edits made while the server check was running before deciding
+      // whether to deliver the durable local queue.
+      await refreshPendingSyncCount();
+    }
+    if (sessionVerified) openSyncEvents();
+    if (isOnline.value && syncConfig.value.connected && pendingSyncCount.value) {
+      if (reloadDiscoveredPagesAfterQueueDrain) {
+        void syncPendingChanges()
+          .then(async () => {
+            if (pendingSyncCount.value > 0) return;
+            try {
+              const reloaded = await notionClient.reloadFromNotion({ force: true });
+              applyReloadedSnapshot(reloaded);
+              stalePageIds.value = [];
+              aheadPageIds.value = [];
+              await loadCurrentPage();
+            } catch (error) {
+              errorMessage.value = error instanceof Error
+                ? `Couldn't load new pages from Notion. ${error.message}`
+                : "Couldn't load new pages from Notion.";
+              saveStatus.value = 'error';
+            }
+          })
+          .catch(() => undefined);
+      } else {
+        void syncPendingChanges().catch(() => undefined);
+      }
     }
   }
 
@@ -719,6 +778,7 @@ export const useInkwellStore = defineStore('inkwell', () => {
   async function refreshSyncSession(allowSignedOut = false) {
     try {
       syncConfig.value = await notionClient.refreshSyncSession(allowSignedOut);
+      syncCheckError.value = '';
       if (syncConfig.value.connected) {
         const preparedLocalWorkspace = await notionClient.prepareLocalWorkspaceForFirstSync();
         if (!preparedLocalWorkspace && await hydrateInitialNotionSnapshot()) {
@@ -729,6 +789,9 @@ export const useInkwellStore = defineStore('inkwell', () => {
         saveStatus.value = 'stale';
       }
     } catch (error) {
+      syncCheckError.value = error instanceof Error
+        ? error.message
+        : 'Unable to reach the sync server.';
       errorMessage.value =
         error instanceof Error ? error.message : 'Unable to reach the sync server.';
       saveStatus.value = 'error';
@@ -748,6 +811,7 @@ export const useInkwellStore = defineStore('inkwell', () => {
     try {
       await notionClient.flushPendingSyncOps({ force: true });
       await refreshWorkspaceFromStorage();
+      syncCheckError.value = '';
     } finally {
       await refreshPendingSyncCount();
     }
@@ -757,6 +821,7 @@ export const useInkwellStore = defineStore('inkwell', () => {
     try {
       const result = await notionClient.resyncPendingChanges();
       await refreshWorkspaceFromStorage();
+      syncCheckError.value = '';
       return result;
     } finally {
       await refreshPendingSyncCount();
@@ -783,13 +848,17 @@ export const useInkwellStore = defineStore('inkwell', () => {
 
     try {
       syncConfig.value = await notionClient.refreshSyncSession();
+      syncCheckError.value = '';
       if (syncConfig.value.connected) {
         await notionClient.prepareLocalWorkspaceForFirstSync();
         await syncPendingChanges();
         openSyncEvents();
       }
-    } catch {
+    } catch (error) {
       isOnline.value = false;
+      syncCheckError.value = error instanceof Error
+        ? error.message
+        : 'Unable to reach the sync server.';
     }
   }
 
@@ -922,12 +991,23 @@ export const useInkwellStore = defineStore('inkwell', () => {
   }
 
   async function loadNotionParentPages(query = '') {
+    const requestId = ++notionParentPageRequestId;
+    isLoadingNotionParentPages.value = true;
     try {
-      notionParentPages.value = await notionClient.listNotionParentPages(query);
+      const pages = await notionClient.listNotionParentPages(query);
+      if (requestId === notionParentPageRequestId) {
+        notionParentPages.value = pages;
+      }
     } catch (error) {
-      errorMessage.value =
-        error instanceof Error ? error.message : 'Unable to load Notion pages.';
-      saveStatus.value = 'error';
+      if (requestId === notionParentPageRequestId) {
+        errorMessage.value =
+          error instanceof Error ? error.message : 'Unable to load Notion pages.';
+        saveStatus.value = 'error';
+      }
+    } finally {
+      if (requestId === notionParentPageRequestId) {
+        isLoadingNotionParentPages.value = false;
+      }
     }
   }
 
@@ -1029,6 +1109,7 @@ export const useInkwellStore = defineStore('inkwell', () => {
       currentPage.value = pages.value[0];
       saveStatus.value = currentPage.value?.syncState ?? 'saved';
       errorMessage.value = '';
+      syncCheckError.value = '';
     } catch (error) {
       errorMessage.value =
         error instanceof Error ? error.message : 'Unable to reload Inkwell from Notion.';
@@ -1139,7 +1220,9 @@ export const useInkwellStore = defineStore('inkwell', () => {
     handleOffline,
     handleOnline,
     isOnline,
+    isCheckingSync,
     isLoading,
+    isLoadingNotionParentPages,
     loadCurrentPage,
     loadProjectPages,
     loadNotionParentPages,
@@ -1174,6 +1257,7 @@ export const useInkwellStore = defineStore('inkwell', () => {
     selectProject,
     startRuntimeListener,
     syncConfig,
+    syncCheckError,
     syncPendingChanges,
     assignUnmatchedPendingQueueToCurrentAccount,
     resyncPendingChanges,
