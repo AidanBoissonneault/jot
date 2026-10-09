@@ -6,6 +6,7 @@
 
 import {
   isArchivedAncestorError,
+  isArchivedObject,
   pageSummaryFromNotionPage,
   projectStateKey,
   threadKey,
@@ -85,6 +86,25 @@ interface ProjectPageResult {
   project: Project;
   title: string;
   url?: string;
+}
+
+/** Runs API-bound reads with a small concurrency limit while preserving result order. */
+async function mapWithConcurrency<Input, Output>(
+  values: Input[],
+  limit: number,
+  map: (value: Input, index: number) => Promise<Output>,
+): Promise<Output[]> {
+  const results = new Array<Output>(values.length);
+  let nextIndex = 0;
+  const workerCount = Math.min(Math.max(1, limit), values.length);
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (true) {
+      const index = nextIndex++;
+      if (index >= values.length) return;
+      results[index] = await map(values[index], index);
+    }
+  }));
+  return results;
 }
 
 /**
@@ -226,7 +246,7 @@ export function createProjectDatabaseHelpers({
   ) {
     clearSyncMappings(store, { preserveBlockMappings: true });
     const requestedParentPageId = selectedParentPageId;
-    const database = await ensureProjectDatabase(store, { selectedParentPageId });
+    const database = await ensureProjectDatabase(store, { selectedParentPageId, readOnly: true });
     const clearSelectedParentPage = Boolean(
       requestedParentPageId &&
       store.inkwellRootPage?.id &&
@@ -237,36 +257,46 @@ export function createProjectDatabaseHelpers({
     const pages: ProjectPage[] = [];
     const activePageIdsByProject: Record<string, string> = {};
 
-    for (const row of rows) {
+    const projectRows = rows.flatMap((row) => {
       const project = projectFromNotionPage(row);
+      return project && project.status !== 'archived' ? [{ row, project }] : [];
+    });
 
-      if (!project || project.status === 'archived') {
-        continue;
-      }
-
-      storeProjectPage(store, database, project, row);
+    // Read independent project rows concurrently. Notion's shared requester
+    // still enforces its global rate limit, while concurrent reads avoid adding
+    // network latency on top of the required request spacing.
+    const rowsWithChildren = await mapWithConcurrency(projectRows, 3, async ({ row, project }) => ({
+      row,
+      project,
       // Abort the reload if any project row cannot be read. Returning a partial
-      // snapshot would make the client replace a complete local workspace with
-      // an incomplete one after a transient Notion failure.
-      const children = await listAllBlockChildren(store, row.id);
+      // snapshot would make the client replace a complete workspace with an
+      // incomplete one after a transient Notion failure.
+      children: await listAllBlockChildren(store, row.id),
+    }));
+
+    const importedRows = await mapWithConcurrency(rowsWithChildren, 3, async ({ row, project, children }) => {
+      storeProjectPage(store, database, project, row);
       const stateBlock = children.find(
         (block) =>
-          block.type === 'toggle' && !block.archived && toggleTitle(block) === 'Project State',
+          block.type === 'toggle' && !isArchivedObject(block) && toggleTitle(block) === 'Project State',
       );
       const threadBlocks = children.filter(
         (block) =>
-          block.type === 'toggle' && !block.archived && toggleTitle(block) !== 'Project State',
+          block.type === 'toggle' && !isArchivedObject(block) && toggleTitle(block) !== 'Project State',
       );
-      const importedProject = stateBlock
-        ? await importProjectState(store, row, project, stateBlock)
-        : project;
+      const [importedProject, importedPages] = await Promise.all([
+        stateBlock ? importProjectState(store, row, project, stateBlock) : Promise.resolve(project),
+        mapWithConcurrency(threadBlocks, 3, (threadBlock) =>
+          pageFromThreadBlock(store, project, row, threadBlock)),
+      ]);
+      return { project: importedProject, pages: importedPages };
+    });
 
-      projects.push(importedProject);
-
-      for (const threadBlock of threadBlocks) {
-        const page = await pageFromThreadBlock(store, importedProject, row, threadBlock);
+    for (const imported of importedRows) {
+      projects.push(imported.project);
+      for (const page of imported.pages) {
         pages.push(page);
-        activePageIdsByProject[importedProject.id] ??= page.id;
+        activePageIdsByProject[imported.project.id] ??= page.id;
       }
     }
 
@@ -287,6 +317,39 @@ export function createProjectDatabaseHelpers({
     };
   }
 
+  /** Reads only active project and thread identities to detect cross-instance structure changes. */
+  async function readProjectDatabaseStructure(
+    store: WorkerStore,
+    { selectedParentPageId }: ParentSelection = { selectedParentPageId: undefined },
+  ) {
+    const database = await ensureProjectDatabase(store, { selectedParentPageId, readOnly: true });
+    const rows = await queryManagedProjectRows(store, database.dataSourceId);
+    const projectRows = rows.flatMap((row) => {
+      const project = projectFromNotionPage(row);
+      return project && project.status !== 'archived' && !isArchivedObject(row)
+        ? [{ row, project }]
+        : [];
+    });
+    const projectIds = projectRows.map(({ project }) => project.id);
+    const projectPageIds = projectRows.map(({ row }) => row.id);
+    const pageIdGroups = await mapWithConcurrency(projectRows, 3, async ({ row }) => {
+      const children = await listAllBlockChildren(store, row.id);
+      return children.flatMap((block) =>
+        block.type === 'toggle' &&
+        !isArchivedObject(block) &&
+        toggleTitle(block) !== 'Project State'
+          ? [block.id]
+          : [],
+      );
+    });
+    // These are Notion block IDs, not generated local page IDs. Comparing the
+    // server IDs to ProjectPage.id caused unchanged pages to look new on every
+    // device because locally-created page IDs are random UUIDs.
+    const pageIds = pageIdGroups.flat();
+
+    return { pageIds, projectIds, projectPageIds };
+  }
+
   return {
     archiveThreadToggle,
     ensureProjectDatabase,
@@ -294,6 +357,7 @@ export function createProjectDatabaseHelpers({
     ensureProjectStateContainer,
     ensureThreadToggle,
     importThreadContent,
+    readProjectDatabaseStructure,
     reloadProjectDatabaseFromNotion,
     projectStateKey,
     threadKey,

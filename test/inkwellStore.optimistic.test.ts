@@ -1,7 +1,7 @@
 import { setActivePinia, createPinia } from 'pinia';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { nextTick } from 'vue';
-import { notionClient } from '@/src/services/notionClient';
+import { applySyncResult, notionClient } from '@/src/services/notionClient';
 import {
   compactPendingSyncOps,
   listPendingProjectSyncEvents,
@@ -19,6 +19,27 @@ type Deferred<T> = {
   reject: (error: unknown) => void;
   resolve: (value: T) => void;
 };
+
+class FakeSyncEventSource {
+  onerror: ((event: Event) => unknown) | null = null;
+  onmessage: ((event: MessageEvent) => unknown) | null = null;
+  onopen: ((event: Event) => unknown) | null = null;
+  closed = false;
+
+  constructor() {
+    queueMicrotask(() => this.onopen?.(new Event('open')));
+  }
+
+  close(): void {
+    this.closed = true;
+  }
+
+  emit(message: Record<string, unknown>): void {
+    this.onmessage?.({ data: JSON.stringify(message) } as MessageEvent);
+  }
+}
+
+const testSyncEventSources: FakeSyncEventSource[] = [];
 
 const baseProject: Project = {
   id: 'project-inkwell',
@@ -52,6 +73,15 @@ const connectedConfig: SyncConfig = {
 
 beforeEach(() => {
   setActivePinia(createPinia());
+  testSyncEventSources.length = 0;
+  vi.stubGlobal('EventSource', class extends FakeSyncEventSource {
+    constructor(url: string, options?: EventSourceInit) {
+      super();
+      testSyncEventSources.push(this);
+      void url;
+      void options;
+    }
+  } as unknown as typeof EventSource);
   resetBrowserStorage({
     activePageIdsByProject: { 'project-inkwell': 'page-inkwell' },
     currentProjectId: 'project-inkwell',
@@ -307,6 +337,7 @@ describe('project metadata', () => {
       selectedParentPageTitle: 'Parent',
     };
     const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ hasPending: false }))
       .mockResolvedValueOnce(jsonResponse({
         activePageIdsByProject: { 'project-remote': 'page-remote' },
         currentProjectId: 'missing-local-project',
@@ -330,7 +361,7 @@ describe('project metadata', () => {
     await store.reloadFromNotion();
     const storage = readBrowserStorage();
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(store.currentProjectId).toBe('project-remote');
     expect(store.currentPage?.id).toBe('page-remote');
     expect(store.pages.map((page) => page.id)).toEqual(['page-remote']);
@@ -339,8 +370,149 @@ describe('project metadata', () => {
     expect((storage.syncConfig as SyncConfig).selectedParentPageId).toBe('parent-page');
   });
 
+  test('reloadFromNotion preserves the selected project and page when they still exist', async () => {
+    const secondProject: Project = {
+      ...baseProject,
+      id: 'project-career',
+      name: 'Career Prep',
+    };
+    const selectedPage: ProjectPage = {
+      ...basePage,
+      id: 'page-career-selected',
+      projectId: secondProject.id,
+      title: 'LinkedIn Demo',
+    };
+    const serverActivePage: ProjectPage = {
+      ...basePage,
+      id: 'page-career-server-active',
+      projectId: secondProject.id,
+      title: 'Another page',
+    };
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ hasPending: false }))
+      .mockResolvedValueOnce(jsonResponse({
+        activePageIdsByProject: {
+          [baseProject.id]: basePage.id,
+          [secondProject.id]: serverActivePage.id,
+        },
+        currentProjectId: baseProject.id,
+        pages: [basePage, selectedPage, serverActivePage],
+        projects: [baseProject, secondProject],
+        status: 'saved',
+      })));
+    resetBrowserStorage({
+      activePageIdsByProject: {
+        [baseProject.id]: basePage.id,
+        [secondProject.id]: selectedPage.id,
+      },
+      currentProjectId: secondProject.id,
+      hasMigratedCapturesToPages: true,
+      pages: [basePage, selectedPage],
+      projects: [baseProject, secondProject],
+      syncConfig: connectedConfig,
+    });
+
+    const reloaded = await notionClient.reloadFromNotion({ force: true });
+    const storage = readBrowserStorage();
+
+    expect(reloaded.currentProjectId).toBe(secondProject.id);
+    expect((storage.activePageIdsByProject as Record<string, string>)[secondProject.id])
+      .toBe(selectedPage.id);
+  });
+
+  test('manual reload keeps the selected page instead of choosing the first page', async () => {
+    const secondProject: Project = {
+      ...baseProject,
+      id: 'project-career',
+      name: 'Career Prep',
+    };
+    const selectedPage: ProjectPage = {
+      ...basePage,
+      id: 'page-career-selected',
+      projectId: secondProject.id,
+      title: 'LinkedIn Demo',
+    };
+    const firstPage: ProjectPage = {
+      ...basePage,
+      id: 'page-career-first',
+      projectId: secondProject.id,
+      title: 'First page',
+    };
+    const store = useInkwellStore();
+    await seedStore(store, [basePage, selectedPage]);
+    store.projects = [baseProject, secondProject];
+    store.pages = [selectedPage, firstPage];
+    store.currentProjectId = secondProject.id;
+    store.currentPage = selectedPage;
+    const reload = vi.spyOn(notionClient, 'reloadFromNotion').mockResolvedValue({
+      currentProjectId: secondProject.id,
+      pages: [firstPage, selectedPage],
+      projects: [baseProject, secondProject],
+      syncConfig: connectedConfig,
+    });
+    const listPages = vi.spyOn(notionClient, 'listProjectPages')
+      .mockResolvedValue([firstPage, selectedPage]);
+    const getPage = vi.spyOn(notionClient, 'getProjectPage').mockResolvedValue(selectedPage);
+
+    try {
+      await store.reloadFromNotion();
+
+      expect(reload).toHaveBeenCalledWith({ force: true });
+      expect(store.currentProjectId).toBe(secondProject.id);
+      expect(store.currentPage?.id).toBe(selectedPage.id);
+    } finally {
+      reload.mockRestore();
+      listPages.mockRestore();
+      getPage.mockRestore();
+    }
+  });
+
+  test('reloadFromNotion refreshes for a structural change without stale or new sync rows', async () => {
+    const remotePage: ProjectPage = {
+      ...basePage,
+      id: 'page-created-elsewhere',
+      title: 'Ravens Heart',
+      notionPageId: 'thread-created-elsewhere',
+    };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({
+        aheadPageIds: [],
+        failedPageIds: [],
+        newPageIds: [],
+        stalePageIds: [],
+        workspaceChanged: true,
+      }))
+      .mockResolvedValueOnce(jsonResponse({ hasPending: false }))
+      .mockResolvedValueOnce(jsonResponse({
+        activePageIdsByProject: { [baseProject.id]: remotePage.id },
+        currentProjectId: baseProject.id,
+        pages: [remotePage],
+        projects: [baseProject],
+        status: 'saved',
+      }));
+    vi.stubGlobal('fetch', fetchMock);
+    resetBrowserStorage({
+      activePageIdsByProject: { [baseProject.id]: basePage.id },
+      currentProjectId: baseProject.id,
+      hasMigratedCapturesToPages: true,
+      pages: [basePage],
+      projects: [baseProject],
+      syncConfig: connectedConfig,
+    });
+
+    const reloaded = await notionClient.reloadFromNotion();
+
+    expect(reloaded.pages.map((page) => page.title)).toEqual(['Ravens Heart']);
+    expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
+      'http://localhost:8787/sync/validate',
+      'http://localhost:8787/sync/status',
+      'http://localhost:8787/sync/reload',
+    ]);
+  });
+
   test('reloadFromNotion clears selected parent when server reports it invalid', async () => {
     vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ hasPending: false }))
       .mockResolvedValueOnce(jsonResponse({
         activePageIdsByProject: {},
         clearSelectedParentPage: true,
@@ -370,14 +542,384 @@ describe('project metadata', () => {
     await expect(notionClient.listProjects()).resolves.toEqual([]);
   });
 
+  test('waits for accepted server jobs before reloading the Notion snapshot', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ hasPending: true }))
+      .mockResolvedValueOnce(jsonResponse({ hasPending: false }))
+      .mockResolvedValueOnce(jsonResponse({
+        activePageIdsByProject: {},
+        currentProjectId: '',
+        pages: [],
+        projects: [],
+        status: 'saved',
+      }));
+    vi.stubGlobal('fetch', fetchMock);
+    resetBrowserStorage({
+      activePageIdsByProject: { 'project-inkwell': 'page-inkwell' },
+      currentProjectId: 'project-inkwell',
+      hasMigratedCapturesToPages: true,
+      pages: [basePage],
+      projects: [baseProject],
+      syncConfig: connectedConfig,
+    });
+
+    const reload = notionClient.reloadFromNotion({ force: true });
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(testSyncEventSources).toHaveLength(1));
+    testSyncEventSources[0]?.emit({ status: 'queue_idle' });
+    await reload;
+
+    expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
+      'http://localhost:8787/sync/status',
+      'http://localhost:8787/sync/status',
+      'http://localhost:8787/sync/reload',
+    ]);
+  });
+
+  test('rechecks once when a queue idle event arrives during the initial status request', async () => {
+    const pendingStatus = deferred<Response>();
+    const fetchMock = vi.fn()
+      .mockImplementationOnce(() => pendingStatus.promise)
+      .mockResolvedValueOnce(jsonResponse({ hasPending: false }))
+      .mockResolvedValueOnce(jsonResponse({
+        activePageIdsByProject: {},
+        currentProjectId: '',
+        pages: [],
+        projects: [],
+        status: 'saved',
+      }));
+    vi.stubGlobal('fetch', fetchMock);
+    resetBrowserStorage({
+      activePageIdsByProject: { 'project-inkwell': 'page-inkwell' },
+      currentProjectId: 'project-inkwell',
+      hasMigratedCapturesToPages: true,
+      pages: [basePage],
+      projects: [baseProject],
+      syncConfig: connectedConfig,
+    });
+
+    const reload = notionClient.reloadFromNotion({ force: true });
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    testSyncEventSources[0]?.emit({ status: 'queue_idle' });
+    pendingStatus.resolve(jsonResponse({ hasPending: true }));
+    await reload;
+
+    expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
+      'http://localhost:8787/sync/status',
+      'http://localhost:8787/sync/status',
+      'http://localhost:8787/sync/reload',
+    ]);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  test('keeps a fetched snapshot when server progress events update local sync metadata', async () => {
+    const versionedPage: ProjectPage = {
+      ...basePage,
+      notionPageId: 'notion-page-local',
+      knownSyncVersion: 1,
+      serverSyncVersion: 1,
+    };
+    const remoteOnlyPage: ProjectPage = {
+      ...basePage,
+      id: 'page-from-another-instance',
+      title: 'Created remotely',
+      notionPageId: 'notion-page-remote',
+    };
+    const reloadResponse = deferred<Response>();
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ hasPending: true }))
+      .mockResolvedValueOnce(jsonResponse({ hasPending: false }))
+      .mockImplementationOnce(() => reloadResponse.promise);
+    vi.stubGlobal('fetch', fetchMock);
+    resetBrowserStorage({
+      activePageIdsByProject: { 'project-inkwell': versionedPage.id },
+      currentProjectId: 'project-inkwell',
+      hasMigratedCapturesToPages: true,
+      pages: [versionedPage],
+      projects: [baseProject],
+      syncConfig: connectedConfig,
+    });
+
+    const reload = notionClient.reloadFromNotion({ force: true });
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    await applySyncResult({
+      status: 'synced',
+      pageId: versionedPage.id,
+      version: 2,
+    });
+    testSyncEventSources[0]?.emit({ status: 'queue_idle' });
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+    await applySyncResult({
+      status: 'synced',
+      pageId: versionedPage.id,
+      version: 3,
+    });
+    reloadResponse.resolve(jsonResponse({
+        activePageIdsByProject: { 'project-inkwell': versionedPage.id },
+        currentProjectId: 'project-inkwell',
+        pages: [versionedPage, remoteOnlyPage],
+        projects: [baseProject],
+        status: 'saved',
+    }));
+    await reload;
+
+    expect((readBrowserStorage().pages as ProjectPage[]).map((page) => page.id))
+      .toContain(remoteOnlyPage.id);
+  });
+
+  test('does not mark remote content current until its newer version is pulled', async () => {
+    const versionedPage: ProjectPage = {
+      ...basePage,
+      notionPageId: 'thread-remote',
+      knownSyncVersion: 3,
+      serverSyncVersion: 3,
+    };
+    resetBrowserStorage({
+      activePageIdsByProject: { 'project-inkwell': versionedPage.id },
+      currentProjectId: 'project-inkwell',
+      hasMigratedCapturesToPages: true,
+      pages: [versionedPage],
+      projects: [baseProject],
+      syncConfig: connectedConfig,
+    });
+
+    const updated = await applySyncResult({
+      status: 'synced',
+      pageId: versionedPage.id,
+      version: 4,
+    });
+
+    expect(updated?.serverSyncVersion).toBe(4);
+    expect(updated?.knownSyncVersion).toBe(3);
+    expect((readBrowserStorage().pages as ProjectPage[])[0]?.knownSyncVersion).toBe(3);
+  });
+
+  test('resync reloads server-only pages after queued local work finishes', async () => {
+    const linkedPage: ProjectPage = {
+      ...basePage,
+      notionPageId: 'notion-page-local',
+    };
+    resetBrowserStorage({
+      activePageIdsByProject: { 'project-inkwell': linkedPage.id },
+      currentProjectId: 'project-inkwell',
+      hasMigratedCapturesToPages: true,
+      pages: [linkedPage],
+      projects: [baseProject],
+      syncConfig: connectedConfig,
+    });
+    await notionClient.updateProjectPage({
+      ...linkedPage,
+      content: docWithText('queued local edit'),
+    });
+    expect(await notionClient.pendingSyncEventCount()).toBeGreaterThan(0);
+
+    const remoteOnlyPage: ProjectPage = {
+      ...basePage,
+      id: 'page-present-only-on-server',
+      title: 'Server only',
+      notionPageId: 'notion-page-server-only',
+    };
+    const fetchMock = vi.fn(async (url: string) => {
+      if (String(url).endsWith('/sync/validate')) {
+        return jsonResponse({
+          aheadPageIds: [],
+          failedPageIds: [],
+          newPageIds: [remoteOnlyPage.id],
+          stalePageIds: [],
+        });
+      }
+      if (String(url).endsWith('/sync/page/resync')) {
+        return jsonResponse({ status: 'saved', page: linkedPage });
+      }
+      if (String(url).endsWith('/sync/status')) {
+        return jsonResponse({ hasPending: false });
+      }
+      if (String(url).endsWith('/sync/reload')) {
+        return jsonResponse({
+          activePageIdsByProject: {
+            'project-inkwell': linkedPage.id,
+          },
+          currentProjectId: 'project-inkwell',
+          pages: [linkedPage, remoteOnlyPage],
+          projects: [baseProject],
+          status: 'saved',
+        });
+      }
+      throw new Error(`Unexpected sync request: ${String(url)}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await notionClient.resyncPendingChanges();
+
+    expect(result.reloadedFromNotion).toBe(true);
+    expect(result.remainingCount).toBe(0);
+    expect((readBrowserStorage().pages as ProjectPage[]).map((page) => page.id))
+      .toContain(remoteOnlyPage.id);
+    expect(fetchMock.mock.calls.map(([url]) => String(url))).toContain(
+      'http://localhost:8787/sync/reload',
+    );
+  });
+
+  test('manual resync reloads the Notion workspace even when validation reports no changes', async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (String(url).endsWith('/sync/validate')) {
+        return jsonResponse({
+          aheadPageIds: [],
+          failedPageIds: [],
+          newPageIds: [],
+          stalePageIds: [],
+          workspaceChanged: false,
+        });
+      }
+      if (String(url).endsWith('/sync/status')) return jsonResponse({ hasPending: false });
+      if (String(url).endsWith('/sync/reload')) {
+        return jsonResponse({
+          activePageIdsByProject: { [baseProject.id]: basePage.id },
+          currentProjectId: baseProject.id,
+          pages: [basePage],
+          projects: [baseProject],
+          status: 'saved',
+        });
+      }
+      throw new Error(`Unexpected sync request: ${String(url)}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await notionClient.resyncPendingChanges();
+
+    expect(result.reloadedFromNotion).toBe(true);
+    expect(result.remoteReloadPending).toBe(false);
+    expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
+      'http://localhost:8787/sync/validate',
+      'http://localhost:8787/sync/status',
+      'http://localhost:8787/sync/reload',
+    ]);
+  });
+
+  test('manual resync refreshes the session without running a second sync validation', async () => {
+    const store = useInkwellStore();
+    await seedStore(store);
+    const refreshSession = vi.spyOn(notionClient, 'refreshSyncSession').mockResolvedValue(connectedConfig);
+    const prepareWorkspace = vi.spyOn(notionClient, 'prepareLocalWorkspaceForFirstSync').mockResolvedValue(false);
+    const sync = vi.spyOn(store, 'syncPendingChanges').mockResolvedValue(undefined);
+
+    await store.refreshSyncSession(false, false);
+
+    expect(refreshSession).toHaveBeenCalledOnce();
+    expect(prepareWorkspace).not.toHaveBeenCalled();
+    expect(sync).not.toHaveBeenCalled();
+    refreshSession.mockRestore();
+    prepareWorkspace.mockRestore();
+    sync.mockRestore();
+  });
+
+  test('resync imports pages created by another instance even without installation sync rows', async () => {
+    const localPage = { ...basePage, notionPageId: 'thread-local' };
+    const externalPage: ProjectPage = {
+      ...basePage,
+      id: 'random-id-from-second-device',
+      title: 'External page',
+      notionPageId: 'thread-created-on-second-device',
+    };
+    resetBrowserStorage({
+      activePageIdsByProject: { 'project-inkwell': localPage.id },
+      currentProjectId: 'project-inkwell',
+      hasMigratedCapturesToPages: true,
+      pages: [localPage],
+      projects: [baseProject],
+      syncConfig: connectedConfig,
+    });
+    const fetchMock = vi.fn(async (url: string) => {
+      if (String(url).endsWith('/sync/validate')) {
+        return jsonResponse({
+          aheadPageIds: [],
+          failedPageIds: [],
+          newPageIds: [],
+          stalePageIds: [],
+          workspaceChanged: true,
+        });
+      }
+      if (String(url).endsWith('/sync/status')) return jsonResponse({ hasPending: false });
+      if (String(url).endsWith('/sync/reload')) {
+        return jsonResponse({
+          activePageIdsByProject: { 'project-inkwell': localPage.id },
+          currentProjectId: 'project-inkwell',
+          pages: [localPage, externalPage],
+          projects: [baseProject],
+          status: 'saved',
+        });
+      }
+      throw new Error(`Unexpected sync request: ${String(url)}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await notionClient.resyncPendingChanges();
+
+    expect(result.reloadedFromNotion).toBe(true);
+    expect((readBrowserStorage().pages as ProjectPage[]).map((page) => page.notionPageId))
+      .toContain(externalPage.notionPageId);
+    expect(fetchMock.mock.calls.map(([url]) => String(url))).toContain(
+      'http://localhost:8787/sync/reload',
+    );
+  });
+
+  test('resync removes a page deleted on another instance', async () => {
+    const survivingPage = { ...basePage, notionPageId: 'thread-survivor' };
+    const deletedPage: ProjectPage = {
+      ...basePage,
+      id: 'random-id-for-deleted-page',
+      title: 'Deleted page',
+      notionPageId: 'thread-deleted-on-second-device',
+    };
+    resetBrowserStorage({
+      activePageIdsByProject: { 'project-inkwell': deletedPage.id },
+      currentProjectId: 'project-inkwell',
+      hasMigratedCapturesToPages: true,
+      pages: [deletedPage, survivingPage],
+      projects: [baseProject],
+      syncConfig: connectedConfig,
+    });
+    const fetchMock = vi.fn(async (url: string) => {
+      if (String(url).endsWith('/sync/validate')) {
+        return jsonResponse({
+          aheadPageIds: [],
+          failedPageIds: [],
+          newPageIds: [],
+          stalePageIds: [],
+          workspaceChanged: true,
+        });
+      }
+      if (String(url).endsWith('/sync/status')) return jsonResponse({ hasPending: false });
+      if (String(url).endsWith('/sync/reload')) {
+        return jsonResponse({
+          activePageIdsByProject: { 'project-inkwell': survivingPage.id },
+          currentProjectId: 'project-inkwell',
+          pages: [survivingPage],
+          projects: [baseProject],
+          status: 'saved',
+        });
+      }
+      throw new Error(`Unexpected sync request: ${String(url)}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await notionClient.resyncPendingChanges();
+
+    expect(result.reloadedFromNotion).toBe(true);
+    expect((readBrowserStorage().pages as ProjectPage[]).map((page) => page.id))
+      .toEqual([survivingPage.id]);
+  });
+
   test('initial hydration keeps the starter project when the remote workspace is new', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ hasPending: false }))
+      .mockResolvedValueOnce(jsonResponse({
       activePageIdsByProject: {},
       currentProjectId: '',
       pages: [],
       projects: [],
       status: 'saved',
-    })));
+      })));
     resetBrowserStorage({
       activePageIdsByProject: { 'project-inkwell': 'page-inkwell' },
       currentProjectId: 'project-inkwell',
@@ -461,9 +1003,46 @@ describe('project metadata', () => {
     expect(stripInkwellBlockIds(store.currentPage?.content)).toEqual(localPage.content);
   });
 
+  test('shows local content and reports server validation failures', async () => {
+    const localPage = {
+      ...basePage,
+      content: docWithText('cached while server validation is unavailable'),
+    };
+    vi.spyOn(notionClient, 'refreshSyncSession').mockResolvedValue(connectedConfig);
+    vi.spyOn(notionClient, 'prepareLocalWorkspaceForFirstSync').mockResolvedValue(false);
+    vi.spyOn(notionClient, 'needsInitialNotionHydration').mockResolvedValue(false);
+    vi.spyOn(notionClient, 'validateNotionCache').mockRejectedValue(
+      new Error('Sync server returned 500.'),
+    );
+    const OriginalEventSource = globalThis.EventSource;
+    resetBrowserStorage({
+      activePageIdsByProject: { 'project-inkwell': 'page-inkwell' },
+      currentProjectId: 'project-inkwell',
+      hasMigratedCapturesToPages: true,
+      notionHydrationSource: 'http://localhost:8787::',
+      pages: [localPage],
+      projects: [baseProject],
+      syncConfig: connectedConfig,
+    });
+
+    try {
+      const store = useInkwellStore();
+      await store.initialize();
+
+      expect(store.syncCheckError).toContain('Couldn\'t check Notion for changes.');
+      expect(store.syncCheckError).toContain('Sync server returned 500.');
+      expect(stripInkwellBlockIds(store.currentPage?.content)).toEqual(localPage.content);
+    } finally {
+      globalThis.EventSource = OriginalEventSource;
+      vi.restoreAllMocks();
+    }
+  });
+
   test('keeps edits made during remote hydration instead of replacing them', async () => {
     const reload = deferred<Response>();
-    const fetchMock = vi.fn(() => reload.promise);
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ hasPending: false }))
+      .mockImplementationOnce(() => reload.promise);
     vi.stubGlobal('fetch', fetchMock);
     const originalNavigator = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
     Object.defineProperty(globalThis, 'navigator', {
@@ -481,7 +1060,7 @@ describe('project metadata', () => {
 
     try {
       const reloadPromise = notionClient.reloadFromNotion({ force: true });
-      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
       const editedPage = {
         ...basePage,
         content: docWithText('edited while server checks'),
@@ -529,6 +1108,7 @@ describe('project metadata', () => {
         workspaceId: 'workspace-main',
         workspaceName: 'Main workspace',
       }))
+      .mockResolvedValueOnce(jsonResponse({ hasPending: false }))
       .mockResolvedValueOnce(jsonResponse({
         activePageIdsByProject: {
           'project-one': 'page-1',
@@ -541,12 +1121,6 @@ describe('project metadata', () => {
       }));
     vi.stubGlobal('fetch', fetchMock);
     const OriginalEventSource = globalThis.EventSource;
-    globalThis.EventSource = class {
-      onerror = null;
-      onmessage = null;
-      onopen = null;
-      close() {}
-    } as unknown as typeof EventSource;
     resetBrowserStorage({
       hasExplicitlyLoggedOut: false,
       syncConfig: {
@@ -562,6 +1136,7 @@ describe('project metadata', () => {
 
       expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
         'http://localhost:8787/session',
+        'http://localhost:8787/sync/status',
         'http://localhost:8787/sync/reload',
       ]);
       expect(store.projects.map((project) => project.id)).toEqual([
@@ -576,7 +1151,7 @@ describe('project metadata', () => {
     }
   });
 
-  test('loads newly discovered server pages after queued local sync drains', async () => {
+  test('loads pages created by another installation after local sync drains', async () => {
     const remoteProject: Project = {
       ...baseProject,
       id: 'project-from-server',
@@ -607,7 +1182,8 @@ describe('project metadata', () => {
       stalePageIds: [],
       aheadPageIds: [],
       failedPageIds: [],
-      newPageIds: [remotePage.id],
+      newPageIds: [],
+      workspaceChanged: true,
     });
     vi.spyOn(notionClient, 'pendingSyncEventCount')
       .mockResolvedValueOnce(1)
@@ -624,12 +1200,6 @@ describe('project metadata', () => {
     );
     vi.spyOn(notionClient, 'prefetchProjectPages').mockResolvedValue(undefined);
     const originalEventSource = globalThis.EventSource;
-    globalThis.EventSource = class {
-      onerror = null;
-      onmessage = null;
-      onopen = null;
-      close() {}
-    } as unknown as typeof EventSource;
     resetBrowserStorage({
       activePageIdsByProject: { 'project-inkwell': 'page-inkwell' },
       currentProjectId: 'project-inkwell',
@@ -646,6 +1216,85 @@ describe('project metadata', () => {
       await waitFor(() => expect(reloadFromNotion).toHaveBeenCalledTimes(1));
 
       expect(reloadOrder).toEqual(['flush', 'reload']);
+      expect(store.projects.map((project) => project.id)).toEqual([remoteProject.id]);
+      expect(store.pages.map((page) => page.id)).toEqual([remotePage.id]);
+      expect(store.currentPage?.id).toBe(remotePage.id);
+    } finally {
+      globalThis.EventSource = originalEventSource;
+      vi.restoreAllMocks();
+    }
+  });
+
+  test('reloads the workspace when a sync event refers to a page missing locally', async () => {
+    const remoteProject: Project = {
+      ...baseProject,
+      id: 'project-discovered-by-event',
+      name: 'Discovered project',
+    };
+    const remotePage: ProjectPage = {
+      ...basePage,
+      id: 'page-discovered-by-event',
+      projectId: remoteProject.id,
+      title: 'Discovered page',
+    };
+    const workspaceConfig = { ...connectedConfig, workspaceId: 'workspace-main' };
+    const reloadFromNotion = vi.spyOn(notionClient, 'reloadFromNotion')
+      .mockResolvedValue({
+        currentProjectId: remoteProject.id,
+        pages: [remotePage],
+        projects: [remoteProject],
+        syncConfig: workspaceConfig,
+      });
+    vi.spyOn(notionClient, 'refreshSyncSession').mockResolvedValue(workspaceConfig);
+    vi.spyOn(notionClient, 'prepareLocalWorkspaceForFirstSync').mockResolvedValue(false);
+    vi.spyOn(notionClient, 'needsInitialNotionHydration').mockResolvedValue(false);
+    vi.spyOn(notionClient, 'validateNotionCache').mockResolvedValue({
+      stalePageIds: [],
+      aheadPageIds: [],
+      failedPageIds: [],
+      newPageIds: [],
+    });
+    vi.spyOn(notionClient, 'listProjectPages').mockImplementation(async (projectId) =>
+      projectId === remoteProject.id ? [remotePage] : [basePage],
+    );
+    vi.spyOn(notionClient, 'getProjectPage').mockImplementation(async (projectId) =>
+      projectId === remoteProject.id ? remotePage : basePage,
+    );
+    vi.spyOn(notionClient, 'prefetchProjectPages').mockResolvedValue(undefined);
+
+    const originalEventSource = globalThis.EventSource;
+    let eventSource: EventSource | undefined;
+    globalThis.EventSource = class {
+      onerror = null;
+      onmessage = null;
+      onopen = null;
+      close() {}
+      constructor() { eventSource = this as unknown as EventSource; }
+    } as unknown as typeof EventSource;
+    resetBrowserStorage({
+      activePageIdsByProject: { 'project-inkwell': 'page-inkwell' },
+      currentProjectId: 'project-inkwell',
+      hasMigratedCapturesToPages: true,
+      notionHydrationSource: 'http://localhost:8787::workspace-main',
+      pages: [basePage],
+      projects: [baseProject],
+      syncConfig: workspaceConfig,
+    });
+
+    try {
+      const store = useInkwellStore();
+      await store.initialize();
+
+      expect(eventSource).toBeDefined();
+      (eventSource?.onmessage as ((event: { data: string }) => void) | null)?.({
+        data: JSON.stringify({
+          status: 'synced',
+          pageId: remotePage.id,
+          version: 1,
+        }),
+      });
+      await waitFor(() => expect(reloadFromNotion).toHaveBeenCalledWith({ force: true }));
+
       expect(store.projects.map((project) => project.id)).toEqual([remoteProject.id]);
       expect(store.pages.map((page) => page.id)).toEqual([remotePage.id]);
       expect(store.currentPage?.id).toBe(remotePage.id);
@@ -1384,6 +2033,7 @@ describe('offline queue lifecycle', () => {
         'http://localhost:8787/session',
         'http://localhost:8787/sync/project',
         'http://localhost:8787/sync/push',
+        'http://localhost:8787/sync/validate',
       ]);
       expect(store.pendingSyncCount).toBe(0);
       expect(await notionClient.pendingSyncEventCount()).toBe(0);
@@ -1567,6 +2217,122 @@ describe('project page caching', () => {
     expect(store.currentPage?.content).toEqual(docWithText('newer local draft'));
     expect(store.currentPage?.notionPageId).toBe('notion-page');
     expect(store.currentPage?.remoteRevision).toBe('remote-2');
+  });
+});
+
+describe('cross-instance workspace refresh', () => {
+  test('manual resync refreshes the live project and page after a remote project change', async () => {
+    const remoteProject: Project = {
+      ...baseProject,
+      id: 'project-from-another-instance',
+      name: 'Remote project',
+    };
+    const remotePage: ProjectPage = {
+      ...basePage,
+      id: 'page-from-another-instance',
+      projectId: remoteProject.id,
+      title: 'Remote page',
+    };
+    const store = useInkwellStore();
+    await setupStoreWithPages(store, [basePage]);
+    const resync = vi.spyOn(notionClient, 'resyncPendingChanges').mockImplementation(async () => {
+      resetBrowserStorage({
+        activePageIdsByProject: { [remoteProject.id]: remotePage.id },
+        currentProjectId: remoteProject.id,
+        hasMigratedCapturesToPages: true,
+        pages: [remotePage],
+        projects: [remoteProject],
+        syncConfig: connectedConfig,
+      });
+      return {
+        blockedProjectCount: 0,
+        conflicts: [],
+        reloadedFromNotion: true,
+        remoteReloadPending: false,
+        remainingCount: 0,
+      };
+    });
+
+    await store.resyncPendingChanges();
+
+    expect(store.projects.map((project) => project.id)).toEqual([remoteProject.id]);
+    expect(store.currentProjectId).toBe(remoteProject.id);
+    expect(store.pages.map((page) => page.id)).toEqual([remotePage.id]);
+    expect(store.currentPage?.id).toBe(remotePage.id);
+    resync.mockRestore();
+  });
+
+  test('manual resync replaces a remotely deleted current page with the surviving page', async () => {
+    const survivingPage: ProjectPage = {
+      ...basePage,
+      id: 'page-that-survived-remotely',
+      title: 'Surviving page',
+    };
+    const deletedPage: ProjectPage = {
+      ...basePage,
+      id: 'page-deleted-remotely',
+      title: 'Deleted page',
+    };
+    const store = useInkwellStore();
+    await setupStoreWithPages(store, [deletedPage, survivingPage]);
+    store.currentPage = deletedPage;
+    const resync = vi.spyOn(notionClient, 'resyncPendingChanges').mockImplementation(async () => {
+      resetBrowserStorage({
+        activePageIdsByProject: { [baseProject.id]: survivingPage.id },
+        currentProjectId: baseProject.id,
+        hasMigratedCapturesToPages: true,
+        pages: [survivingPage],
+        projects: [baseProject],
+        syncConfig: connectedConfig,
+      });
+      return {
+        blockedProjectCount: 0,
+        conflicts: [],
+        reloadedFromNotion: true,
+        remoteReloadPending: false,
+        remainingCount: 0,
+      };
+    });
+
+    await store.resyncPendingChanges();
+
+    expect(store.pages.map((page) => page.id)).toEqual([survivingPage.id]);
+    expect(store.currentPage?.id).toBe(survivingPage.id);
+    resync.mockRestore();
+  });
+
+  test('manual sync reloads when remote project/page IDs changed without local event rows', async () => {
+    const externalPage: ProjectPage = {
+      ...basePage,
+      id: 'page-created-in-another-instance',
+      title: 'External page',
+      notionPageId: 'external-thread-block',
+    };
+    const store = useInkwellStore();
+    await setupStoreWithPages(store, [basePage]);
+    vi.spyOn(notionClient, 'flushPendingSyncOps').mockResolvedValue(undefined);
+    vi.spyOn(notionClient, 'pendingSyncEventCount').mockResolvedValue(0);
+    vi.spyOn(notionClient, 'validateNotionCache').mockResolvedValue({
+      stalePageIds: [],
+      aheadPageIds: [],
+      failedPageIds: [],
+      newPageIds: [],
+      workspaceChanged: true,
+    });
+    const reload = vi.spyOn(notionClient, 'reloadFromNotion').mockResolvedValue({
+      currentProjectId: baseProject.id,
+      pages: [basePage, externalPage],
+      projects: [baseProject],
+      syncConfig: connectedConfig,
+    });
+    vi.spyOn(notionClient, 'listProjectPages').mockResolvedValue([basePage, externalPage]);
+    vi.spyOn(notionClient, 'getProjectPage').mockResolvedValue(basePage);
+    vi.spyOn(notionClient, 'prefetchProjectPages').mockResolvedValue(undefined);
+
+    await store.syncPendingChanges();
+
+    expect(reload).toHaveBeenCalledWith({ force: true });
+    expect(store.pages.map((page) => page.id)).toContain(externalPage.id);
   });
 });
 

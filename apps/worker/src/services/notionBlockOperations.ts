@@ -44,6 +44,7 @@ export function createNotionBlockOperations({
   ): ReturnType<ListAllBlockChildren> {
     const results: NotionBlock[] = [];
     let cursor: string | undefined;
+    const seenCursors = new Set<string>();
 
     do {
       const search = new URLSearchParams();
@@ -51,8 +52,21 @@ export function createNotionBlockOperations({
       if (cursor) search.set('start_cursor', cursor);
 
       const response = await notionRequest(store, `/blocks/${blockId}/children?${search}`);
+      if (!Array.isArray(response.results)) {
+        throw new Error(`Notion returned an invalid child-block page for ${blockId}.`);
+      }
       results.push(...(response.results as NotionBlock[]));
-      cursor = response.has_more ? (response.next_cursor ?? undefined) : undefined;
+
+      if (response.has_more) {
+        const nextCursor = response.next_cursor;
+        if (!nextCursor || seenCursors.has(nextCursor)) {
+          throw new Error(`Notion returned an incomplete child-block list for ${blockId}.`);
+        }
+        seenCursors.add(nextCursor);
+        cursor = nextCursor;
+      } else {
+        cursor = undefined;
+      }
     } while (cursor);
 
     return results;

@@ -20,7 +20,15 @@ function makeQuery(data: unknown) {
   query.maybeSingle = vi.fn(async () => ({ data, error: null }));
   query.delete = vi.fn(() => query);
   query.update = vi.fn(() => query);
+  query.limit = vi.fn(() => query);
   return query;
+}
+
+function makeSyncEventsBinding(fetch = vi.fn(async (_request: Request) => new Response('ok'))) {
+  return {
+    get: vi.fn(() => ({ fetch })),
+    idFromName: vi.fn((id: string) => id),
+  };
 }
 
 function makeMessage(jobId = '1b4f2a8a-4ed5-4d81-baaa-3d3c5d0d2e12') {
@@ -52,15 +60,20 @@ describe('content-free sync queue references', () => {
 
   it('cleans a processed payload without replaying its Notion mutation', async () => {
     const message = makeMessage();
-    const query = makeQuery({ status: 'processed' });
+    const query = makeQuery({ status: 'processed', installation_id: 42 });
     runtime.supabase.from.mockReturnValue(query);
+    const notify = vi.fn(async (_request: Request) => new Response('ok'));
+    const syncEvents = makeSyncEventsBinding(notify);
 
     await processSyncQueue({ messages: [message] } as never, {
-      SYNC_EVENTS: { get: vi.fn() },
+      SYNC_EVENTS: syncEvents,
     } as never);
 
     expect(query.delete).toHaveBeenCalledOnce();
     expect(message.ack).toHaveBeenCalledOnce();
+    expect(notify).toHaveBeenCalledOnce();
+    const event = await notify.mock.calls[0]?.[0]?.clone().json() as { status: string };
+    expect(event).toEqual({ status: 'queue_idle' });
     expect(runtime.applyBlockOpsToNotionForInstallation).not.toHaveBeenCalled();
     expect(runtime.pushPageToNotionForInstallation).not.toHaveBeenCalled();
   });
@@ -77,17 +90,22 @@ describe('content-free sync queue references', () => {
       },
       retry: vi.fn(),
     };
-    runtime.supabase.from.mockReturnValue(makeQuery(null));
+    runtime.supabase.from.mockImplementation((table: string) =>
+      table === 'inkwell_sync_queue_payloads' ? makeQuery([]) : makeQuery(null),
+    );
     runtime.pushPageToNotionForInstallation.mockRejectedValueOnce(
       Object.assign(new Error('Installation is no longer active.'), { code: 'installation_revoked' }),
     );
 
+    const notify = vi.fn(async (_request: Request) => new Response('ok'));
+    const syncEvents = makeSyncEventsBinding(notify);
     await processSyncQueue({ messages: [message] } as never, {
-      SYNC_EVENTS: { get: vi.fn() },
+      SYNC_EVENTS: syncEvents,
     } as never);
 
     expect(message.ack).toHaveBeenCalledOnce();
     expect(message.retry).not.toHaveBeenCalled();
-    expect(runtime.supabase.from).not.toHaveBeenCalledWith('inkwell_sync_queue_payloads');
+    expect(runtime.supabase.from).toHaveBeenCalledWith('inkwell_sync_queue_payloads');
+    expect(notify).toHaveBeenCalledOnce();
   });
 });

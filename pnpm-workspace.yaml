@@ -29,4 +29,4 @@ allowBuilds:
   fallow: set this to true or false
   sharp: set this to true or false
   spawn-sync: true
-  workerd: set this to true or false
+  workerd: true

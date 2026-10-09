@@ -5,6 +5,7 @@
  */
 import {
   emptyDocument,
+  isArchivedObject,
   projectStateKey,
   richText,
   threadKey,
@@ -74,7 +75,7 @@ export function createProjectDatabaseStateHelpers({
     project: Project,
     stateBlock: NotionBlock,
   ): Promise<Project> {
-    const blocks = await listAllBlockChildren(store, stateBlock.id).catch(() => []);
+    const blocks = await listAllBlockChildren(store, stateBlock.id);
     const content = blocks.length ? notionBlocksToTiptapDocument(blocks) : emptyDocument();
     store.projectBlocks[projectStateKey(project.id)] = {
       blockId: stateBlock.id,
@@ -99,7 +100,7 @@ export function createProjectDatabaseStateHelpers({
   ): Promise<ProjectPage> {
     const id = `page-${project.id}-${threadBlock.id}`;
     const title = toggleTitle(threadBlock) || 'Untitled Page';
-    const contentBlocks = await listAllBlockChildren(store, threadBlock.id).catch(() => []);
+    const contentBlocks = await listAllBlockChildren(store, threadBlock.id);
     const importedContent = contentBlocks.length
       ? await importManagedBlocks(store, { id, notionPageId: threadBlock.id }, contentBlocks)
       : null;
@@ -305,7 +306,7 @@ export function createProjectDatabaseStateHelpers({
         throw error;
       });
 
-      if (block?.id && !block.archived) {
+      if (block?.id && !isArchivedObject(block)) {
         if (toggleTitle(block) !== title) {
           await updateToggleTitle(store, block.id, title);
         }
@@ -321,7 +322,7 @@ export function createProjectDatabaseStateHelpers({
       throw error;
     });
     const matching = children.find(
-      (block) => block.type === 'toggle' && !block.archived && toggleTitle(block) === title,
+      (block) => block.type === 'toggle' && !isArchivedObject(block) && toggleTitle(block) === title,
     );
 
     if (matching) {

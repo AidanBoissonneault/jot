@@ -44,6 +44,7 @@ import type {
   SyncConflictDiff,
   SyncContentConflict,
   SyncReloadResponse,
+  SyncQueueStatusResponse,
   SyncSessionResponse,
   SyncValidationResponse,
 } from '@/src/types/sync';
@@ -142,6 +143,7 @@ const defaultProjects: Project[] = [
 
 const waitForStub = () => new Promise((resolve) => setTimeout(resolve, 80));
 const LOCAL_QUEUE_DELIVERY_DELAY_MS = 10_000;
+const REMOTE_QUEUE_SETTLE_TIMEOUT_MS = 45_000;
 const MAX_QUEUE_RETRY_DELAY_MS = 5 * 60_000;
 const pendingTempPageSaves = new Map<string, ProjectPage>();
 const projectReconciliations = new Map<string, Promise<string>>();
@@ -506,6 +508,13 @@ function hydrationSource(syncConfig: SyncConfig) {
   const serverUrl = cleanSyncServerUrl(syncConfig.serverUrl);
   const workspace = syncConfig.workspaceId?.trim() || 'connected-workspace';
   return `${serverUrl}::${workspace}`;
+}
+
+function hasSameReloadTarget(first: SyncConfig, second: SyncConfig): boolean {
+  return cleanSyncServerUrl(first.serverUrl) === cleanSyncServerUrl(second.serverUrl) &&
+    first.userId === second.userId &&
+    first.workspaceId === second.workspaceId &&
+    first.selectedParentPageId === second.selectedParentPageId;
 }
 
 function syncQueueBelongsToActiveAccount(syncConfig: SyncConfig): boolean {
@@ -960,6 +969,76 @@ async function pendingLocalWorkCount(): Promise<number> {
   );
 }
 
+/** Waits for accepted server queue jobs before importing their Notion snapshot. */
+async function waitForRemoteSyncQueueToSettle(syncConfig: SyncConfig): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    let eventSource: EventSource | undefined;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    let statusCheckInFlight = false;
+    let statusRecheckRequested = false;
+    let finished = false;
+
+    const finish = (error?: unknown): void => {
+      if (finished) return;
+      finished = true;
+      if (timeout) clearTimeout(timeout);
+      eventSource?.close();
+      if (error) reject(error);
+      else resolve();
+    };
+
+    const checkQueue = async (): Promise<void> => {
+      if (finished) return;
+      if (statusCheckInFlight) {
+        statusRecheckRequested = true;
+        return;
+      }
+      statusCheckInFlight = true;
+      try {
+        do {
+          statusRecheckRequested = false;
+          const status = await requestServer<SyncQueueStatusResponse>(
+            '/sync/status',
+            undefined,
+            syncConfig,
+          );
+          if (typeof status.hasPending !== 'boolean') {
+            throw new Error('The sync server returned an invalid queue status. Try Sync again.');
+          }
+          if (!status.hasPending) {
+            finish();
+            return;
+          }
+        } while (statusRecheckRequested && !finished);
+      } catch (error) {
+        finish(error);
+      } finally {
+        statusCheckInFlight = false;
+      }
+    };
+
+    try {
+      eventSource = connectSyncEvents(syncConfig, (event) => {
+        // Recheck after a push event so a late or duplicated idle notification
+        // cannot make the snapshot race with newly queued work.
+        if (event.status === 'queue_idle') void checkQueue();
+      });
+      eventSource.onopen = () => { void checkQueue(); };
+      eventSource.onerror = () => {
+        // EventSource reconnects automatically. Its next open triggers one
+        // status check, covering idle notifications lost during a disconnect.
+      };
+    } catch (error) {
+      finish(error);
+      return;
+    }
+
+    timeout = setTimeout(() => {
+      finish(new Error('Notion sync is still processing on the server. Try Sync again in a moment.'));
+    }, REMOTE_QUEUE_SETTLE_TIMEOUT_MS);
+  });
+}
+
 function countPendingLocalMedia(node: DocumentContent): number {
   const attrs = node.attrs ?? {};
   const isPendingMedia =
@@ -1193,6 +1272,8 @@ export function connectSyncEvents(
 }
 
 export async function applySyncResult(event: SyncEventMessage): Promise<ProjectPage | undefined> {
+  if (event.status === 'queue_idle') return undefined;
+
   const { pages } = await readStorage();
   const page = pages.find((p) => p.id === event.pageId);
   if (!page) return undefined;
@@ -1211,7 +1292,7 @@ export async function applySyncResult(event: SyncEventMessage): Promise<ProjectP
           ...page,
           ...(event.notionBlockId ? { notionPageId: event.notionBlockId } : {}),
           ...(typeof event.version === 'number'
-            ? { knownSyncVersion: event.version, serverSyncVersion: event.version }
+            ? { serverSyncVersion: event.version }
             : {}),
           syncState: 'saved' as const,
           syncMessage: undefined,
@@ -1944,6 +2025,7 @@ export const notionClient = {
     blockedProjectCount: number;
     conflicts: SyncContentConflict[];
     reloadedFromNotion: boolean;
+    remoteReloadPending: boolean;
     remainingCount: number;
   }> {
     const { syncConfig } = await readStorage();
@@ -1954,8 +2036,8 @@ export const notionClient = {
       throw new Error('Local data is locked to its original Notion account. Reconnect that account to send local documents.');
     }
 
-    const hadPendingWork = await pendingLocalWorkCount() > 0;
     let reloadedFromNotion = false;
+    let remoteReloadPending = false;
     const pageConflicts: SyncContentConflict[] = [];
 
     // Retry blocked snapshots only from this explicit user action.
@@ -2074,9 +2156,21 @@ export const notionClient = {
       });
     }
 
-    if (!blockedEvents.length && pageConflicts.length === 0 && !hadPendingWork) {
+    const canReloadRemoteWorkspace =
+      !blockedEvents.length &&
+      pageConflicts.length === 0 &&
+      await pendingLocalWorkCount() === 0;
+    if (canReloadRemoteWorkspace) {
+      // A manual Sync is also the user's explicit request to reconcile the
+      // workspace inventory. Validation signals can miss pages from older or
+      // differently-shaped Notion records, so always fetch the full snapshot
+      // once local writes and conflict handling are clear.
       await notionClient.reloadFromNotion({ force: true });
       reloadedFromNotion = true;
+    } else {
+      // Keep remote discovery alive until local writes or conflict review no
+      // longer make replacing the workspace snapshot unsafe.
+      remoteReloadPending = true;
     }
 
     await persistPageSyncConflicts(pageConflicts);
@@ -2086,6 +2180,7 @@ export const notionClient = {
       blockedProjectCount: new Set(blockedEvents.map((event) => event.projectId)).size,
       conflicts: [...pageConflicts, ...conflicts],
       reloadedFromNotion,
+      remoteReloadPending,
       remainingCount: await pendingLocalWorkCount(),
     };
   },
@@ -2526,11 +2621,18 @@ export const notionClient = {
     aheadPageIds: string[];
     failedPageIds: string[];
     newPageIds: string[];
+    workspaceChanged: boolean;
   }> {
     const { pages, projects, syncConfig } = await readStorage();
 
     if (!syncConfig.connected) {
-      return { stalePageIds: [], aheadPageIds: [], failedPageIds: [], newPageIds: [] };
+      return {
+        stalePageIds: [],
+        aheadPageIds: [],
+        failedPageIds: [],
+        newPageIds: [],
+        workspaceChanged: false,
+      };
     }
 
     if (!syncQueueBelongsToActiveAccount(syncConfig)) {
@@ -2550,6 +2652,7 @@ export const notionClient = {
         pages,
         projects: projects.map(withoutLocalSyncConflicts),
         knownVersions,
+        selectedParentPageId: syncConfig.selectedParentPageId,
       }),
     }, syncConfig);
     const uncachedProjectIds = new Set(response.uncachedProjectIds ?? []);
@@ -2600,6 +2703,7 @@ export const notionClient = {
       aheadPageIds: response.aheadPageIds ?? [],
       failedPageIds: response.failedPageIds ?? [],
       newPageIds: response.newPageIds ?? [],
+      workspaceChanged: response.workspaceChanged ?? false,
     };
   },
 
@@ -2619,13 +2723,14 @@ export const notionClient = {
     }
 
     const validation = options.force
-      ? { stalePageIds: [], aheadPageIds: [], newPageIds: [] }
+      ? { stalePageIds: [], aheadPageIds: [], newPageIds: [], workspaceChanged: false }
       : await this.validateNotionCache();
     if (
       !options.force &&
       !validation.stalePageIds.length &&
       !validation.aheadPageIds.length &&
-      !validation.newPageIds.length
+      !validation.newPageIds.length &&
+      !validation.workspaceChanged
     ) {
       return {
         currentProjectId,
@@ -2635,6 +2740,7 @@ export const notionClient = {
       };
     }
 
+    await waitForRemoteSyncQueueToSettle(syncConfig);
     const startingWorkspaceWriteVersion = workspaceWriteVersion;
     const response = await requestServer<SyncReloadResponse>('/sync/reload', {
       method: 'POST',
@@ -2689,13 +2795,21 @@ export const notionClient = {
     const activePageIdsByProject = createCompatibleActivePageIds(
       projects,
       pages,
-      response.activePageIdsByProject,
+      {
+        ...(response.activePageIdsByProject ?? {}),
+        ...localStorageToPreserve.activePageIdsByProject,
+      },
     );
-    const nextCurrentProjectId = projects.some((project) => project.id === response.currentProjectId)
-      ? response.currentProjectId ?? ''
-      : projects[0]?.id ?? '';
+    const activeProjects = projects.filter((project) => project.status !== 'archived');
+    const nextCurrentProjectId = activeProjects.some(
+      (project) => project.id === localStorageToPreserve.currentProjectId,
+    )
+      ? localStorageToPreserve.currentProjectId
+      : activeProjects.some((project) => project.id === response.currentProjectId)
+        ? response.currentProjectId ?? ''
+        : activeProjects[0]?.id ?? '';
     const localProjectsToPreserve = localStorageToPreserve.projects;
-    const applied = await writeStorage({
+    const reloadedStorage = {
       activePageIdsByProject,
       currentProjectId: nextCurrentProjectId,
       hasMigratedCapturesToPages: true,
@@ -2703,15 +2817,59 @@ export const notionClient = {
       projects,
       syncConfig: nextSyncConfig,
       notionHydrationSource: hydrationSource(nextSyncConfig),
-    }, { expectedVersion: startingWorkspaceWriteVersion });
+    };
+    let applied = await writeStorage(reloadedStorage, {
+      expectedVersion: startingWorkspaceWriteVersion,
+    });
     if (!applied) {
+      // A sync progress event can persist only version/status metadata while the
+      // snapshot is in flight. Retry that case, but keep a concurrent local edit
+      // or account/workspace change authoritative.
+      const retryBaseline = workspaceWriteVersion;
       const latestStorage = await readStorage();
-      return {
-        currentProjectId: latestStorage.currentProjectId,
-        pages: latestStorage.pages,
-        projects: latestStorage.projects,
-        syncConfig: latestStorage.syncConfig,
+      const pendingLocalWork = await pendingLocalWorkCount();
+      if (
+        workspaceWriteVersion !== retryBaseline ||
+        pendingLocalWork > 0 ||
+        !hasSameReloadTarget(syncConfig, latestStorage.syncConfig)
+      ) {
+        return {
+          currentProjectId: latestStorage.currentProjectId,
+          pages: latestStorage.pages,
+          projects: latestStorage.projects,
+          syncConfig: latestStorage.syncConfig,
+        };
+      }
+
+      const retryStorage = {
+        ...reloadedStorage,
+        activePageIdsByProject: createCompatibleActivePageIds(
+          projects,
+          pages,
+          {
+            ...(response.activePageIdsByProject ?? {}),
+            ...latestStorage.activePageIdsByProject,
+          },
+        ),
+        currentProjectId: activeProjects.some(
+          (project) => project.id === latestStorage.currentProjectId,
+        )
+          ? latestStorage.currentProjectId
+          : nextCurrentProjectId,
+        syncConfig: response.clearSelectedParentPage
+          ? nextSyncConfig
+          : latestStorage.syncConfig,
       };
+      applied = await writeStorage(retryStorage, { expectedVersion: retryBaseline });
+      if (!applied) {
+        const latestAfterRetry = await readStorage();
+        return {
+          currentProjectId: latestAfterRetry.currentProjectId,
+          pages: latestAfterRetry.pages,
+          projects: latestAfterRetry.projects,
+          syncConfig: latestAfterRetry.syncConfig,
+        };
+      }
     }
     const blockedProjectIds = new Set(await listBlockedProjectSyncIds());
     const blockedLocalProjects = localProjectsToPreserve.filter((project) => blockedProjectIds.has(project.id));

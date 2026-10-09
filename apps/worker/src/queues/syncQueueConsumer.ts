@@ -66,6 +66,7 @@ export async function processSyncQueue(
 
       if (payloadRow.status === 'processed') {
         await removeQueuedPayload(jobId);
+        await notifyQueueIdleIfDrained(env, String(payloadRow.installation_id));
         message.ack();
         continue;
       }
@@ -76,6 +77,7 @@ export async function processSyncQueue(
         String(payloadRow.installation_id) !== String(storedJob.installationId)
       ) {
         await markAndRemoveQueuedPayload(jobId);
+        await notifyQueueIdleIfDrained(env, String(payloadRow.installation_id));
         message.ack();
         continue;
       }
@@ -110,6 +112,7 @@ export async function processSyncQueue(
       if (job.type !== 'block_op' && row && row.local_version > queuedVersion) {
         console.log('[queue] skipped stale', job.type, 'v', queuedVersion, 'latest', row.local_version);
         if (jobId) await markAndRemoveQueuedPayload(jobId);
+        await notifyQueueIdleIfDrained(env, installationId);
         message.ack();
         continue;
       }
@@ -177,6 +180,7 @@ export async function processSyncQueue(
 
       syncOperationSucceeded = true;
       if (jobId) await markAndRemoveQueuedPayload(jobId);
+      await notifyQueueIdleIfDrained(env, installationId);
       console.log('[queue] done', job.type);
       message.ack();
     } catch (error) {
@@ -191,7 +195,7 @@ export async function processSyncQueue(
       }
 
       if (job && isRevokedInstallationError(error)) {
-        await ackAfterPayloadCleanup(message, jobId);
+        await ackAfterPayloadCleanup(message, jobId, env, String(job.installationId));
         continue;
       }
 
@@ -228,7 +232,7 @@ export async function processSyncQueue(
       }
 
       if (job && (isUnmappedNotionContentError(error) || isPermanentNotionFailure(error))) {
-        await ackAfterPayloadCleanup(message, jobId);
+        await ackAfterPayloadCleanup(message, jobId, env, String(job.installationId));
       } else {
         message.retry();
       }
@@ -258,13 +262,17 @@ async function markAndRemoveQueuedPayload(jobId: string): Promise<void> {
 async function ackAfterPayloadCleanup(
   message: Message<SyncQueueReference>,
   jobId: string | undefined,
+  env: WorkerEnv,
+  installationId?: string,
 ): Promise<void> {
   if (!jobId) {
     message.ack();
+    if (installationId) await notifyQueueIdleIfDrained(env, installationId);
     return;
   }
   try {
     await markAndRemoveQueuedPayload(jobId);
+    if (installationId) await notifyQueueIdleIfDrained(env, installationId);
     message.ack();
   } catch (cleanupError) {
     console.error('[queue] discarded payload cleanup failed', safeErrorMetadata(cleanupError));
@@ -285,12 +293,46 @@ export async function processSyncDeadLetterQueue(
       continue;
     }
     try {
+      const { data: payload, error: payloadError } = await supabase
+        .from('inkwell_sync_queue_payloads')
+        .select('installation_id')
+        .eq('id', jobId)
+        .maybeSingle();
+      if (payloadError) throw new Error('Unable to read the dead-letter sync payload.');
       await removeQueuedPayload(jobId);
+      if (payload?.installation_id) {
+        await notifyQueueIdleIfDrained(env, String(payload.installation_id));
+      }
       message.ack();
     } catch (error) {
       console.error('[queue] dead-letter payload cleanup failed', safeErrorMetadata(error));
       message.retry();
     }
+  }
+}
+
+/** Pushes a queue-idle event after the final active payload for this account is removed. */
+async function notifyQueueIdleIfDrained(env: WorkerEnv, installationId: string): Promise<void> {
+  try {
+    const { data: pending, error } = await supabase
+      .from('inkwell_sync_queue_payloads')
+      .select('id')
+      .eq('installation_id', installationId)
+      .eq('status', 'pending')
+      .limit(1);
+    if (error) throw new Error('Unable to check remaining sync queue work.');
+    if (pending?.length) return;
+
+    const doStub = env.SYNC_EVENTS.get(env.SYNC_EVENTS.idFromName(installationId));
+    const response = await doStub.fetch(new Request('http://do/notify', {
+      method: 'POST',
+      body: JSON.stringify({ status: 'queue_idle' }),
+    }));
+    if (!response.ok) throw new Error('Unable to publish the queue-idle event.');
+  } catch (error) {
+    // Clients also recheck once when an EventSource reconnects, so a failed
+    // notification does not strand a waiting reload indefinitely.
+    console.error('[queue] idle notification failed', safeErrorMetadata(error));
   }
 }
 

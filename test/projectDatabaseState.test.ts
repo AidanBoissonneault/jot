@@ -2,6 +2,46 @@ import { describe, expect, test, vi } from 'vitest';
 import { createProjectDatabaseStateHelpers } from '@/apps/worker/src/projectDatabaseState';
 
 describe('thread content reload identity', () => {
+  test('fails the reload when project-state children cannot be read', async () => {
+    const readFailure = new Error('Notion is temporarily unavailable');
+    const helpers = createProjectDatabaseStateHelpers({
+      importManagedBlocks: vi.fn(async () => null),
+      listAllBlockChildren: vi.fn(async () => { throw readFailure; }),
+      notionBlocksToTiptapDocument: vi.fn(() => ({ type: 'doc', content: [] })),
+      notionRequest: vi.fn(),
+      replaceManagedBlocks: vi.fn(),
+    });
+
+    await expect(helpers.importProjectState(
+      { blockMappings: {}, projectBlocks: {} } as never,
+      { id: 'project-row' } as never,
+      { id: 'project-local', stateContent: { type: 'doc', content: [] } } as never,
+      { id: 'state-block', last_edited_time: 'remote-time' } as never,
+    )).rejects.toBe(readFailure);
+  });
+
+  test('fails the reload when thread children cannot be read', async () => {
+    const readFailure = new Error('Notion is temporarily unavailable');
+    const helpers = createProjectDatabaseStateHelpers({
+      importManagedBlocks: vi.fn(async () => null),
+      listAllBlockChildren: vi.fn(async () => { throw readFailure; }),
+      notionBlocksToTiptapDocument: vi.fn(() => ({ type: 'doc', content: [] })),
+      notionRequest: vi.fn(),
+      replaceManagedBlocks: vi.fn(),
+    });
+
+    await expect(helpers.pageFromThreadBlock(
+      { blockMappings: {}, notePages: {}, threadBlocks: {} } as never,
+      { id: 'project-local', updatedAt: 'remote-time' } as never,
+      { id: 'project-row' } as never,
+      {
+        id: 'thread-remote',
+        type: 'toggle',
+        toggle: { rich_text: [{ type: 'text', plain_text: 'Remote page' }] },
+      } as never,
+    )).rejects.toBe(readFailure);
+  });
+
   test('restores stable local block IDs and mappings while importing a thread', async () => {
     const children = [{
       id: 'notion-paragraph-1',

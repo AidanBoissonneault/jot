@@ -32,6 +32,8 @@ import type {
 /** Parent selection passed to database discovery. */
 interface ParentSelection {
   selectedParentPageId: string | undefined;
+  /** Avoid schema and view checks for read paths that only need the stored database. */
+  readOnly?: boolean;
 }
 
 /** Filters used to find a database under an optional parent. */
@@ -66,7 +68,7 @@ export function createProjectDatabaseDiscoveryHelpers({
   /** Ensures the managed project database exists. @param store - Worker state. @param options - Parent selection. @returns Active database. */
   async function ensureProjectDatabase(
     store: WorkerStore,
-    { selectedParentPageId }: ParentSelection = { selectedParentPageId: undefined },
+    { selectedParentPageId, readOnly = false }: ParentSelection = { selectedParentPageId: undefined },
   ): Promise<InkwellDatabase> {
     store.projectPages ??= {};
     store.projectBlocks ??= {};
@@ -75,12 +77,24 @@ export function createProjectDatabaseDiscoveryHelpers({
     const ignoredDatabaseIds = store.ignoredInkwellDatabaseIds ?? new Set();
     const stored = store.inkwellDatabase;
 
-    if (stored?.databaseId && stored?.dataSourceId && !ignoredDatabaseIds.has(stored.databaseId)) {
-      const existing = await refreshDatabase(store, stored);
+    if (
+      stored?.databaseId &&
+      stored?.dataSourceId &&
+      !ignoredDatabaseIds.has(stored.databaseId) &&
+      (!selectedParentPageId || stored.parentPageId === selectedParentPageId)
+    ) {
+      const existing = await refreshDatabase(store, stored, readOnly);
 
-      if (existing) {
+      if (existing && (!selectedParentPageId || existing.parentPageId === selectedParentPageId)) {
         return existing;
       }
+    }
+
+    // An explicit parent selection is authoritative. Do not keep querying a
+    // previously cached database under another parent; each installation can
+    // otherwise keep reading a different project/page inventory indefinitely.
+    if (selectedParentPageId) {
+      store.inkwellDatabase = undefined;
     }
 
     if (!selectedParentPageId) {
@@ -178,6 +192,7 @@ export function createProjectDatabaseDiscoveryHelpers({
   async function refreshDatabase(
     store: WorkerStore,
     stored: InkwellDatabase,
+    readOnly = false,
   ): Promise<InkwellDatabase | undefined> {
     try {
       const database = await notionRequest(store, `/databases/${stored.databaseId}`);
@@ -192,10 +207,16 @@ export function createProjectDatabaseDiscoveryHelpers({
         return undefined;
       }
 
-      const refreshed = databaseSummary(database, dataSourceId, stored.parentPageId);
+      const refreshed = databaseSummary(
+        database,
+        dataSourceId,
+        parentPageIdFromObject(database) ?? stored.parentPageId,
+      );
       store.inkwellDatabase = refreshed;
-      await ensureProjectSchema(store, dataSourceId);
-      await ensureProjectViews(store, refreshed);
+      if (!readOnly) {
+        await ensureProjectSchema(store, dataSourceId);
+        await ensureProjectViews(store, refreshed);
+      }
       return refreshed;
     } catch (error) {
       appendLog(store, 'project_database_lookup_error', errorMessage(error));
@@ -219,6 +240,7 @@ export function createProjectDatabaseDiscoveryHelpers({
   ): Promise<InkwellDatabase | undefined> {
     const databases = [];
     let cursor;
+    const seenCursors = new Set<string>();
 
     do {
       const body: JsonObject = {
@@ -241,8 +263,20 @@ export function createProjectDatabaseDiscoveryHelpers({
         body,
       });
 
-      databases.push(...(response.results ?? []));
-      cursor = response.has_more ? response.next_cursor : undefined;
+      if (!Array.isArray(response.results)) {
+        throw new Error('Notion returned an invalid database search result.');
+      }
+      databases.push(...response.results);
+      if (response.has_more) {
+        const nextCursor = response.next_cursor;
+        if (!nextCursor || seenCursors.has(nextCursor)) {
+          throw new Error('Notion returned an incomplete database search result.');
+        }
+        seenCursors.add(nextCursor);
+        cursor = nextCursor;
+      } else {
+        cursor = undefined;
+      }
     } while (cursor);
 
     const candidates = [];
@@ -289,6 +323,7 @@ export function createProjectDatabaseDiscoveryHelpers({
   async function managedProjectCount(store: WorkerStore, dataSourceId: string): Promise<number> {
     let count = 0;
     let cursor;
+    const seenCursors = new Set<string>();
 
     try {
       do {
@@ -308,8 +343,20 @@ export function createProjectDatabaseDiscoveryHelpers({
           method: 'POST',
           body,
         });
-        count += response.results?.length ?? 0;
-        cursor = response.has_more ? response.next_cursor : undefined;
+        if (!Array.isArray(response.results)) {
+          throw new Error('Notion returned an invalid managed-project count result.');
+        }
+        count += response.results.length;
+        if (response.has_more) {
+          const nextCursor = response.next_cursor;
+          if (!nextCursor || seenCursors.has(nextCursor)) {
+            throw new Error('Notion returned an incomplete managed-project count.');
+          }
+          seenCursors.add(nextCursor);
+          cursor = nextCursor;
+        } else {
+          cursor = undefined;
+        }
       } while (cursor);
 
       return count;

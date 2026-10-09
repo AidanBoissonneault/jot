@@ -15,6 +15,30 @@ interface NotionObjectCacheDependencies {
   notionRequest: NotionRequester;
 }
 
+/** Stable identifiers read from the managed Notion database. */
+interface NotionWorkspaceStructure {
+  pageIds: string[];
+  projectIds: string[];
+  projectPageIds: string[];
+}
+
+/** Runs independent remote existence checks concurrently without flooding Notion. */
+async function mapWithConcurrency<Value>(
+  values: Value[],
+  limit: number,
+  check: (value: Value) => Promise<void>,
+): Promise<void> {
+  let nextIndex = 0;
+  const workerCount = Math.min(Math.max(1, limit), values.length);
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (true) {
+      const index = nextIndex++;
+      if (index >= values.length) return;
+      await check(values[index]);
+    }
+  }));
+}
+
 /** Creates cache validation and lookup operations for Notion-backed pages. */
 export function createNotionObjectCache({
   appendLog,
@@ -78,7 +102,17 @@ export function createNotionObjectCache({
   /** Removes cached mappings for Notion objects that can no longer be retrieved. */
   async function validateNotionCache(
     store: WorkerStore,
-    { pages, projects }: { pages: ProjectPage[]; projects: Project[] },
+    {
+      pages,
+      projects,
+      remoteStructure,
+      databaseVerified = false,
+    }: {
+      pages: ProjectPage[];
+      projects: Project[];
+      remoteStructure?: NotionWorkspaceStructure;
+      databaseVerified?: boolean;
+    },
   ) {
     const uncachedProjectIds = new Set<string>();
     const uncachedPageIds = new Set<string>();
@@ -108,6 +142,7 @@ export function createNotionObjectCache({
     }
 
     if (
+      !databaseVerified &&
       store.inkwellDatabase?.databaseId &&
       !(await notionObjectExists(store, 'database', store.inkwellDatabase.databaseId))
     ) {
@@ -122,25 +157,55 @@ export function createNotionObjectCache({
       changed = true;
     }
 
-    for (const project of projects) {
+    const remoteProjectPageIds = remoteStructure && new Set(remoteStructure.projectPageIds);
+    const locallyThreadBackedPageIds = remoteStructure && new Set(
+      pages.filter((page) => isThreadBackedPage(store, page)).map((page) => page.id),
+    );
+    await mapWithConcurrency(projects, 5, async (project) => {
       const cached = store.projectPages?.[project.id];
+      const isMissing = remoteStructure
+        ? project.status !== 'archived' && Boolean(
+            cached?.notionPageId && !remoteProjectPageIds?.has(cached.notionPageId),
+          )
+        : Boolean(
+            cached?.notionPageId && !(await notionObjectExists(store, 'page', cached.notionPageId)),
+          );
 
-      if (cached?.notionPageId && !(await notionObjectExists(store, 'page', cached.notionPageId))) {
-        delete store.projectPages[project.id];
-        delete store.projectBlocks?.[projectStateKey(project.id)];
-        uncachedProjectIds.add(project.id);
-        for (const page of pages.filter((item) => item.projectId === project.id)) {
-          uncachePage(store, page.id);
-          uncachedPageIds.add(page.id);
-        }
-        changed = true;
+      if (!isMissing) return;
+
+      delete store.projectPages[project.id];
+      delete store.projectBlocks?.[projectStateKey(project.id)];
+      uncachedProjectIds.add(project.id);
+      for (const page of pages.filter((item) => item.projectId === project.id)) {
+        uncachePage(store, page.id);
+        uncachedPageIds.add(page.id);
       }
-    }
+      changed = true;
+    });
 
-    for (const page of pages) {
+    const remoteThreadBlockIds = remoteStructure && new Set(remoteStructure.pageIds);
+    await mapWithConcurrency(pages, 5, async (page) => {
       const cachedThread = store.threadBlocks?.[threadKey(page.id)];
       const cachedNote = store.notePages?.[page.id];
       const notionPageId = page.notionPageId ?? cachedNote?.notionPageId;
+
+      if (
+        remoteStructure &&
+        page.status !== 'archived' &&
+        locallyThreadBackedPageIds?.has(page.id)
+      ) {
+        const remoteId = cachedThread?.blockId ?? notionPageId;
+        if (remoteId && !remoteThreadBlockIds?.has(remoteId)) {
+          uncachePage(store, page.id);
+          uncachedPageIds.add(page.id);
+          changed = true;
+        }
+        return;
+      }
+
+      // Archived pages and structural threads were already resolved by the
+      // inventory. Avoid one Notion GET for every historical page on each sync.
+      if (remoteStructure && page.status === 'archived') return;
 
       if (
         cachedThread?.blockId &&
@@ -149,7 +214,7 @@ export function createNotionObjectCache({
         uncachePage(store, page.id);
         uncachedPageIds.add(page.id);
         changed = true;
-        continue;
+        return;
       }
 
       if (
@@ -165,7 +230,7 @@ export function createNotionObjectCache({
         uncachedPageIds.add(page.id);
         changed = true;
       }
-    }
+    });
 
     return {
       changed,

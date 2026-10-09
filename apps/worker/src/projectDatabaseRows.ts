@@ -8,6 +8,7 @@ import type { Project } from '../../../src/types/capture.js';
 import {
   dateProperty,
   emptyDocument,
+  isArchivedObject,
   PROJECT_PROPERTIES,
   projectProperties,
   richTextProperty,
@@ -99,6 +100,7 @@ export function createProjectDatabaseRows(notionRequest: NotionRequester) {
   ): Promise<NotionObject[]> {
     const results: NotionObject[] = [];
     let cursor: string | undefined;
+    const seenCursors = new Set<string>();
     do {
       const body: JsonObject = {
         page_size: 100,
@@ -115,8 +117,20 @@ export function createProjectDatabaseRows(notionRequest: NotionRequester) {
         method: 'POST',
         body,
       });
-      results.push(...(response.results ?? []));
-      cursor = response.has_more ? (response.next_cursor ?? undefined) : undefined;
+      if (!Array.isArray(response.results)) {
+        throw new Error('Notion returned an invalid managed-project page.');
+      }
+      results.push(...response.results.filter((row) => !isArchivedObject(row)));
+      if (response.has_more) {
+        const nextCursor = response.next_cursor;
+        if (!nextCursor || seenCursors.has(nextCursor)) {
+          throw new Error('Notion returned an incomplete managed-project list.');
+        }
+        seenCursors.add(nextCursor);
+        cursor = nextCursor;
+      } else {
+        cursor = undefined;
+      }
     } while (cursor);
     return results;
   }
@@ -135,7 +149,10 @@ export function createProjectDatabaseRows(notionRequest: NotionRequester) {
           rich_text: { equals: projectId },
         },
       },
-    }).catch(() => ({ results: [] }));
+    });
+    if (!Array.isArray(response.results)) {
+      throw new Error('Notion returned an invalid project lookup result.');
+    }
     return response.results?.[0];
   }
 

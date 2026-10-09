@@ -155,6 +155,7 @@ export type SyncValidationRequest = {
   pages?: ProjectPage[];
   projects?: Project[];
   knownVersions?: Record<string, number>;
+  selectedParentPageId?: string;
 };
 
 /** Describes cache and version differences discovered during validation. */
@@ -164,10 +165,17 @@ export type SyncValidationResponse = {
   uncachedProjectIds?: string[];
   /** Pages known by the server but missing from this extension's local snapshot. */
   newPageIds?: string[];
+  /** Whether the remote project's or page's structural IDs differ from the local snapshot. */
+  workspaceChanged?: boolean;
   failedPageIds?: string[];
   stalePageIds?: string[];
   aheadPageIds?: string[];
   serverVersions?: Record<string, number>;
+};
+
+/** Describes server-side synchronization jobs that are not yet fully applied. */
+export type SyncQueueStatusResponse = {
+  hasPending: boolean;
 };
 
 /** Describes the parent selection used while reloading remote state. */
@@ -220,6 +228,7 @@ export type SyncEnqueueResponse = {
 
 /** Describes a real-time synchronization status notification. */
 export type SyncEventMessage =
+  | { status: 'queue_idle' }
   | { status: 'synced'; pageId: string; notionBlockId?: string | null; version?: number }
   | { status: 'failed'; pageId: string; code?: string; message?: string; statusCode?: number }
   | { status: 'stale'; pageId: string; version?: number };

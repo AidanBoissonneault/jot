@@ -14,6 +14,7 @@ import type {
 import {
   appendLog,
   importManagedBlocks,
+  readProjectDatabaseStructure,
   readInkwellSyncState,
   reloadProjectDatabaseFromNotion,
   requireConnectedStore,
@@ -29,7 +30,13 @@ import {
   isBlockNotPageError,
   readLimitedJsonBody,
 } from '../workerUtils.js';
+import {
+  hasWorkspaceStructureChanged,
+  isUnrepresentedSyncedPage,
+} from '../syncWorkspaceInventory.js';
 import type { WorkerEnv } from '../types.js';
+
+const SYNC_STATUS_PAGE_SIZE = 500;
 
 /**
  * Registers read, validation, reload, and recovery routes for synchronization.
@@ -40,19 +47,27 @@ export function registerSyncQueryRoutes(app: Hono<{ Bindings: WorkerEnv }>): voi
   /** Returns local synchronization versions and statuses. @param c - Hono context. @returns JSON response. */
   app.get('/sync/status', async (c) => {
     const pageId = c.req.query('pageId');
-  
-    if (!pageId) return c.json({ error: 'Missing pageId' }, 400);
-  
     const store = await requireConnectedStore(c);
-    const { data: row } = await supabase
+
+    if (!pageId) {
+      try {
+        return c.json({ hasPending: await hasPendingSyncQueuePayload(store.installationId) });
+      } catch {
+        return c.json({ error: 'Unable to read queued synchronization status.' }, 500);
+      }
+    }
+
+    const { data: row, error } = await supabase
       .from('notion_block_sync')
       .select('local_version, synced_version, status, notion_block_id')
       .eq('installation_id', store.installationId)
       .eq('local_id', pageId)
       .maybeSingle();
-  
-    if (!row) return c.json({ status: 'synced', localVersion: 0, syncedVersion: 0 });
-  
+    if (error) return c.json({ error: 'Unable to read synchronization status.' }, 500);
+    if (!row) {
+      return c.json({ status: 'synced', localVersion: 0, syncedVersion: 0 });
+    }
+
     return c.json({
       status: row.status,
       localVersion: row.local_version,
@@ -74,40 +89,78 @@ export function registerSyncQueryRoutes(app: Hono<{ Bindings: WorkerEnv }>): voi
     const parsed = await readLimitedJsonBody<SyncValidationRequest>(c.req.raw, MAX_SYNC_JSON_REQUEST_BYTES);
     if (parsed.tooLarge) return c.json({ error: 'Sync request is too large.' }, 413);
     const body = (parsed.body ?? {}) as Partial<SyncValidationRequest>;
-    const { pages = [], projects = [], knownVersions = {} } = body ?? {};
+    const {
+      pages = [],
+      projects = [],
+      knownVersions = {},
+      selectedParentPageId,
+    } = body ?? {};
     const store = await requireConnectedStore(c);
+    const localPages = Array.isArray(pages) ? pages : [];
+    const localProjects = Array.isArray(projects) ? projects : [];
+    // Scan once, then reuse the resulting Notion IDs to validate cached page
+    // links. Per-page GET checks here multiplied Notion latency before the same
+    // project rows were scanned a second time for cross-instance changes.
+    const remoteStructure = await readProjectDatabaseStructure(store, { selectedParentPageId });
     const result = await validateNotionCache(store, {
-      pages: Array.isArray(pages) ? pages : [],
-      projects: Array.isArray(projects) ? projects : [],
+      pages: localPages,
+      projects: localProjects,
+      remoteStructure,
+      databaseVerified: true,
     });
-  
-    if (result.changed) {
-      appendLog(
-        store,
-        'sync_cache_uncached',
-        `${result.uncachedProjectIds.length} projects, ${result.uncachedPageIds.length} pages`,
-      );
+
+    // Supabase sync rows are scoped to one installation. Enumerate the remote
+    // database structure as well so another installation's page/project
+    // creation or deletion is visible during startup validation.
+    const workspaceChanged = hasWorkspaceStructureChanged(remoteStructure, localProjects, localPages);
+
+    if (result.changed || workspaceChanged) {
+      if (result.changed) {
+        appendLog(
+          store,
+          'sync_cache_uncached',
+          `${result.uncachedProjectIds.length} projects, ${result.uncachedPageIds.length} pages`,
+        );
+      }
       await writeStore(store);
     }
   
     // Fetch stale + version info from notion_block_sync
     const knownPageIds = new Set(
-      (Array.isArray(pages) ? pages : [])
+      localPages
         .map((page) => page?.id)
         .filter((id): id is string => typeof id === 'string'),
     );
-    const { data: syncRows } = await supabase
-      .from('notion_block_sync')
-      .select('local_id, local_version, is_stale, status, entity_type')
-      .eq('installation_id', store.installationId);
+    const syncRows: Array<{
+      local_id: string;
+      local_version: number;
+      is_stale: boolean;
+      status: string;
+      entity_type: string;
+      notion_block_id: string | null;
+    }> = [];
+    let syncRowsOffset = 0;
+    while (true) {
+      const { data: rows, error } = await supabase
+        .from('notion_block_sync')
+        .select('local_id, local_version, is_stale, status, entity_type, notion_block_id')
+        .eq('installation_id', store.installationId)
+        .order('local_id', { ascending: true })
+        .range(syncRowsOffset, syncRowsOffset + SYNC_STATUS_PAGE_SIZE - 1);
+      if (error) return c.json({ error: 'Unable to validate synchronization state.' }, 500);
+      syncRows.push(...(rows ?? []));
+      if ((rows?.length ?? 0) < SYNC_STATUS_PAGE_SIZE) break;
+      syncRowsOffset += SYNC_STATUS_PAGE_SIZE;
+    }
   
     const stalePageIds: string[] = [];
     const aheadPageIds: string[] = [];
     const failedPageIds: string[] = [];
     const newPageIds: string[] = [];
     const serverVersions: Record<string, number> = {};
+    const remoteThreadBlockIds = new Set(remoteStructure.pageIds);
   
-    for (const row of syncRows ?? []) {
+    for (const row of syncRows) {
       serverVersions[row.local_id] = row.local_version;
       if (row.is_stale) {
         stalePageIds.push(row.local_id);
@@ -120,11 +173,7 @@ export function registerSyncQueryRoutes(app: Hono<{ Bindings: WorkerEnv }>): voi
       ) {
         aheadPageIds.push(row.local_id);
       }
-      if (
-        row.status === 'synced' &&
-        (row.entity_type === 'page' || row.entity_type === 'block_op') &&
-        !knownPageIds.has(row.local_id)
-      ) {
+      if (isUnrepresentedSyncedPage(row, knownPageIds, remoteThreadBlockIds)) {
         newPageIds.push(row.local_id);
       }
     }
@@ -136,6 +185,7 @@ export function registerSyncQueryRoutes(app: Hono<{ Bindings: WorkerEnv }>): voi
       uncachedPageIds: result.uncachedPageIds,
       failedPageIds,
       newPageIds,
+      workspaceChanged,
       stalePageIds,
       aheadPageIds,
       serverVersions,
@@ -250,4 +300,16 @@ export function registerSyncQueryRoutes(app: Hono<{ Bindings: WorkerEnv }>): voi
   
     return c.json({ cleared: true });
   });
+}
+
+/** Uses persisted queue payloads as the source of truth for active server work. */
+export async function hasPendingSyncQueuePayload(installationId: string | number): Promise<boolean> {
+  const { data, error } = await supabase
+    .from('inkwell_sync_queue_payloads')
+    .select('id')
+    .eq('installation_id', installationId)
+    .eq('status', 'pending')
+    .limit(1);
+  if (error) throw new Error('Unable to read queued synchronization status.');
+  return Boolean(data?.length);
 }

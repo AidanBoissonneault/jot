@@ -59,7 +59,12 @@ export function createWorkerNotionOperations({
   /** Checks and clears stale Notion object mappings in the local store. */
   function validateNotionCache(
     store: WorkerStore,
-    entities: { pages: ProjectPage[]; projects: Project[] },
+    entities: {
+      pages: ProjectPage[];
+      projects: Project[];
+      remoteStructure?: { pageIds: string[]; projectIds: string[]; projectPageIds: string[] };
+      databaseVerified?: boolean;
+    },
   ) {
     return notionObjectCache.validateNotionCache(store, entities);
   }

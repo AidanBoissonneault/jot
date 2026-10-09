@@ -510,7 +510,7 @@ async function resync() {
   try {
     await flushEditorContent();
     const hadPendingLocalChanges = (await notionClient.pendingSyncEventCount()) > 0;
-    await store.refreshSyncSession();
+    await store.refreshSyncSession(false, false);
     if (!store.syncConfig.connected) {
       throw new Error(store.errorMessage || 'Connect Notion before resyncing.');
     }

@@ -5,6 +5,7 @@
  */
 
 import type { NotionParentPage, Project } from '../../../src/types/capture.js';
+import { isArchivedObject } from './projectDatabaseValues.js';
 import type {
   AppendLog,
   ListAllBlockChildren,
@@ -298,7 +299,7 @@ export function createRootPageHelpers({
     const child = children.find((block) =>
       block.type === 'child_page' &&
       nestedString(block, 'child_page', 'title') === title &&
-      !block.archived,
+      !isArchivedObject(block),
     );
 
     return child

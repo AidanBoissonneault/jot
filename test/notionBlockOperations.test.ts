@@ -44,6 +44,26 @@ function returnedCodeBlock(id: string, sourceText: string): NotionBlock {
 }
 
 describe('Notion block append confirmation', () => {
+  it('rejects a partial child list when Notion omits its next cursor', async () => {
+    const notionRequest = vi.fn(async () => ({
+      object: 'list',
+      results: [returnedCodeBlock('first-child', 'content')],
+      has_more: true,
+      next_cursor: null,
+    } as unknown as NotionObject)) as unknown as NotionRequester;
+    const operations = createNotionBlockOperations({
+      chunks,
+      isNotionFileUploadBlock,
+      mediaFallbackBlock,
+      notionRequest,
+      positionAfterCreatedBlocks,
+      updateBodyFromNotionBlock,
+    });
+
+    await expect(operations.listAllBlockChildren(store, 'thread-remote'))
+      .rejects.toThrow('incomplete child-block list');
+  });
+
   it('recovers a newly appended source block from Notion’s full child-list response', async () => {
     const sourceText = 'inkwell_source_v1:{"blockId":"source-1"}';
     const sourceBlock: NotionBlockPayload = {

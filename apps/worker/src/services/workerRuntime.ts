@@ -69,6 +69,7 @@ let ensureProjectDatabase: DatabaseHelpers['ensureProjectDatabase'];
 let ensureProjectPage: DatabaseHelpers['ensureProjectPage'];
 let ensureProjectStateContainer: DatabaseHelpers['ensureProjectStateContainer'];
 let ensureThreadToggle: DatabaseHelpers['ensureThreadToggle'];
+let readProjectDatabaseStructure: DatabaseHelpers['readProjectDatabaseStructure'];
 let reloadProjectDatabaseFromNotion: DatabaseHelpers['reloadProjectDatabaseFromNotion'];
 let updateThreadToggleTitle: DatabaseHelpers['updateThreadToggleTitle'];
 
@@ -127,6 +128,7 @@ function initSingletons(env: WorkerEnv): void {
   ensureProjectPage = dbHelpers.ensureProjectPage;
   ensureProjectStateContainer = dbHelpers.ensureProjectStateContainer;
   ensureThreadToggle = dbHelpers.ensureThreadToggle;
+  readProjectDatabaseStructure = dbHelpers.readProjectDatabaseStructure;
   reloadProjectDatabaseFromNotion = dbHelpers.reloadProjectDatabaseFromNotion;
   updateThreadToggleTitle = dbHelpers.updateThreadToggleTitle;
 
@@ -265,7 +267,12 @@ function writeInkwellSyncState(installationId: Identifier, store: WorkerStore): 
 /** Checks and clears stale cached Notion mappings. */
 function validateNotionCache(
   store: WorkerStore,
-  entities: { pages: ProjectPage[]; projects: Project[] },
+  entities: {
+    pages: ProjectPage[];
+    projects: Project[];
+    remoteStructure?: { pageIds: string[]; projectIds: string[]; projectPageIds: string[] };
+    databaseVerified?: boolean;
+  },
 ) {
   return workerNotionOperations.validateNotionCache(store, entities);
 }
@@ -428,6 +435,7 @@ export {
   pushPageToNotion,
   pushPageToNotionForInstallation,
   readInkwellSyncState,
+  readProjectDatabaseStructure,
   readStore,
   reloadProjectDatabaseFromNotion,
   replaceManagedBlocks,
