@@ -170,7 +170,7 @@
 
 .editor-context-menu {
   position: fixed;
-  z-index: 50;
+  z-index: 2147483647;
   width: max-content;
   max-width: min(352px, calc(100vw - 16px));
   padding: 6px;

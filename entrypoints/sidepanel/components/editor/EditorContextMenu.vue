@@ -11,23 +11,25 @@ const { editorContextMenu, editorContextMenuRef, editorContextMenuPanel } = cont
 </script>
 
 <template>
-  <div
-    v-if="editorContextMenu.visible"
-    ref="editorContextMenuRef"
-    class="editor-context-menu"
-    :style="{
-      left: `${editorContextMenu.left}px`,
-      top: `${editorContextMenu.top}px`,
-    }"
-    role="menu"
-    aria-label="Text editor context menu"
-    @contextmenu.prevent
-    @pointerdown.stop
-  >
-    <EditorContextMainPanel v-if="editorContextMenuPanel === 'main'" :context="context" />
+  <Teleport to="body">
+    <div
+      v-if="editorContextMenu.visible"
+      ref="editorContextMenuRef"
+      class="editor-context-menu"
+      :style="{
+        left: `${editorContextMenu.left}px`,
+        top: `${editorContextMenu.top}px`,
+      }"
+      role="menu"
+      aria-label="Text editor context menu"
+      @contextmenu.prevent
+      @pointerdown.stop
+    >
+      <EditorContextMainPanel v-if="editorContextMenuPanel === 'main'" :context="context" />
 
-    <EditorContextLinkPanel v-if="editorContextMenuPanel === 'link'" :context="context" />
+      <EditorContextLinkPanel v-if="editorContextMenuPanel === 'link'" :context="context" />
 
-    <EditorContextColorPanel v-if="editorContextMenuPanel === 'color'" :context="context" />
-  </div>
+      <EditorContextColorPanel v-if="editorContextMenuPanel === 'color'" :context="context" />
+    </div>
+  </Teleport>
 </template>

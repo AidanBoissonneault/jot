@@ -1,13 +1,176 @@
-<!DOCTYPE html>
-<html lang="">
+<!doctype html>
+<html lang="en">
   <head>
-    <meta charset="UTF-8">
-    <link rel="icon" href="/favicon.ico">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Vite App</title>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#f6f4ef" />
+    <meta
+      name="description"
+      content="See how Inkwell saves web passages with their sources and keeps them editable in your notes."
+    />
+    <link rel="icon" type="image/png" href="/inkwell-icon.png" />
+    <title>Inkwell | Save a passage into your notes</title>
   </head>
-  <body>
-    <div id="app"></div>
+  <body class="marketing-demo">
+    <div class="page-split">
+      <aside id="reading-pane" class="reading-pane" aria-labelledby="page-title">
+        <header class="brand-row">
+          <a class="brand" href="#top" aria-label="Inkwell home">
+            <img src="/inkwell-icon.png" alt="" width="28" height="28" />
+            <span>Inkwell</span>
+          </a>
+          <nav class="page-nav" aria-label="Product tour">
+            <a href="#capture">Save</a>
+            <a href="#organize">Organize</a>
+            <a href="#write">Edit</a>
+            <a href="#media">Media</a>
+            <a href="/patch-notes/">Patch notes</a>
+          </nav>
+        </header>
+
+        <main id="top" class="reading-copy">
+          <p class="eyebrow">A short product tour</p>
+          <h1 id="page-title">Save a passage.<br />Keep its source.</h1>
+          <p class="intro">
+            Inkwell puts selected text and its source link in the same note. Try the example below,
+            then use the live editor to organize or edit it.
+          </p>
+
+          <section id="capture" class="capture-section" aria-labelledby="capture-title">
+            <div class="section-heading">
+              <span class="section-number">01</span>
+              <div>
+                <h2 id="capture-title">Add a passage from this page</h2>
+                <p>Select the sentence, then add it to the open note.</p>
+              </div>
+            </div>
+
+            <article class="sample-page" aria-labelledby="sample-title">
+              <p class="sample-source">SAMPLE TEXT <span>THIS PAGE</span></p>
+              <h3 id="sample-title">Taking useful notes while you read</h3>
+              <p>
+                A short excerpt can be enough to remind you why a page mattered. The source gives
+                the excerpt its context.
+              </p>
+              <p class="selectable-passage" data-passage>
+                Keep the original source beside a passage, so you can check its context when you
+                return to it.
+              </p>
+              <div class="capture-actions">
+                <button id="capture-selection" type="button">Add to Your Notes</button>
+                <p>Select text above, or click to add the sample sentence.</p>
+              </div>
+              <p id="capture-message" class="capture-message" role="status" aria-live="polite"></p>
+            </article>
+          </section>
+
+          <section id="organize" class="feature-section" aria-labelledby="organize-title">
+            <span class="section-number">02</span>
+            <div>
+              <h2 id="organize-title">Projects and pages</h2>
+              <p>
+                Use the project name in the live editor to switch or create a project. Open the page
+                title to move between notes in that project.
+              </p>
+              <div class="location-example" aria-label="Example project and page">
+                <span><small>PROJECT</small><strong>Demo</strong></span>
+                <span class="location-separator" aria-hidden="true">/</span>
+                <span><small>PAGE</small><strong>Your Notes</strong></span>
+              </div>
+            </div>
+          </section>
+
+          <section id="write" class="feature-section" aria-labelledby="write-title">
+            <span class="section-number">03</span>
+            <div>
+              <h2 id="write-title">Keep writing in the same note</h2>
+              <p>
+                Add structure around a saved passage with the editor toolbar. It supports headings,
+                lists, checklists, links, and code blocks.
+              </p>
+              <div class="format-example" aria-label="Example note formatting">
+                <h3>Questions to follow up</h3>
+                <ul>
+                  <li>What did the original page leave out?</li>
+                  <li>Which detail should I check later?</li>
+                </ul>
+              </div>
+            </div>
+          </section>
+
+          <section id="media" class="media-section" aria-labelledby="media-title">
+            <div class="section-heading">
+              <span class="section-number">04</span>
+              <div>
+                <h2 id="media-title">Images</h2>
+                <p>
+                  Drag a photo into the live note to add it to your page.
+                </p>
+              </div>
+            </div>
+
+            <div class="media-samples" aria-label="Sample photos to drag into Inkwell">
+              <figure>
+                <img
+                  src="/demo-photos/desk-notes.jpg"
+                  alt="Open graph paper notebook beside a laptop"
+                  draggable="true"
+                  data-media-photo
+                />
+                <figcaption>Desk notes · Eric Bailey (CC0)</figcaption>
+              </figure>
+              <figure>
+                <img
+                  src="/demo-photos/writing-notes.jpg"
+                  alt="A person writing in an open notebook"
+                  draggable="true"
+                  data-media-photo
+                />
+                <figcaption>Writing · Kristin Hardwick (CC0)</figcaption>
+              </figure>
+              <figure>
+                <img
+                  src="/demo-photos/reading-book.jpg"
+                  alt="A man reading a book indoors"
+                  draggable="true"
+                  data-media-photo
+                />
+                <figcaption>Reading · Shixart1985, “Man reading a book indoors” (CC BY 2.0)</figcaption>
+              </figure>
+            </div>
+          </section>
+
+          <details class="storage-note">
+            <summary>Where this demo saves your notes</summary>
+            <p>
+              Changes in the live demo stay in this browser. The full app can connect to Notion when
+              you want to sync your notes.
+            </p>
+          </details>
+        </main>
+
+        <footer class="reading-footer">
+          <span>Local demo data stays in this browser.</span>
+          <a href="#top">Back to top</a>
+        </footer>
+      </aside>
+
+      <div
+        id="split-divider"
+        class="split-divider"
+        role="separator"
+        aria-label="Resize the Inkwell editor"
+        aria-orientation="vertical"
+        aria-controls="reading-pane inkwell-demo-root"
+        aria-valuemin="25"
+        aria-valuemax="50"
+        aria-valuenow="25"
+        aria-valuetext="25% editor pane"
+        tabindex="0"
+      ><span aria-hidden="true"></span></div>
+
+      <section id="inkwell-demo-root" aria-label="Live Inkwell editor"></section>
+    </div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
