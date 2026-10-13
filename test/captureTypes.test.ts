@@ -36,4 +36,18 @@ describe('captured source block types', () => {
         },
       });
   });
+
+  it('keeps a source blockquote as a Notion quote', () => {
+    const content = createCapturedContent(capture('blockquote'));
+
+    expect(content[0]).toMatchObject({
+      type: 'blockquote',
+      content: [{
+        type: 'paragraph',
+        content: [{ type: 'text', text: 'Captured item' }],
+      }],
+    });
+    expect(tiptapDocumentToNotionBlocks({ type: 'doc', content: [content[0]] })[0])
+      .toMatchObject({ type: 'quote', quote: { rich_text: [expect.any(Object)] } });
+  });
 });
