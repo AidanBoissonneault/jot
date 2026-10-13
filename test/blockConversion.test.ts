@@ -36,13 +36,15 @@ describe('notionBlockToTiptapNode', () => {
     expect(doc.content[0]).toMatchObject({ type: 'heading', attrs: { level: 1 } });
   });
 
-  it('converts heading_2 and heading_3 with correct levels', () => {
+  it('converts heading_2, heading_3, and heading_4 with correct levels', () => {
     const doc = notionBlocksToTiptapDocument([
       { type: 'heading_2', heading_2: { rich_text: richText('H2') } },
       { type: 'heading_3', heading_3: { rich_text: richText('H3') } },
+      { type: 'heading_4', heading_4: { rich_text: richText('H4') } },
     ]);
     expect(doc.content[0].attrs.level).toBe(2);
     expect(doc.content[1].attrs.level).toBe(3);
+    expect(doc.content[2].attrs.level).toBe(4);
   });
 
   it('converts quote block to blockquote node', () => {

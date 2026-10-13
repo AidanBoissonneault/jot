@@ -36,7 +36,8 @@ function tiptapNodeToNotionBlock(node: DocumentContent): NotionBlockPayload {
   const richText = inlineContentToRichText(node.content);
 
   if (node.type === 'heading') {
-    const level = Math.min(3, Math.max(1, Number(node.attrs?.level ?? 2)));
+    // Notion's current block API supports headings 1 through 4.
+    const level = Math.min(4, Math.max(1, Number(node.attrs?.level ?? 2)));
     return {
       object: 'block',
       type: `heading_${level}`,

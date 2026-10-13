@@ -38,6 +38,7 @@ const UPDATEABLE_NOTION_TYPES = new Set([
   'heading_1',
   'heading_2',
   'heading_3',
+  'heading_4',
 ]);
 
 /** Pairs outbound Notion payloads with stable local identities and hashes. */
@@ -173,7 +174,10 @@ export function reorderedRange(
 
 /** Checks whether Notion can update a mapped block in place. */
 export function isUpdateCompatible(existing: BlockMapping, entry: DesiredManagedBlock): boolean {
-  return existing.kind === entry.kind && UPDATEABLE_NOTION_TYPES.has(entry.notionBlock.type);
+  const existingType = existing.newState?.type ?? existing.oldState?.type;
+  return existing.kind === entry.kind &&
+    existingType === entry.notionBlock.type &&
+    UPDATEABLE_NOTION_TYPES.has(entry.notionBlock.type);
 }
 
 /** Builds a Notion insertion position after a block or at the start. */

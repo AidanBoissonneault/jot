@@ -76,6 +76,7 @@ export interface NotionBlock extends NotionObject {
   heading_1: NotionBlockContent;
   heading_2: NotionBlockContent;
   heading_3: NotionBlockContent;
+  heading_4: NotionBlockContent;
   image: NotionBlockContent;
   paragraph: NotionBlockContent;
   quote: NotionBlockContent;

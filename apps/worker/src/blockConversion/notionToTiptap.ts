@@ -48,11 +48,12 @@ export function notionBlocksToTiptapDocumentStrict(blocks: NotionBlock[]): Docum
  * @returns The converted node, or null for unsupported blocks.
  */
 function notionBlockToTiptapNode(block: NotionBlock): DocumentContent | null {
-  if (block.type?.startsWith('heading_')) {
+  const headingLevel = notionHeadingLevel(block.type);
+  if (headingLevel) {
     return {
       type: 'heading',
       attrs: {
-        level: Number(block.type.replace('heading_', '')),
+        level: headingLevel,
       },
       content: richTextToTiptapInline(
         richTextProperty(objectProperty(block, block.type), 'rich_text'),
@@ -134,6 +135,17 @@ function notionBlockToTiptapNode(block: NotionBlock): DocumentContent | null {
     type: 'paragraph',
     content: richTextToTiptapInline(block.paragraph.rich_text),
   };
+}
+
+function notionHeadingLevel(
+  type: string | undefined,
+): 1 | 2 | 3 | 4 | undefined {
+  if (type !== 'heading_1' && type !== 'heading_2' &&
+    type !== 'heading_3' && type !== 'heading_4') {
+    return undefined;
+  }
+
+  return Number(type.slice('heading_'.length)) as 1 | 2 | 3 | 4;
 }
 
 /**
@@ -235,7 +247,9 @@ function plainTiptapText(text: string): DocumentContent[] | undefined {
  * @returns Stable Inkwell block category.
  */
 export function kindFromNotionBlock(block: Pick<NotionBlockPayload, 'type'>): string {
-  if (block.type?.startsWith('heading_')) return 'heading';
+  if (['heading_1', 'heading_2', 'heading_3', 'heading_4'].includes(block.type)) {
+    return 'heading';
+  }
   if (block.type === 'quote') return 'quote';
   if (['image', 'video', 'audio', 'embed', 'file'].includes(block.type)) return 'media';
   return block.type === 'paragraph' ? 'paragraph' : 'source';
