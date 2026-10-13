@@ -50,4 +50,21 @@ describe('captured source block types', () => {
     expect(tiptapDocumentToNotionBlocks({ type: 'doc', content: [content[0]] })[0])
       .toMatchObject({ type: 'quote', quote: { rich_text: [expect.any(Object)] } });
   });
+
+  it('keeps a preformatted source block as Notion code with its language', () => {
+    const payload = capture('codeBlock');
+    payload.highlightMeta.codeLanguage = 'js';
+    const content = createCapturedContent(payload);
+
+    expect(content[0]).toMatchObject({
+      type: 'codeBlock',
+      attrs: { language: 'javascript' },
+      content: [{ type: 'text', text: 'Captured item' }],
+    });
+    expect(tiptapDocumentToNotionBlocks({ type: 'doc', content: [content[0]] })[0])
+      .toMatchObject({
+        type: 'code',
+        code: { language: 'javascript', rich_text: [expect.any(Object)] },
+      });
+  });
 });
