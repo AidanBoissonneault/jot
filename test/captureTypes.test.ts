@@ -90,4 +90,15 @@ describe('captured source block types', () => {
       heading_2: { rich_text: [expect.objectContaining({ text: { content: 'Captured item' } })] },
     });
   });
+
+  it('keeps H3 as heading_3 through capture and Notion conversion', () => {
+    const content = createCapturedContent(capture('heading', 3));
+    const [block] = tiptapDocumentToNotionBlocks({ type: 'doc', content: [content[0]] });
+
+    expect(content[0]).toMatchObject({ type: 'heading', attrs: { level: 3 } });
+    expect(block).toMatchObject({
+      type: 'heading_3',
+      heading_3: { rich_text: [expect.objectContaining({ text: { content: 'Captured item' } })] },
+    });
+  });
 });
