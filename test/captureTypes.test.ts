@@ -5,6 +5,7 @@ import type { CaptureSelectionPayload } from '@/src/types/messages';
 
 function capture(
   sourceBlockType: NonNullable<CaptureSelectionPayload['highlightMeta']['sourceBlockType']>,
+  headingLevel: 1 | 2 | 3 | 4 | 5 | 6 = 1,
 ): CaptureSelectionPayload {
   return {
     text: 'Captured item',
@@ -14,7 +15,7 @@ function capture(
       text: 'Captured item',
       sourceBlockType,
       isHeading: sourceBlockType === 'heading',
-      headingLevel: sourceBlockType === 'heading' ? 1 : undefined,
+      headingLevel: sourceBlockType === 'heading' ? headingLevel : undefined,
       isCodeBlock: sourceBlockType === 'codeBlock',
     },
   };
@@ -66,5 +67,16 @@ describe('captured source block types', () => {
         type: 'code',
         code: { language: 'javascript', rich_text: [expect.any(Object)] },
       });
+  });
+
+  it('keeps H1 as heading_1 through capture and Notion conversion', () => {
+    const content = createCapturedContent(capture('heading', 1));
+    const [block] = tiptapDocumentToNotionBlocks({ type: 'doc', content: [content[0]] });
+
+    expect(content[0]).toMatchObject({ type: 'heading', attrs: { level: 1 } });
+    expect(block).toMatchObject({
+      type: 'heading_1',
+      heading_1: { rich_text: [expect.objectContaining({ text: { content: 'Captured item' } })] },
+    });
   });
 });
