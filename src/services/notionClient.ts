@@ -202,16 +202,35 @@ export function sourcePayloadFromCapture(payload: CaptureSelectionPayload): Sour
 export function createCapturedContent(payload: CaptureSelectionPayload): DocumentContent[] {
   const source = storeInkwellSource(sourcePayloadFromCapture(payload));
 
-  if (payload.highlightMeta.isHeading) {
+  if (payload.highlightMeta.isHeading || payload.highlightMeta.sourceBlockType === 'heading') {
     return createLinkedHeadingContent(payload);
   }
 
-  if (payload.highlightMeta.isCodeBlock) {
+  if (
+    payload.highlightMeta.isCodeBlock ||
+    payload.highlightMeta.sourceBlockType === 'codeBlock'
+  ) {
     return [
       {
         type: 'codeBlock',
         attrs: {
           language: normalizeCodeLanguage(payload.highlightMeta.codeLanguage),
+          inkwellBlockId: createInkwellBlockId(),
+          [INKWELL_SOURCE_ATTR]: source,
+        },
+        content: payload.text ? [{ type: 'text', text: payload.text }] : undefined,
+      },
+      {
+        type: 'paragraph',
+      },
+    ];
+  }
+
+  if (payload.highlightMeta.sourceBlockType === 'paragraph') {
+    return [
+      {
+        type: 'paragraph',
+        attrs: {
           inkwellBlockId: createInkwellBlockId(),
           [INKWELL_SOURCE_ATTR]: source,
         },
