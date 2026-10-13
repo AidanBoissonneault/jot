@@ -31,6 +31,7 @@ describe('parseCaptureSelectionPayload', () => {
     { ...validPayload, highlightMeta: { ...validPayload.highlightMeta, offset: -1 } },
     { ...validPayload, highlightMeta: { ...validPayload.highlightMeta, isHeading: 'yes' } },
     { ...validPayload, highlightMeta: { ...validPayload.highlightMeta, headingLevel: 99 } },
+    { ...validPayload, highlightMeta: { ...validPayload.highlightMeta, sourceBlockType: 'h7' } },
   ])('rejects malformed or unsafe capture data', (value) => {
     expect(parseCaptureSelectionPayload(value)).toBeNull();
   });

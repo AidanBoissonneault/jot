@@ -6,6 +6,7 @@ import type {
   TextDragStartedMessage,
 } from '@/src/types/messages';
 import { detectCodeLanguage } from '@/src/lib/codeLanguages';
+import { captureSourceBlockFromAncestors } from '@/src/lib/sourceBlockType';
 
 const BUTTON_ID = 'inkwell-inline-save';
 const ACCENT_COLOR = '#173494';
@@ -14,7 +15,6 @@ const INKWELL_DRAG_MIME = 'application/x-inkwell-capture';
 const INKWELL_HEADING_DRAG_MIME = 'application/x-inkwell-heading-capture';
 const INKWELL_SOURCE_DATA_ATTR = 'data-inkwell-source';
 const INKWELL_CAPTURE_DATA_ATTR = 'data-inkwell-capture';
-const LARGE_TEXT_PX = 22;
 type HeadingLevel = 1 | 2 | 3 | 4 | 5 | 6;
 
 export default defineContentScript({
@@ -186,12 +186,18 @@ export default defineContentScript({
     }
 
     function getHtmlHeadingElement(element: Element | null) {
-      return element?.closest('h1,h2,h3,h4,h5,h6') ?? null;
+      return element?.closest('h1,h2,h3,h4,h5,h6,[role="heading"]') ?? null;
     }
 
     function getHtmlHeadingLevel(element: Element): HeadingLevel | undefined {
-      return /^H[1-6]$/.test(element.tagName)
-        ? (Number(element.tagName.slice(1)) as HeadingLevel)
+      if (/^H[1-6]$/.test(element.tagName)) {
+        return Number(element.tagName.slice(1)) as HeadingLevel;
+      }
+
+      const ariaLevel = Number(element.getAttribute('aria-level'));
+      return element.getAttribute('role')?.toLowerCase() === 'heading' &&
+        Number.isInteger(ariaLevel) && ariaLevel >= 1 && ariaLevel <= 6
+        ? ariaLevel as HeadingLevel
         : undefined;
     }
 
@@ -217,7 +223,7 @@ export default defineContentScript({
       ];
 
       for (const candidate of candidates) {
-        const codeElement = candidate?.closest('code,pre');
+        const codeElement = candidate?.closest('pre');
         if (codeElement) {
           return codeElement.closest('pre') ?? codeElement;
         }
@@ -268,31 +274,23 @@ export default defineContentScript({
     }
 
     function getHeadingLevelFromElement(element: Element): HeadingLevel | undefined {
-      const heading = element.closest('h1,h2,h3,h4,h5,h6');
+      const sourceBlock = sourceBlockFromElement(element);
+      return sourceBlock?.type === 'heading' ? sourceBlock.level : undefined;
+    }
 
-      if (heading) {
-        return Number(heading.tagName.slice(1)) as HeadingLevel;
+    function sourceBlockFromElement(element: Element | null) {
+      if (!element) return undefined;
+
+      const ancestors = [];
+      for (let current: Element | null = element; current; current = current.parentElement) {
+        ancestors.push({
+          tagName: current.tagName,
+          role: current.getAttribute('role'),
+          ariaLevel: current.getAttribute('aria-level'),
+        });
       }
 
-      const roleHeading = element.closest('[role="heading"]');
-      const ariaLevel = roleHeading?.getAttribute('aria-level');
-      const parsedAriaLevel = ariaLevel ? Number(ariaLevel) : undefined;
-
-      if (
-        parsedAriaLevel &&
-        parsedAriaLevel >= 1 &&
-        parsedAriaLevel <= 6
-      ) {
-        return parsedAriaLevel as HeadingLevel;
-      }
-
-      const style = window.getComputedStyle(element);
-      const fontSize = Number.parseFloat(style.fontSize);
-      const fontWeight = Number.parseInt(style.fontWeight, 10);
-
-      return fontSize >= LARGE_TEXT_PX || (fontSize >= 18 && fontWeight >= 600)
-        ? 2
-        : undefined;
+      return captureSourceBlockFromAncestors(ancestors);
     }
 
     function getHeadingLevel(selection: Selection): HeadingLevel | undefined {
@@ -315,13 +313,13 @@ export default defineContentScript({
     function buildCapturePayload(
       selection: Selection,
       text: string,
-      includeHeadingMetadata = false,
     ) {
       const selectionElement = getSelectionElement(selection);
       const headingElement = selectionElement
         ? getHeadingElement(selectionElement)
         : null;
       const headingLevel = getHeadingLevel(selection);
+      const sourceBlock = sourceBlockFromElement(selectionElement);
       const codeElement = getSelectionCodeElement(selection);
       const range = selection.rangeCount ? selection.getRangeAt(0) : null;
       const textNode = range ? getSelectionTextNode(range) : null;
@@ -348,10 +346,11 @@ export default defineContentScript({
           xpath: textNode ? getNodeXPath(textNode) : undefined,
           offset: typeof offset === 'number' && offset >= 0 ? offset : undefined,
           ...context,
-          isHeading: includeHeadingMetadata && !codeElement && Boolean(headingLevel),
-          headingLevel: includeHeadingMetadata && !codeElement ? headingLevel : undefined,
+          isHeading: sourceBlock?.type === 'heading',
+          headingLevel: sourceBlock?.type === 'heading' ? headingLevel : undefined,
           isCodeBlock: Boolean(codeElement),
           codeLanguage: codeElement ? languageFromCodeElement(codeElement) : undefined,
+          sourceBlockType: codeElement ? 'codeBlock' : sourceBlock?.type,
         },
       } satisfies CaptureSelectionMessage['payload'];
     }
@@ -410,6 +409,7 @@ export default defineContentScript({
           ...context,
           isHeading: true,
           headingLevel,
+          sourceBlockType: 'heading',
         },
       } satisfies CaptureSelectionMessage['payload'];
     }
@@ -468,7 +468,7 @@ export default defineContentScript({
         return;
       }
 
-      selectedPayload = buildCapturePayload(selection, text, true);
+      selectedPayload = buildCapturePayload(selection, text);
 
       button.style.left = `${Math.max(8, rect.left + window.scrollX)}px`;
       button.style.top = `${Math.max(8, rect.bottom + window.scrollY + 8)}px`;

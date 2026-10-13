@@ -34,6 +34,7 @@ export function parseCaptureSelectionPayload(value: unknown): CaptureSelectionPa
     !optionalBoolean(highlightMeta.isHeading) ||
     !optionalBoolean(highlightMeta.isCodeBlock) ||
     !optionalBoundedString(highlightMeta.codeLanguage, MAX_CODE_LANGUAGE_LENGTH) ||
+    !optionalCaptureSourceBlockType(highlightMeta.sourceBlockType) ||
     !optionalHeadingLevel(highlightMeta.headingLevel) ||
     !optionalOffset(highlightMeta.offset)
   ) {
@@ -50,6 +51,9 @@ export function parseCaptureSelectionPayload(value: unknown): CaptureSelectionPa
     ...(typeof highlightMeta.headingLevel === 'number' ? { headingLevel: highlightMeta.headingLevel as 1 | 2 | 3 | 4 | 5 | 6 } : {}),
     ...(typeof highlightMeta.isCodeBlock === 'boolean' ? { isCodeBlock: highlightMeta.isCodeBlock } : {}),
     ...(typeof highlightMeta.codeLanguage === 'string' ? { codeLanguage: highlightMeta.codeLanguage } : {}),
+    ...(isCaptureSourceBlockType(highlightMeta.sourceBlockType)
+      ? { sourceBlockType: highlightMeta.sourceBlockType }
+      : {}),
   };
 
   const safeSourceLink = safeCaptureSourceLink(highlightMeta.sourceLink, safeSourceUrl);
@@ -96,6 +100,16 @@ function optionalHeadingLevel(value: unknown): boolean {
   return value === undefined || (
     typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= 6
   );
+}
+
+function optionalCaptureSourceBlockType(value: unknown): boolean {
+  return value === undefined || isCaptureSourceBlockType(value);
+}
+
+function isCaptureSourceBlockType(
+  value: unknown,
+): value is NonNullable<CaptureSelectionPayload['highlightMeta']['sourceBlockType']> {
+  return value === 'heading' || value === 'paragraph' || value === 'blockquote' || value === 'codeBlock';
 }
 
 function optionalOffset(value: unknown): boolean {

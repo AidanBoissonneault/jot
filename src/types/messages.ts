@@ -1,5 +1,7 @@
 import type { ProjectPage } from '@/src/types/capture';
 
+export type CaptureSourceBlockType = 'heading' | 'paragraph' | 'blockquote' | 'codeBlock';
+
 export type SourceHighlightMeta = {
   text: string;
   sourceLink?: string;
@@ -24,6 +26,7 @@ export type CaptureSelectionPayload = {
     headingLevel?: 1 | 2 | 3 | 4 | 5 | 6;
     isCodeBlock?: boolean;
     codeLanguage?: string;
+    sourceBlockType?: CaptureSourceBlockType;
   };
 };
 
