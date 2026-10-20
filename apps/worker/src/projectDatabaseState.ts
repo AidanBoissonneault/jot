@@ -98,7 +98,12 @@ export function createProjectDatabaseStateHelpers({
     projectPage: NotionObject,
     threadBlock: NotionBlock,
   ): Promise<ProjectPage> {
-    const id = `page-${project.id}-${threadBlock.id}`;
+    const existingPageId = Object.entries(store.notePages ?? {}).find(([, storedPage]) =>
+      storedPage.kind === 'thread' &&
+      storedPage.notionPageId === threadBlock.id &&
+      storedPage.parentPageId === projectPage.id,
+    )?.[0];
+    const id = existingPageId ?? `page-${project.id}-${threadBlock.id}`;
     const title = toggleTitle(threadBlock) || 'Untitled Page';
     const contentBlocks = await listAllBlockChildren(store, threadBlock.id);
     const importedContent = contentBlocks.length
