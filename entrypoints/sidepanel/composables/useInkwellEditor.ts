@@ -61,6 +61,7 @@ export function useInkwellEditor({
     extensions: [
       StarterKit.configure({
         heading: { levels: [1, 2, 3, 4, 5, 6] },
+        code: { HTMLAttributes: { spellcheck: 'false' } },
         link: false,
         underline: false,
         codeBlock: false,
@@ -80,7 +81,7 @@ export function useInkwellEditor({
       focusedBlockKey = focusedBlockKeyForSelection(createdEditor.state.selection);
     },
     editorProps: {
-      attributes: { 'aria-label': 'Project page editor' },
+      attributes: { 'aria-label': 'Project page editor', spellcheck: 'true' },
       handleDOMEvents: {
         contextmenu: (view, event) => {
           if (!(event instanceof MouseEvent)) {
