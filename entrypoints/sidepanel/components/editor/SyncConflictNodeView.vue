@@ -35,7 +35,7 @@ async function applyChoices() {
     onResolve?: (
       conflict: SyncContentConflict,
       content: DocumentContent,
-    ) => Promise<DocumentContent | void>;
+    ) => Promise<DocumentContent | null | void>;
   };
   if (!options.onResolve) return;
 
@@ -44,10 +44,12 @@ async function applyChoices() {
   try {
     const mergedContent = buildSyncConflictMerge(conflict.value, rows.value, choices.value);
     const resolvedContent = await options.onResolve(conflict.value, mergedContent);
-    if (!resolvedContent) {
+    if (resolvedContent === undefined) {
       throw new Error('The merge was not applied. Try again.');
     }
-    props.editor.commands.setContent(resolvedContent, { emitUpdate: false });
+    if (resolvedContent !== null) {
+      props.editor.commands.setContent(resolvedContent, { emitUpdate: false });
+    }
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : 'Unable to apply this merge.';
   } finally {

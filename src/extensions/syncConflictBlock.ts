@@ -8,7 +8,7 @@ export type SyncConflictBlockOptions = {
   onResolve: (
     conflict: SyncContentConflict,
     content: DocumentContent,
-  ) => Promise<DocumentContent | void>;
+  ) => Promise<DocumentContent | null | void>;
 };
 
 export const InkwellSyncConflict = Node.create<SyncConflictBlockOptions>({

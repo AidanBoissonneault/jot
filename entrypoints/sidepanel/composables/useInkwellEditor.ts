@@ -37,7 +37,7 @@ interface InkwellEditorOptions {
   resolveSyncConflict: (
     conflict: SyncContentConflict,
     content: DocumentContent,
-  ) => Promise<DocumentContent | void>;
+  ) => Promise<DocumentContent | null | void>;
 }
 
 /** Builds the primary editor with supported content extensions and interaction hooks. */

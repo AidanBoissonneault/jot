@@ -596,7 +596,7 @@ function cancelSyncConflict() {
 async function resolveInlinePageSyncConflict(
   conflict: SyncContentConflict,
   content: DocumentContent,
-): Promise<DocumentContent | void> {
+): Promise<DocumentContent | null | void> {
   if (conflict.targetType !== 'page') {
     throw new Error('Only page conflicts can be applied in the editor.');
   }
@@ -610,7 +610,7 @@ async function resolveInlinePageSyncConflict(
     uiMessage.value = 'Page conflict resolved and synced.';
     return store.currentPage?.id === conflict.targetId
       ? store.currentPage.content
-      : content;
+      : null;
   } finally {
     isResolvingSyncConflict.value = false;
   }
