@@ -1,6 +1,7 @@
 ﻿/** @file Editor context menu state, source lookup, positioning, and clipboard workflows. */
 import { computed, nextTick, ref, watch, type ShallowRef } from 'vue';
 import type { Editor } from '@tiptap/core';
+import { Selection } from '@tiptap/pm/state';
 import type { EditorView } from '@tiptap/pm/view';
 import {
   decodeInkwellSource,
@@ -24,7 +25,21 @@ export function useEditorContextMenu(
   const editorContextMenuSource = ref<SourceOpenPayload | null>(null);
   const editorContextMenuPanel = ref<'main' | 'link' | 'color'>('main');
   const contextMenuLinkDraft = ref('');
+  const editorContextBlockPosition = ref<number | null>(null);
   let editorContextSelection: { from: number; to: number } | null = null;
+
+  const contextBlockIndex = computed(() => {
+    const activeEditor = editor.value;
+    const clickedPosition = editorContextBlockPosition.value;
+    if (!activeEditor || clickedPosition === null) return -1;
+    return topLevelBlockAtPosition(activeEditor.state.doc, clickedPosition)?.index ?? -1;
+  });
+  const canMoveEditorContextBlockUp = computed(() => contextBlockIndex.value > 0);
+  const canMoveEditorContextBlockDown = computed(() => {
+    const activeEditor = editor.value;
+    return !!activeEditor && contextBlockIndex.value >= 0 &&
+      contextBlockIndex.value < activeEditor.state.doc.childCount - 1;
+  });
 
   const editorContextMenuSourceHost = computed(() => {
     const payload = editorContextMenuSource.value;
@@ -44,6 +59,7 @@ export function useEditorContextMenu(
     const pos = view.posAtCoords({ left: event.clientX, top: event.clientY });
     event.preventDefault();
     view.focus();
+    editorContextBlockPosition.value = pos?.pos ?? view.state.selection.from;
     editorContextSelection = {
       from: view.state.selection.from,
       to: view.state.selection.to,
@@ -84,6 +100,36 @@ export function useEditorContextMenu(
     editorContextMenu.value.visible = false;
     editorContextMenuSource.value = null;
     editorContextMenuPanel.value = 'main';
+    editorContextBlockPosition.value = null;
+  }
+
+  function moveEditorContextBlock(direction: 'up' | 'down') {
+    const activeEditor = editor.value;
+    const clickedPosition = editorContextBlockPosition.value;
+    if (!activeEditor || clickedPosition === null) return;
+
+    const { state, view } = activeEditor;
+    const current = topLevelBlockAtPosition(state.doc, clickedPosition);
+    if (!current) return;
+
+    const neighborIndex = current.index + (direction === 'up' ? -1 : 1);
+    if (neighborIndex < 0 || neighborIndex >= state.doc.childCount) return;
+
+    const currentNode = state.doc.child(current.index);
+    const neighborNode = state.doc.child(neighborIndex);
+    const movedPosition = direction === 'up'
+      ? current.position - neighborNode.nodeSize
+      : current.position + neighborNode.nodeSize;
+    const transaction = state.tr
+      .delete(current.position, current.position + currentNode.nodeSize)
+      .insert(movedPosition, currentNode);
+
+    transaction.setSelection(
+      Selection.near(transaction.doc.resolve(Math.min(movedPosition + 1, transaction.doc.content.size)), 1),
+    );
+    view.dispatch(transaction.scrollIntoView());
+    view.focus();
+    hideEditorContextMenu();
   }
 
   function sourceForEditorContext(view: EditorView, clickedPosition?: number) {
@@ -257,11 +303,14 @@ export function useEditorContextMenu(
     editorContextMenuSource,
     editorContextMenuSourceHost,
     editorContextMenuPanel,
+    canMoveEditorContextBlockUp,
+    canMoveEditorContextBlockDown,
     contextMenuLinkDraft,
     showEditorContextMenu,
     placeEditorContextMenu,
     restoreEditorContextSelection,
     hideEditorContextMenu,
+    moveEditorContextBlock,
     openEditorContextSource,
     handleEditorContextMenuPointerDown,
     handleEditorContextMenuKeydown,
@@ -272,4 +321,24 @@ export function useEditorContextMenu(
     applyContextLink,
     removeContextLink,
   };
+}
+
+/** Resolves a pointer position to its containing top-level document block. */
+function topLevelBlockAtPosition(
+  doc: Editor['state']['doc'],
+  position: number,
+): { index: number; position: number } | null {
+  if (doc.childCount === 0) return null;
+
+  let blockPosition = 0;
+  const safePosition = Math.max(0, Math.min(position, doc.content.size));
+  for (let index = 0; index < doc.childCount; index += 1) {
+    const node = doc.child(index);
+    if (safePosition < blockPosition + node.nodeSize || index === doc.childCount - 1) {
+      return { index, position: blockPosition };
+    }
+    blockPosition += node.nodeSize;
+  }
+
+  return null;
 }

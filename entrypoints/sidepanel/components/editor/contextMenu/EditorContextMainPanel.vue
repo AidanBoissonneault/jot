@@ -18,6 +18,9 @@ const {
   runContextMarkCommand,
   openContextLinkPanel,
   editorContextMenuPanel,
+  canMoveEditorContextBlockUp,
+  canMoveEditorContextBlockDown,
+  moveEditorContextBlock,
   editorContextMenuSource,
   editorContextMenuSourceHost,
   openEditorContextSource,
@@ -162,6 +165,35 @@ const {
         @click="editorContextMenuPanel = 'color'"
       >
         <span aria-hidden="true" class="context-color-icon">A</span>
+      </button>
+    </div>
+
+    <div class="context-menu-divider" />
+
+    <div class="context-menu-row context-block-actions" aria-label="Block order controls">
+      <button
+        type="button"
+        class="context-menu-button text-action"
+        :disabled="!canMoveEditorContextBlockUp"
+        title="Move block up"
+        aria-label="Move block up"
+        @mousedown.prevent
+        @click="moveEditorContextBlock('up')"
+      >
+        <font-awesome-icon :icon="['fas', 'arrow-up']" fixed-width />
+        <span>Move up</span>
+      </button>
+      <button
+        type="button"
+        class="context-menu-button text-action"
+        :disabled="!canMoveEditorContextBlockDown"
+        title="Move block down"
+        aria-label="Move block down"
+        @mousedown.prevent
+        @click="moveEditorContextBlock('down')"
+      >
+        <font-awesome-icon :icon="['fas', 'arrow-down']" fixed-width />
+        <span>Move down</span>
       </button>
     </div>
 
