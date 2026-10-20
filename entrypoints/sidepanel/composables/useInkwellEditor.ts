@@ -92,6 +92,27 @@ export function useInkwellEditor({
           return true;
         },
       },
+      handleKeyDown: (view, event) => {
+        if (
+          event.key !== 'Enter' ||
+          event.isComposing ||
+          event.ctrlKey ||
+          event.metaKey ||
+          event.altKey ||
+          !isCursorAtDocumentEnd(view.state.selection)
+        ) {
+          return false;
+        }
+
+        requestAnimationFrame(() => {
+          if (!view.dom.isConnected) return;
+          const scrollContainer = view.dom.closest('.editor');
+          if (!(scrollContainer instanceof HTMLElement)) return;
+          scrollContainer.scrollTop = scrollContainer.scrollHeight;
+        });
+
+        return false;
+      },
       handleClick: (_view, _position, event) => {
         const anchor = event.target instanceof Element ? event.target.closest('a') : null;
 
@@ -178,6 +199,28 @@ function focusedBlockKeyForSelection(selection: Editor['state']['selection']): s
   if (head.depth === 0) return `${head.node().type.name}:0`;
   const block = head.node(head.depth);
   return `${block.type.name}:${head.before(head.depth)}`;
+}
+
+/** Checks the end of the active textblock and every containing block. */
+function isCursorAtDocumentEnd(
+  selection: Editor['state']['selection'],
+): boolean {
+  if (!selection.empty) return false;
+
+  const $from = selection.$from;
+  if (
+    !$from.parent.isTextblock ||
+    $from.parentOffset !== $from.parent.content.size ||
+    $from.depth === 0
+  ) {
+    return false;
+  }
+
+  for (let depth = $from.depth; depth > 0; depth -= 1) {
+    if ($from.after(depth) !== $from.end(depth - 1)) return false;
+  }
+
+  return true;
 }
 
 function kebabCase(value: string): string {
