@@ -27,6 +27,7 @@
   color: var(--inkwell-muted);
   font-size: 0.8rem;
   font-weight: 800;
+  transition: border-color 120ms ease, background-color 120ms ease, color 120ms ease;
 }
 
 .editor-tool-tabs .icon-label-button {
@@ -34,6 +35,12 @@
 }
 
 .editor-tool-tabs button.active {
+  border-color: var(--inkwell-accent);
+  background: var(--inkwell-accent-soft);
+  color: var(--inkwell-accent-strong);
+}
+
+.editor-tool-tabs button:hover:not(.active) {
   border-color: var(--inkwell-border);
   background: var(--inkwell-surface);
   color: var(--inkwell-text);
@@ -52,6 +59,9 @@
 .editor-formatting-bar {
   grid-column: 1 / -1;
   justify-content: flex-start;
+  border-color: transparent;
+  background: transparent;
+  padding: 0;
 }
 
 .tool-icon-button {
@@ -67,6 +77,13 @@
   background: transparent;
   color: var(--inkwell-text);
   font-weight: 800;
+  transition: border-color 120ms ease, background-color 120ms ease, color 120ms ease,
+    box-shadow 120ms ease;
+}
+
+.tool-icon-button:hover:not(:disabled):not(.active) {
+  border-color: var(--inkwell-border);
+  background: var(--inkwell-surface);
 }
 
 .tool-icon-button > span {
@@ -85,6 +102,18 @@
   border-color: var(--inkwell-accent);
   background: var(--inkwell-accent-soft);
   color: var(--inkwell-accent-strong);
+}
+
+.tool-icon-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
+}
+
+.editor-tools button:focus-visible,
+.tool-panel button:focus-visible,
+.context-menu-button:focus-visible {
+  outline: 2px solid var(--inkwell-accent);
+  outline-offset: 2px;
 }
 
 .tool-popover {
@@ -127,6 +156,12 @@
   background: var(--inkwell-surface-muted);
   color: var(--inkwell-text);
   font-weight: 750;
+  transition: border-color 120ms ease, background-color 120ms ease, color 120ms ease;
+}
+
+.tool-panel button:hover:not(:disabled):not(.active) {
+  border-color: var(--inkwell-border-strong);
+  background: var(--inkwell-surface);
 }
 
 .media-tool-panel {
@@ -219,6 +254,7 @@
   color: var(--inkwell-text);
   font-size: 0.82rem;
   font-weight: 750;
+  transition: background-color 100ms ease, color 100ms ease;
 }
 
 .context-menu-button:hover,
@@ -232,6 +268,13 @@
   background: transparent;
   color: var(--inkwell-muted);
   opacity: 0.45;
+}
+
+.editor-tools button:focus-visible,
+.tool-panel button:focus-visible,
+.context-menu-button:focus-visible {
+  outline: 2px solid var(--inkwell-accent);
+  outline-offset: 2px;
 }
 
 .context-menu-button.text-action {
@@ -345,4 +388,13 @@
   height: 14px;
   border: 1px solid var(--inkwell-border-strong);
   border-radius: 4px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .editor-tool-tabs button,
+  .tool-icon-button,
+  .tool-panel button,
+  .context-menu-button {
+    transition: none;
+  }
 }

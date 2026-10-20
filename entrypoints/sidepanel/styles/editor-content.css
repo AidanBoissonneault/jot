@@ -7,6 +7,7 @@
 .editor .tiptap {
   min-height: calc(100vh - 190px);
   padding: 16px;
+  line-height: 1.55;
 }
 
 .editor .tiptap:focus {
@@ -260,14 +261,24 @@
 }
 
 .editor .tiptap blockquote {
-  padding-left: 12px;
+  padding: 9px 12px;
   border-left: 3px solid var(--inkwell-accent);
+  border-radius: 0 6px 6px 0;
+  background: color-mix(in srgb, var(--inkwell-accent-soft) 62%, transparent);
   color: var(--inkwell-text);
+}
+
+.editor .tiptap blockquote > *:last-child {
+  margin-bottom: 0;
 }
 
 .editor .tiptap a {
   color: var(--inkwell-accent-strong);
   overflow-wrap: anywhere;
+}
+
+.editor .tiptap a:hover {
+  text-decoration-thickness: 1.5px;
 }
 
 .editor .tiptap img {
