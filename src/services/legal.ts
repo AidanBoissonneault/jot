@@ -1,7 +1,7 @@
-export const LEGAL_TERMS_URL = 'https://inkwell.byaidan.com/terms';
-export const LEGAL_PRIVACY_URL = 'https://inkwell.byaidan.com/privacy';
-export const LEGAL_TERMS_VERSION = '2026-05-09';
-export const LEGAL_PRIVACY_VERSION = '2026-05-13';
+export const LEGAL_TERMS_URL = 'https://sync.inkwell.byaidan.com/terms';
+export const LEGAL_PRIVACY_URL = 'https://sync.inkwell.byaidan.com/privacy';
+export const LEGAL_TERMS_VERSION = '2026-10-13';
+export const LEGAL_PRIVACY_VERSION = '2026-09-30';
 
 const LEGAL_ACCEPTANCE_KEY = 'inkwellLegalAcceptance';
 

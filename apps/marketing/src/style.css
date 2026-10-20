@@ -380,6 +380,13 @@ body.marketing-demo {
   font-size: 9px;
 }
 
+.reading-footer nav {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
 #inkwell-demo-root {
   width: 100%;
   height: 100dvh;

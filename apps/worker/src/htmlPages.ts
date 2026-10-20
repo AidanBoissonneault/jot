@@ -1,7 +1,7 @@
 /**
  * @file Renders the worker's legal, OAuth completion, and YouTube embed HTML pages.
  * @author Aidan Boissonneault
- * @lastModified September 2026
+ * @lastModified October 2026
  */
 
 /**
@@ -59,15 +59,49 @@ ul { padding-left: 1.35rem; } .updated { margin: 0 0 28px; color: #78716c; }
 export function termsBody(): string {
   return `
     <h1>Terms of Service</h1>
-    <p class="updated"><strong>Last updated</strong> May 09, 2026</p>
-    <p>These Terms of Service govern your access to and use of Inkwell, a browser-based note-taking and content capture tool operated by Aidan Boissonneault, doing business as Inkwell.</p>
-    <h2>Use of the Service</h2><p>Inkwell lets users collect, organize, edit, and sync notes, highlights, project content, and uploaded media with connected Notion workspaces. You may use the service only for lawful purposes and in compliance with these terms.</p>
-    <h2>Notion and Third-Party Services</h2><p>Inkwell relies on third-party services, including Notion, to provide sync, storage, and workspace features. Some functionality may be unavailable, delayed, or interrupted due to third-party outages, API limits, network issues, or synchronization conflicts.</p>
-    <h2>User Content</h2><p>You are responsible for the notes, highlights, media, and other content you create or sync through Inkwell. You retain ownership of your content. You grant Inkwell the limited permission needed to process, store, transmit, and synchronize that content to provide the service.</p>
-    <h2>Accounts and Security</h2><p>You are responsible for maintaining control of your browser profile, Notion account, and devices used with Inkwell. Do not misuse, disrupt, reverse engineer, or attempt to bypass access restrictions, rate limits, or security protections.</p>
-    <h2>Availability and Disclaimer</h2><p>The service is provided as-is and as-available. Inkwell does not guarantee that synchronization will always be uninterrupted or error-free. Users should review important changes and maintain backups of critical content.</p>
-    <h2>Privacy</h2><p>Your use of Inkwell is also governed by the <a href="/privacy">Privacy Policy</a>, which explains how Inkwell collects, uses, stores, and shares user data.</p>
-    <h2>Contact</h2><p>Questions about these terms can be sent to <a href="mailto:support@byaidan.com">support@byaidan.com</a>.</p>`;
+    <p class="updated"><strong>Last updated</strong> October 13, 2026</p>
+    <p>These Terms of Service are an agreement between you and Aidan Boissonneault, an individual doing business as Inkwell ("Inkwell," "we," or "us"). They apply to the Inkwell browser extension, its local note editor and capture features, the Inkwell demonstration website, and the hosted synchronization service (together, the "Service").</p>
+
+    <h2>1. Accepting these Terms</h2>
+    <p>By installing, accessing, or using the Service, you agree to these Terms and the <a href="/privacy">Privacy Policy</a>. You can use the extension locally without connecting Notion. Before starting a Notion connection, the extension asks you to confirm that you have read and agree to the current Terms and Privacy Policy. If you use Inkwell for an organization, you confirm that you have authority to accept these Terms for it. You must be legally able to enter into this agreement where you live; if you are not, a parent or legal guardian must review and accept these Terms for you and supervise your use where required by law.</p>
+
+    <h2>2. What Inkwell does</h2>
+    <p>Inkwell is a browser-based tool for saving selected web text with its source, organizing notes into projects and pages, editing those notes, and optionally syncing them to a Notion workspace you connect. The editor can also handle content you add, including links, images, audio, recordings, and supported Notion blocks. The extension stores local workspace data in your browser. When you connect Notion, Inkwell initially uploads your local workspace for synchronization; later edits can sync while online or after connectivity returns.</p>
+    <p>The Service currently has no subscription or usage fee charged by Inkwell. You remain responsible for any fees charged by Notion, your browser or device provider, or your internet provider. We will present applicable terms before charging for any future paid Inkwell feature.</p>
+
+    <h2>3. Your account and connected services</h2>
+    <p>Inkwell sign-in uses Notion authorization. You are responsible for the Notion account you connect, the workspace and parent pages you select, and keeping your browser profile and devices secure. Your use of Notion is also subject to Notion's own terms, privacy policy, availability, and API limits. Inkwell does not control Notion and cannot guarantee that a Notion feature or API will remain available or behave consistently.</p>
+    <p>Settings let you change the synchronization server address. Use only a server you control or trust. A server address you choose receives the authentication information and content sent to it for syncing. If another person or organization operates that server, its terms and privacy practices apply to your use of it; we do not operate or control it.</p>
+
+    <h2>4. Your content and responsibilities</h2>
+    <p>"Your Content" means the notes, project information, captured passages, source details, links, images, audio, recordings, and other material that you create, capture, or add to Inkwell. As between you and Inkwell, you keep your rights in Your Content. You give us permission to store, process, transmit, convert, and display Your Content only as needed to provide, secure, and maintain features that you use, including syncing content to the Notion workspace or synchronization server you selected. This limited permission ends when the content is no longer needed for those purposes, subject to the retention and deletion details in the Privacy Policy and technical copies needed to finish pending operations.
+    </p>
+    <p>You are responsible for Your Content and for making sure you have the rights, permissions, and consents needed to collect, record, store, and sync it. Respect copyright, privacy, confidentiality, and the terms of the websites and services you use. Do not record or capture another person's private information or voice without any consent required by law. Keep separate copies of material that matters to you; Inkwell is not a guaranteed backup service.</p>
+
+    <h2>5. Acceptable use</h2>
+    <p>Use the Service only as permitted by law and these Terms. You must not use it to violate another person's rights, distribute unlawful or malicious material, interfere with or overload the Service or a third-party service, probe or bypass security controls, misuse credentials or rate limits, or attempt to gain unauthorized access. You must not reverse engineer or redistribute the Service except to the extent applicable law permits or these Terms allow. We may restrict or suspend access when reasonably needed to address a breach, security issue, legal requirement, or risk to the Service or its users.</p>
+
+    <h2>6. Local data, synchronization, and deletion</h2>
+    <p>Local-only notes are stored in your browser profile. Browser storage failures, clearing browser data, removing the extension, device loss, or device failure may make local content unavailable or remove it. Sync is asynchronous and can be delayed, fail, or produce conflicts, duplicates, or incomplete results. Notion may not support every block or media format in the same way as the Inkwell editor. Review important changes in both places and keep your own backups.</p>
+    <p>Logging out ends the current Inkwell session and attempts to revoke Inkwell's Notion access; it leaves local documents and queued edits in that browser. <strong>Delete connection</strong> in Settings deletes Inkwell account and sync data from our server and, after server confirmation, removes Inkwell documents and storage from the browser where you take that action. It does not delete pages already written to Notion or local copies on your other browsers or devices. Uninstalling the extension is not the same as deleting your Inkwell server data. See the <a href="/privacy">Privacy Policy</a> for the detailed deletion and retention behavior.</p>
+
+    <h2>7. Inkwell software and intellectual property</h2>
+    <p>Inkwell and its software, name, design, and other materials are owned by or licensed to the operator and are protected by applicable intellectual property laws. Subject to these Terms, we grant you a personal, non-exclusive, non-transferable, revocable license to install and use the extension and website for your own personal or internal business use. This license does not transfer ownership to you. Do not sell, rent, sublicense, or distribute the Service or remove its proprietary notices.</p>
+
+    <h2>8. Changes, suspension, and ending use</h2>
+    <p>You may stop using Inkwell at any time. We may change, pause, or discontinue all or part of the Service, and may suspend or end access for the reasons described in these Terms. We will post revised Terms on this page and update the date above. If a material change requires notice or renewed consent under applicable law, we will take the required steps. If these Terms end, the permissions granted to use the Service end; the provisions about ownership, disclaimers, liability, and disputes continue to apply as needed to give them effect.</p>
+
+    <h2>9. Disclaimer of warranties</h2>
+    <p>To the fullest extent permitted by law, the Service is provided "as is" and "as available." We do not promise that it will be uninterrupted, secure, compatible with every website or Notion feature, error-free, or that data will always sync, remain available, or be preserved. You decide whether the Service is suitable for your needs. Nothing in these Terms removes a warranty or right that applicable law does not allow us to exclude.</p>
+
+    <h2>10. Limitation of liability</h2>
+    <p>To the fullest extent permitted by law, Inkwell and its operator will not be liable for indirect, incidental, special, consequential, exemplary, or punitive damages, or for lost profits, revenue, goodwill, business opportunities, or data, arising from or related to the Service or these Terms, even if advised that such loss could occur. Nothing in these Terms excludes or limits liability or a consumer right that applicable law does not allow to exclude or limit.</p>
+
+    <h2>11. Governing law and disputes</h2>
+    <p>These Terms are governed by the laws of Ontario and the applicable federal laws of Canada, without regard to conflict-of-law rules. The courts located in Ontario, Canada will have jurisdiction over disputes relating to these Terms or the Service, except where applicable law gives you the right to bring a claim elsewhere or provides rights that cannot be waived.</p>
+
+    <h2>12. Privacy and contact</h2>
+    <p>The <a href="/privacy">Privacy Policy</a> explains how Inkwell handles information, including local storage, optional synchronization, and deletion. For questions about these Terms or the Service, contact Aidan Boissonneault at <a href="mailto:support@byaidan.com">support@byaidan.com</a>.</p>`;
 }
 
 /**
