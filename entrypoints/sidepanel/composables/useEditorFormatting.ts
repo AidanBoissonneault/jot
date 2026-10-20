@@ -22,6 +22,17 @@ export function useEditorFormatting(
   runFormattingCommand: (command: FormatCommand) => void,
   restoreContextSelection: () => void,
 ) {
+  const activeEditorMarks = computed(() => {
+    editorStateVersion.value;
+    return {
+      bold: editor.value?.isActive('bold') ?? false,
+      italic: editor.value?.isActive('italic') ?? false,
+      underline: editor.value?.isActive('underline') ?? false,
+      strike: editor.value?.isActive('strike') ?? false,
+      code: editor.value?.isActive('code') ?? false,
+    };
+  });
+
   const activeBlockType = computed(() => {
     editorStateVersion.value;
     if (!editor.value) return 'paragraph';
@@ -167,6 +178,7 @@ export function useEditorFormatting(
   }
 
   return {
+    activeEditorMarks,
     activeBlockType,
     activeFontSize,
     activeTextColor,

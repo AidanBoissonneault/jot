@@ -12,8 +12,17 @@ const {
   activeToolbarItems,
   activeEditorMenu,
   toggleEditorMenu,
+  activeEditorMarks,
+  runEditorMarkCommand,
 } = props.context;
 const context = props.context;
+const inlineFormattingControls = [
+  { command: 'bold', label: 'Bold', icon: ['fas', 'bold'] },
+  { command: 'italic', label: 'Italic', icon: ['fas', 'italic'] },
+  { command: 'underline', label: 'Underline', icon: ['fas', 'underline'] },
+  { command: 'strike', label: 'Strikethrough', icon: ['fas', 'strikethrough'] },
+  { command: 'code', label: 'Inline code', icon: ['fas', 'code'] },
+] as const;
 </script>
 
 <template>
@@ -50,6 +59,24 @@ const context = props.context;
       >
         <font-awesome-icon :icon="item.icon" fixed-width />
         <span>{{ item.label }}</span>
+      </button>
+    </div>
+
+    <div class="editor-quickbar editor-formatting-bar" role="toolbar" aria-label="Text formatting">
+      <button
+        v-for="control in inlineFormattingControls"
+        :key="control.command"
+        type="button"
+        class="tool-icon-button"
+        :class="{ active: activeEditorMarks[control.command] }"
+        :disabled="!editor"
+        :title="control.label"
+        :aria-label="control.label"
+        :aria-pressed="activeEditorMarks[control.command]"
+        @mousedown.prevent
+        @click="runEditorMarkCommand(control.command)"
+      >
+        <font-awesome-icon :icon="control.icon" fixed-width />
       </button>
     </div>
 

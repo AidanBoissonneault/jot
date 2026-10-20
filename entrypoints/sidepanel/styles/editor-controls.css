@@ -49,6 +49,11 @@
   background: var(--inkwell-surface-muted);
 }
 
+.editor-formatting-bar {
+  grid-column: 1 / -1;
+  justify-content: flex-start;
+}
+
 .tool-icon-button {
   display: inline-flex;
   align-items: center;

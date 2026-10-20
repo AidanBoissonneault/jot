@@ -318,6 +318,7 @@ const {
 editorHandlers.showContextMenu = showEditorContextMenu;
 
 const {
+  activeEditorMarks,
   activeBlockType,
   activeFontSize,
   activeTextColor,
@@ -807,6 +808,7 @@ const editorToolbarContext: EditorToolbarContext = {
   activeEditorMenu,
   toggleEditorMenu,
   closeEditorMenu,
+  activeEditorMarks,
   activeBlockType,
   blockTypes,
   setBlockType,

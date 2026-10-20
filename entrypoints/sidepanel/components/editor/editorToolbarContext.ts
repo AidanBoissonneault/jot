@@ -25,6 +25,9 @@ export interface EditorToolbarContext {
   activeEditorMenu: Ref<EditorMenu>;
   toggleEditorMenu: (menu: NonNullable<EditorMenu>) => void;
   closeEditorMenu: () => void;
+  activeEditorMarks: ComputedRef<
+    Readonly<Record<'bold' | 'italic' | 'underline' | 'strike' | 'code', boolean>>
+  >;
   activeBlockType: ComputedRef<string>;
   blockTypes: ReadonlyArray<{ label: string; value: string }>;
   setBlockType: (event: Event) => void;
