@@ -53,14 +53,14 @@ describe('thread content reload identity', () => {
       type: 'doc',
       content: [{
         type: 'paragraph',
-        attrs: { inkwellBlockId: 'stable-local-block-1' },
+        attrs: { jottathingBlockId: 'stable-local-block-1' },
         content: [{ type: 'text', text: 'Professor Information' }],
       }],
     };
     const importManagedBlocks = vi.fn(async (targetStore, page) => {
       targetStore.blockMappings[page.id] = [{
         localPageId: page.id,
-        inkwellBlockId: 'stable-local-block-1',
+        jottathingBlockId: 'stable-local-block-1',
         localNodeId: 'stable-local-block-1',
         notionBlockId: 'notion-paragraph-1',
         kind: 'paragraph',
@@ -92,7 +92,7 @@ describe('thread content reload identity', () => {
     );
 
     expect(page.content).toEqual(importedContent);
-    expect(page.content.content[0].attrs?.inkwellBlockId).toBe('stable-local-block-1');
+    expect(page.content.content[0].attrs?.jottathingBlockId).toBe('stable-local-block-1');
     expect(store.blockMappings[page.id][0].notionBlockId).toBe('notion-paragraph-1');
     expect(importManagedBlocks).toHaveBeenCalledWith(
       store,

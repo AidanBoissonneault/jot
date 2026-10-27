@@ -1,7 +1,8 @@
-const DB_NAME = 'inkwell';
+const DB_NAME = 'jottathing';
+const LEGACY_DB_NAME = 'inkwell';
 const STORE_NAME = 'kv';
 const DB_VERSION = 2;
-const WRITE_CONTROL_KEY = '__inkwell_write_control__';
+const WRITE_CONTROL_KEY = '__jottathing_write_control__';
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 let writesPaused = false;
@@ -24,13 +25,88 @@ function openDb(): Promise<IDBDatabase> {
         db.createObjectStore(STORE_NAME);
       }
     };
-    request.onsuccess = () => resolve(request.result);
+    request.onsuccess = () => {
+      const db = request.result;
+      migrateLegacyDatabase(db).then(() => resolve(db), (error) => {
+        db.close();
+        dbPromise = null;
+        reject(error);
+      });
+    };
     request.onerror = () => {
       dbPromise = null;
       reject(request.error);
     };
   });
   return dbPromise;
+}
+
+/** Copies the old database once without overwriting any state already saved under the new name. */
+async function migrateLegacyDatabase(targetDb: IDBDatabase): Promise<void> {
+  if (typeof indexedDB.databases !== 'function') return;
+
+  const databases = await indexedDB.databases();
+  if (!databases.some((database) => database.name === LEGACY_DB_NAME)) return;
+
+  const legacyDb = await new Promise<IDBDatabase>((resolve, reject) => {
+    const request = indexedDB.open(LEGACY_DB_NAME);
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+
+  try {
+    if (!legacyDb.objectStoreNames.contains(STORE_NAME)) return;
+    const entries = await new Promise<Array<{ key: IDBValidKey; value: unknown }>>((resolve, reject) => {
+      const request = legacyDb.transaction(STORE_NAME, 'readonly').objectStore(STORE_NAME).openCursor();
+      const result: Array<{ key: IDBValidKey; value: unknown }> = [];
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor) {
+          resolve(result);
+          return;
+        }
+        result.push({ key: cursor.key, value: migrateLegacyValue(cursor.value) });
+        cursor.continue();
+      };
+      request.onerror = () => reject(request.error);
+    });
+
+    if (!entries.length) return;
+    await new Promise<void>((resolve, reject) => {
+      const tx = targetDb.transaction(STORE_NAME, 'readwrite');
+      const store = tx.objectStore(STORE_NAME);
+      for (const { key, value } of entries) {
+        const request = store.get(key);
+        request.onsuccess = () => {
+          if (request.result === undefined) store.put(value, key);
+        };
+      }
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error ?? new Error('IndexedDB migration was aborted.'));
+    });
+  } finally {
+    legacyDb.close();
+  }
+}
+
+function migrateLegacyValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(migrateLegacyValue);
+  if (!value || typeof value !== 'object') return value;
+
+  const renamedKeys: Record<string, string> = {
+    inkwellBlockId: 'jottathingBlockId',
+    inkwellConflictResolution: 'jottathingConflictResolution',
+    inkwellPreserveRemoteBlocks: 'jottathingPreserveRemoteBlocks',
+    inkwellSource: 'jottathingSource',
+  };
+  const result: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value)) {
+    const nextKey = renamedKeys[key] ?? key;
+    if (key !== nextKey && nextKey in result) continue;
+    result[nextKey] = migrateLegacyValue(item);
+  }
+  return result;
 }
 
 export async function idbGet<T>(key: string): Promise<T | undefined> {
@@ -189,7 +265,7 @@ async function getWriterEpoch(): Promise<number> {
   return writerEpochPromise;
 }
 
-/** Removes every Inkwell document, preference, and pending sync item in IndexedDB. */
+/** Removes every Jottathing document, preference, and pending sync item in IndexedDB. */
 export async function idbClear(): Promise<void> {
   await getWriterEpoch();
   const db = await openDb();

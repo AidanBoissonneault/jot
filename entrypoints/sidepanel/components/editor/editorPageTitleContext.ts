@@ -1,11 +1,11 @@
 import type { Ref } from 'vue';
-import type { useInkwellStore } from '@/src/stores/inkwell';
+import type { useJottathingStore } from '@/src/stores/jottathing';
 
-type InkwellStore = ReturnType<typeof useInkwellStore>;
+type JottathingStore = ReturnType<typeof useJottathingStore>;
 
 /** Page title, sync warning, and page-switch actions for the editor heading. */
 export interface EditorPageTitleContext {
-  store: InkwellStore;
+  store: JottathingStore;
   activeTitleMenu: Ref<'project' | 'page' | 'category' | null>;
   pageTitleDraft: Ref<string>;
   isPageTitleEditing: Ref<boolean>;

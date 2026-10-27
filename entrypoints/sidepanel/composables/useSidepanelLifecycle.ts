@@ -2,10 +2,10 @@
 import { onBeforeUnmount, onMounted, watch } from 'vue';
 import type { Ref, ShallowRef } from 'vue';
 import type { Editor } from '@tiptap/core';
-import { useInkwellStore } from '@/src/stores/inkwell';
+import { useJottathingStore } from '@/src/stores/jottathing';
 import type { CaptureSelectionPayload } from '@/src/types/messages';
 
-type SidepanelStore = ReturnType<typeof useInkwellStore>;
+type SidepanelStore = ReturnType<typeof useJottathingStore>;
 
 /** Callbacks and reactive state shared by the sidepanel lifecycle. */
 interface SidepanelLifecycleOptions {

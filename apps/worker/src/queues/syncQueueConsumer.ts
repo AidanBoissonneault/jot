@@ -51,7 +51,7 @@ export async function processSyncQueue(
     if (jobId) {
       try {
       const { data: payloadRow, error: payloadReadError } = await supabase
-        .from('inkwell_sync_queue_payloads')
+        .from('jottathing_sync_queue_payloads')
         .select('installation_id, payload, status')
         .eq('id', jobId)
         .maybeSingle();
@@ -243,7 +243,7 @@ export async function processSyncQueue(
 /** Removes a processed or discarded payload from Supabase. */
 async function removeQueuedPayload(jobId: string): Promise<void> {
   const { error } = await supabase
-    .from('inkwell_sync_queue_payloads')
+    .from('jottathing_sync_queue_payloads')
     .delete()
     .eq('id', jobId);
   if (error) throw new Error('Unable to remove the processed sync payload.');
@@ -252,7 +252,7 @@ async function removeQueuedPayload(jobId: string): Promise<void> {
 /** Marks the payload processed before removal so a cleanup retry cannot repeat its Notion mutation. */
 async function markAndRemoveQueuedPayload(jobId: string): Promise<void> {
   const { error: updateError } = await supabase
-    .from('inkwell_sync_queue_payloads')
+    .from('jottathing_sync_queue_payloads')
     .update({ status: 'processed', updated_at: new Date().toISOString() })
     .eq('id', jobId);
   if (updateError) throw new Error('Unable to mark the sync payload as processed.');
@@ -294,7 +294,7 @@ export async function processSyncDeadLetterQueue(
     }
     try {
       const { data: payload, error: payloadError } = await supabase
-        .from('inkwell_sync_queue_payloads')
+        .from('jottathing_sync_queue_payloads')
         .select('installation_id')
         .eq('id', jobId)
         .maybeSingle();
@@ -315,7 +315,7 @@ export async function processSyncDeadLetterQueue(
 async function notifyQueueIdleIfDrained(env: WorkerEnv, installationId: string): Promise<void> {
   try {
     const { data: pending, error } = await supabase
-      .from('inkwell_sync_queue_payloads')
+      .from('jottathing_sync_queue_payloads')
       .select('id')
       .eq('installation_id', installationId)
       .eq('status', 'pending')

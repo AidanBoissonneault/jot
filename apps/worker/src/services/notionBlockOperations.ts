@@ -93,7 +93,7 @@ export function createNotionBlockOperations({
       method: 'POST',
       body: {
         parent: { type: 'workspace', workspace: true },
-        properties: { title: [{ text: { content: title || 'Inkwell' } }] },
+        properties: { title: [{ text: { content: title || 'Jottathing' } }] },
       },
     });
   }

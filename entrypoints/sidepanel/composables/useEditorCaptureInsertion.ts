@@ -5,7 +5,7 @@ import { TextSelection } from '@tiptap/pm/state';
 import type { EditorView } from '@tiptap/pm/view';
 import { capturedBlockId } from '@/src/extensions/sourceRegistry';
 import { createCapturedContent, createLinkedHeadingContent } from '@/src/services/notionClient';
-import { useInkwellStore } from '@/src/stores/inkwell';
+import { useJottathingStore } from '@/src/stores/jottathing';
 import type { DocumentContent } from '@/src/types/capture';
 import type { CaptureSelectionPayload } from '@/src/types/messages';
 import { moveEditorSelectionToDrop } from '../components/editor/editorImageMove';
@@ -13,7 +13,7 @@ import { moveEditorSelectionToDrop } from '../components/editor/editorImageMove'
 /** Coordinates local capture insertion with page saving and source mappings. */
 export function useEditorCaptureInsertion(
   editor: ShallowRef<Editor | undefined>,
-  store: ReturnType<typeof useInkwellStore>,
+  store: ReturnType<typeof useJottathingStore>,
   saveEditorContent: () => Promise<void>,
   skipNextEditorUpdate: () => void,
 ) {

@@ -62,19 +62,19 @@ describe('sanitizeHtmlPreview', () => {
   it('rejects malformed and oversized code runner requests', () => {
     const token = '00000000-0000-4000-8000-000000000000';
     expect(isCodeRunnerRequest({
-      type: 'inkwell.codeRunner.run',
+      type: 'jottathing.codeRunner.run',
       token,
       language: 'html',
       code: '<h1>safe</h1>',
     })).toBe(true);
     expect(isCodeRunnerRequest({
-      type: 'inkwell.codeRunner.run',
+      type: 'jottathing.codeRunner.run',
       token,
       language: 'javascript',
       code: 'x'.repeat(MAX_CODE_RUN_LENGTH + 1),
     })).toBe(false);
     expect(isCodeRunnerRequest({
-      type: 'inkwell.codeRunner.run',
+      type: 'jottathing.codeRunner.run',
       token: 'invalid',
       language: 'javascript',
       code: '1 + 1',

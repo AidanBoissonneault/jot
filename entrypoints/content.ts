@@ -1,20 +1,20 @@
 import type {
   CaptureSelectionMessage,
   HeadingDragStartedMessage,
-  InkwellRuntimeMessage,
+  JottathingRuntimeMessage,
   RestoreHighlightMessage,
   TextDragStartedMessage,
 } from '@/src/types/messages';
 import { detectCodeLanguage } from '@/src/lib/codeLanguages';
 import { captureSourceBlockFromAncestors } from '@/src/lib/sourceBlockType';
 
-const BUTTON_ID = 'inkwell-inline-save';
+const BUTTON_ID = 'jottathing-inline-save';
 const ACCENT_COLOR = '#173494';
 const ACCENT_HOVER_COLOR = '#0f2673';
-const INKWELL_DRAG_MIME = 'application/x-inkwell-capture';
-const INKWELL_HEADING_DRAG_MIME = 'application/x-inkwell-heading-capture';
-const INKWELL_SOURCE_DATA_ATTR = 'data-inkwell-source';
-const INKWELL_CAPTURE_DATA_ATTR = 'data-inkwell-capture';
+const JOTTATHING_DRAG_MIME = 'application/x-jottathing-capture';
+const JOTTATHING_HEADING_DRAG_MIME = 'application/x-jottathing-heading-capture';
+const JOTTATHING_SOURCE_DATA_ATTR = 'data-jottathing-source';
+const JOTTATHING_CAPTURE_DATA_ATTR = 'data-jottathing-capture';
 type HeadingLevel = 1 | 2 | 3 | 4 | 5 | 6;
 
 export default defineContentScript({
@@ -28,7 +28,7 @@ export default defineContentScript({
     button.id = BUTTON_ID;
     button.type = 'button';
     button.textContent = 'Save';
-    button.setAttribute('aria-label', 'Save selection to Inkwell');
+    button.setAttribute('aria-label', 'Save selection to Jottathing');
     Object.assign(button.style, {
       position: 'absolute',
       zIndex: '2147483647',
@@ -54,8 +54,8 @@ export default defineContentScript({
       button.style.background = ACCENT_COLOR;
     });
 
-    browser.runtime.onMessage.addListener((message: InkwellRuntimeMessage) => {
-      if (message?.type !== 'inkwell.restoreHighlight') {
+    browser.runtime.onMessage.addListener((message: JottathingRuntimeMessage) => {
+      if (message?.type !== 'jottathing.restoreHighlight') {
         return false;
       }
 
@@ -444,13 +444,13 @@ export default defineContentScript({
       const href = payload.highlightMeta.sourceLink || payload.sourceUrl;
       const sourcePayload = JSON.stringify(sourceOpenPayloadFromCapture(payload));
 
-      return `<h${level} ${INKWELL_CAPTURE_DATA_ATTR}="${htmlEscape(JSON.stringify(payload))}" ${INKWELL_SOURCE_DATA_ATTR}="${htmlEscape(sourcePayload)}"><a href="${htmlEscape(href)}" ${INKWELL_SOURCE_DATA_ATTR}="${htmlEscape(sourcePayload)}">${htmlEscape(payload.text)}</a></h${level}>`;
+      return `<h${level} ${JOTTATHING_CAPTURE_DATA_ATTR}="${htmlEscape(JSON.stringify(payload))}" ${JOTTATHING_SOURCE_DATA_ATTR}="${htmlEscape(sourcePayload)}"><a href="${htmlEscape(href)}" ${JOTTATHING_SOURCE_DATA_ATTR}="${htmlEscape(sourcePayload)}">${htmlEscape(payload.text)}</a></h${level}>`;
     }
 
     function capturedTextHtml(payload: CaptureSelectionMessage['payload']) {
       const text = htmlEscape(payload.text).replaceAll('\n', '<br>');
       const sourcePayload = JSON.stringify(sourceOpenPayloadFromCapture(payload));
-      return `<blockquote ${INKWELL_CAPTURE_DATA_ATTR}="${htmlEscape(JSON.stringify(payload))}" ${INKWELL_SOURCE_DATA_ATTR}="${htmlEscape(sourcePayload)}">${text}</blockquote>`;
+      return `<blockquote ${JOTTATHING_CAPTURE_DATA_ATTR}="${htmlEscape(JSON.stringify(payload))}" ${JOTTATHING_SOURCE_DATA_ATTR}="${htmlEscape(sourcePayload)}">${text}</blockquote>`;
     }
 
     function showButton(selection: Selection, text: string) {
@@ -497,7 +497,7 @@ export default defineContentScript({
 
     button.addEventListener('click', async (event) => {
       // Page scripts can see this injected DOM button and call click() on it.
-      // Only a real user gesture may forward selected page text to Inkwell.
+      // Only a real user gesture may forward selected page text to Jottathing.
       if (!event.isTrusted || !selectedPayload) {
         return;
       }
@@ -506,7 +506,7 @@ export default defineContentScript({
       button.textContent = 'Saved';
 
       await browser.runtime.sendMessage({
-        type: 'inkwell.captureSelection',
+        type: 'jottathing.captureSelection',
         payload: selectedPayload,
       } satisfies CaptureSelectionMessage);
 
@@ -536,12 +536,12 @@ export default defineContentScript({
         const headingPayload = buildHeadingDragPayload(event);
 
         if (headingPayload) {
-          event.dataTransfer.setData(INKWELL_DRAG_MIME, JSON.stringify(headingPayload));
-          event.dataTransfer.setData(INKWELL_HEADING_DRAG_MIME, '1');
+          event.dataTransfer.setData(JOTTATHING_DRAG_MIME, JSON.stringify(headingPayload));
+          event.dataTransfer.setData(JOTTATHING_HEADING_DRAG_MIME, '1');
           event.dataTransfer.setData('text/html', linkedHeadingHtml(headingPayload));
           void browser.runtime
             .sendMessage({
-              type: 'inkwell.headingDragStarted',
+              type: 'jottathing.headingDragStarted',
               payload: headingPayload,
             } satisfies HeadingDragStartedMessage)
             .catch(() => undefined);
@@ -556,11 +556,11 @@ export default defineContentScript({
         }
 
         const textPayload = buildCapturePayload(selection, selectedText);
-        event.dataTransfer.setData(INKWELL_DRAG_MIME, JSON.stringify(textPayload));
+        event.dataTransfer.setData(JOTTATHING_DRAG_MIME, JSON.stringify(textPayload));
         event.dataTransfer.setData('text/html', capturedTextHtml(textPayload));
         void browser.runtime
           .sendMessage({
-            type: 'inkwell.textDragStarted',
+            type: 'jottathing.textDragStarted',
             payload: textPayload,
           } satisfies TextDragStartedMessage)
           .catch(() => undefined);
@@ -688,7 +688,7 @@ export default defineContentScript({
       try {
         const highlightRange = range.cloneRange();
         const highlight = document.createElement('mark');
-        highlight.setAttribute('data-inkwell-restored-highlight', 'true');
+        highlight.setAttribute('data-jottathing-restored-highlight', 'true');
         Object.assign(highlight.style, {
           background: '#fff2a8',
           color: 'inherit',
@@ -733,14 +733,14 @@ export default defineContentScript({
         return false;
       }
 
-      const highlightName = 'inkwell-restored';
-      let style = document.getElementById('inkwell-restored-highlight-style');
+      const highlightName = 'jottathing-restored';
+      let style = document.getElementById('jottathing-restored-highlight-style');
 
       if (!style) {
         style = document.createElement('style');
-        style.id = 'inkwell-restored-highlight-style';
+        style.id = 'jottathing-restored-highlight-style';
         style.textContent =
-          '::highlight(inkwell-restored) { background: #fff2a8; color: inherit; }';
+          '::highlight(jottathing-restored) { background: #fff2a8; color: inherit; }';
         document.documentElement.append(style);
       }
 

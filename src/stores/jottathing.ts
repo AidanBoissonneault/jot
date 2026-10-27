@@ -26,7 +26,7 @@ import type {
 } from '@/src/types/capture';
 import type {
   CaptureSelectionPayload,
-  InkwellRuntimeMessage,
+  JottathingRuntimeMessage,
   ProjectPageUpdatedMessage,
 } from '@/src/types/messages';
 
@@ -36,7 +36,7 @@ type SaveOptions = {
   title?: string;
 };
 
-export const useInkwellStore = defineStore('inkwell', () => {
+export const useJottathingStore = defineStore('jottathing', () => {
   const projects = ref<Project[]>([]);
   const pages = ref<ProjectPage[]>([]);
   const currentPage = ref<ProjectPage>();
@@ -116,7 +116,7 @@ export const useInkwellStore = defineStore('inkwell', () => {
       localWorkspaceReady = true;
     } catch (error) {
       errorMessage.value =
-        error instanceof Error ? error.message : 'Unable to load Inkwell data.';
+        error instanceof Error ? error.message : 'Unable to load Jottathing data.';
       saveStatus.value = 'error';
     } finally {
       isLoading.value = false;
@@ -638,27 +638,27 @@ export const useInkwellStore = defineStore('inkwell', () => {
       return;
     }
 
-    browser.runtime.onMessage.addListener((message: InkwellRuntimeMessage) => {
-      if (message?.type === 'inkwell.prepareConnectionDeletion') {
+    browser.runtime.onMessage.addListener((message: JottathingRuntimeMessage) => {
+      if (message?.type === 'jottathing.prepareConnectionDeletion') {
         void notionClient.prepareConnectionDeletion().catch(() => undefined);
         return false;
       }
 
-      if (message?.type === 'inkwell.abortConnectionDeletion') {
+      if (message?.type === 'jottathing.abortConnectionDeletion') {
         void notionClient.abortConnectionDeletion().catch(() => undefined);
         return false;
       }
 
-      if (message?.type === 'inkwell.completeConnectionDeletion') {
+      if (message?.type === 'jottathing.completeConnectionDeletion') {
         globalThis.setTimeout(() => window.location.reload(), 0);
         return false;
       }
 
-      if (message?.type === 'inkwell.insertCaptureRequest') {
+      if (message?.type === 'jottathing.insertCaptureRequest') {
         return captureInsertHandler?.(message.payload) ?? false;
       }
 
-      if (message?.type === 'inkwell.projectPageUpdated') {
+      if (message?.type === 'jottathing.projectPageUpdated') {
         handleProjectPageUpdated(message);
       }
 
@@ -979,7 +979,7 @@ export const useInkwellStore = defineStore('inkwell', () => {
     try {
       logoutResult = await notionClient.logoutSyncSession();
     } catch {
-      errorMessage.value = 'Could not clear the local Inkwell connection state. Try logging out again.';
+      errorMessage.value = 'Could not clear the local Jottathing connection state. Try logging out again.';
       saveStatus.value = 'error';
       return false;
     }
@@ -1002,9 +1002,9 @@ export const useInkwellStore = defineStore('inkwell', () => {
     errorMessage.value = !logoutResult.serverDataCleanupComplete
       ? logoutResult.syncConfig.logoutCleanupPending
         ? 'You are signed out on this device, but server logout is still pending. Retry logout cleanup when the server is available.'
-        : 'You are signed out on this device, but Inkwell could not confirm removal of all server credentials. Sign in again if you need to reconnect.'
+        : 'You are signed out on this device, but Jottathing could not confirm removal of all server credentials. Sign in again if you need to reconnect.'
       : !logoutResult.notionTokenRevoked
-        ? 'You are signed out and Inkwell removed its stored credentials, but Notion did not confirm token revocation. Remove the Inkwell connection in Notion settings if it remains listed.'
+        ? 'You are signed out and Jottathing removed its stored credentials, but Notion did not confirm token revocation. Remove the Jottathing connection in Notion settings if it remains listed.'
         : '';
 
     return true;
@@ -1035,9 +1035,9 @@ export const useInkwellStore = defineStore('inkwell', () => {
       errorMessage.value = !result.serverDataCleanupComplete
         ? result.syncConfig.logoutCleanupPending
           ? 'Server logout is still pending. Keep your documents on this device and retry when online.'
-          : 'Inkwell could not confirm removal of all server credentials. Sign in again if you need to reconnect.'
+          : 'Jottathing could not confirm removal of all server credentials. Sign in again if you need to reconnect.'
         : !result.notionTokenRevoked
-          ? 'Inkwell removed its stored credentials, but Notion did not confirm token revocation. Remove the Inkwell connection in Notion settings if it remains listed.'
+          ? 'Jottathing removed its stored credentials, but Notion did not confirm token revocation. Remove the Jottathing connection in Notion settings if it remains listed.'
           : '';
       return result.serverDataCleanupComplete;
     } catch {
@@ -1071,7 +1071,7 @@ export const useInkwellStore = defineStore('inkwell', () => {
     } catch (error) {
       errorMessage.value = error instanceof Error
         ? error.message
-        : 'Unable to delete the Inkwell connection.';
+        : 'Unable to delete the Jottathing connection.';
       saveStatus.value = 'error';
       throw error;
     }
@@ -1199,7 +1199,7 @@ export const useInkwellStore = defineStore('inkwell', () => {
       syncCheckError.value = '';
     } catch (error) {
       errorMessage.value =
-        error instanceof Error ? error.message : 'Unable to reload Inkwell from Notion.';
+        error instanceof Error ? error.message : 'Unable to reload Jottathing from Notion.';
       saveStatus.value = 'error';
     } finally {
       isLoading.value = false;

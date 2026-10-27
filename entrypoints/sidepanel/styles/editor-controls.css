@@ -1,4 +1,4 @@
-﻿/* Toolbar, popovers, context menu, and inline editing controls. */
+/* Toolbar, popovers, context menu, and inline editing controls. */
 .editor-tools {
   position: relative;
   display: grid;
@@ -13,9 +13,9 @@
   gap: 2px;
   width: 100%;
   padding: 3px;
-  border: 1px solid var(--inkwell-border);
-  border-radius: var(--inkwell-radius);
-  background: var(--inkwell-surface-muted);
+  border: 1px solid var(--jottathing-border);
+  border-radius: var(--jottathing-radius);
+  background: var(--jottathing-surface-muted);
 }
 
 .editor-tool-tabs button {
@@ -24,7 +24,7 @@
   padding: 0 5px;
   border-color: transparent;
   background: transparent;
-  color: var(--inkwell-muted);
+  color: var(--jottathing-muted);
   font-size: 0.8rem;
   font-weight: 800;
   transition: border-color 120ms ease, background-color 120ms ease, color 120ms ease;
@@ -35,15 +35,15 @@
 }
 
 .editor-tool-tabs button.active {
-  border-color: var(--inkwell-accent);
-  background: var(--inkwell-accent-soft);
-  color: var(--inkwell-accent-strong);
+  border-color: var(--jottathing-accent);
+  background: var(--jottathing-accent-soft);
+  color: var(--jottathing-accent-strong);
 }
 
 .editor-tool-tabs button:hover:not(.active) {
-  border-color: var(--inkwell-border);
-  background: var(--inkwell-surface);
-  color: var(--inkwell-text);
+  border-color: var(--jottathing-border);
+  background: var(--jottathing-surface);
+  color: var(--jottathing-text);
 }
 
 .editor-quickbar {
@@ -51,9 +51,9 @@
   gap: 2px;
   align-items: center;
   padding: 3px;
-  border: 1px solid var(--inkwell-border);
-  border-radius: var(--inkwell-radius);
-  background: var(--inkwell-surface-muted);
+  border: 1px solid var(--jottathing-border);
+  border-radius: var(--jottathing-radius);
+  background: var(--jottathing-surface-muted);
 }
 
 .editor-formatting-bar {
@@ -75,15 +75,15 @@
   padding: 0;
   border-color: transparent;
   background: transparent;
-  color: var(--inkwell-text);
+  color: var(--jottathing-text);
   font-weight: 800;
   transition: border-color 120ms ease, background-color 120ms ease, color 120ms ease,
     box-shadow 120ms ease;
 }
 
 .tool-icon-button:hover:not(:disabled):not(.active) {
-  border-color: var(--inkwell-border);
-  background: var(--inkwell-surface);
+  border-color: var(--jottathing-border);
+  background: var(--jottathing-surface);
 }
 
 .tool-icon-button > span {
@@ -99,9 +99,9 @@
 }
 
 .tool-icon-button.active {
-  border-color: var(--inkwell-accent);
-  background: var(--inkwell-accent-soft);
-  color: var(--inkwell-accent-strong);
+  border-color: var(--jottathing-accent);
+  background: var(--jottathing-accent-soft);
+  color: var(--jottathing-accent-strong);
 }
 
 .tool-icon-button:disabled {
@@ -112,7 +112,7 @@
 .editor-tools button:focus-visible,
 .tool-panel button:focus-visible,
 .context-menu-button:focus-visible {
-  outline: 2px solid var(--inkwell-accent);
+  outline: 2px solid var(--jottathing-accent);
   outline-offset: 2px;
 }
 
@@ -126,10 +126,10 @@
   max-height: min(280px, calc(100vh - 190px));
   overflow: auto;
   padding: 10px;
-  border: 1px solid var(--inkwell-border);
-  border-radius: var(--inkwell-radius);
-  background: var(--inkwell-surface);
-  box-shadow: var(--inkwell-shadow);
+  border: 1px solid var(--jottathing-border);
+  border-radius: var(--jottathing-radius);
+  background: var(--jottathing-surface);
+  box-shadow: var(--jottathing-shadow);
 }
 
 .tool-panel {
@@ -152,16 +152,16 @@
 .tool-panel button {
   min-height: 32px;
   padding: 0 10px;
-  border-color: var(--inkwell-border);
-  background: var(--inkwell-surface-muted);
-  color: var(--inkwell-text);
+  border-color: var(--jottathing-border);
+  background: var(--jottathing-surface-muted);
+  color: var(--jottathing-text);
   font-weight: 750;
   transition: border-color 120ms ease, background-color 120ms ease, color 120ms ease;
 }
 
 .tool-panel button:hover:not(:disabled):not(.active) {
-  border-color: var(--inkwell-border-strong);
-  background: var(--inkwell-surface);
+  border-color: var(--jottathing-border-strong);
+  background: var(--jottathing-surface);
 }
 
 .media-tool-panel {
@@ -188,7 +188,7 @@
 }
 
 .media-tool-panel small {
-  color: var(--inkwell-muted);
+  color: var(--jottathing-muted);
 }
 
 .button-grid {
@@ -199,8 +199,8 @@
 
 .button-grid button.active,
 .tool-panel button.active {
-  border-color: var(--inkwell-accent);
-  background: var(--inkwell-accent);
+  border-color: var(--jottathing-accent);
+  background: var(--jottathing-accent);
   color: white;
 }
 
@@ -216,11 +216,11 @@
   padding: 6px;
   border: 1px solid rgb(55 53 47 / 12%);
   border-radius: 7px;
-  background: var(--inkwell-surface);
+  background: var(--jottathing-surface);
   box-shadow:
     0 8px 24px rgb(15 23 42 / 12%),
     0 1px 4px rgb(15 23 42 / 8%);
-  color: var(--inkwell-text);
+  color: var(--jottathing-text);
 }
 
 .context-menu-stack {
@@ -252,7 +252,7 @@
 .context-menu-divider {
   height: 1px;
   margin: 1px 0;
-  background: var(--inkwell-border);
+  background: var(--jottathing-border);
 }
 
 .context-menu-button {
@@ -266,7 +266,7 @@
   border: 0;
   border-radius: 5px;
   background: transparent;
-  color: var(--inkwell-text);
+  color: var(--jottathing-text);
   font-size: 0.82rem;
   font-weight: 750;
   transition: background-color 100ms ease, color 100ms ease;
@@ -275,20 +275,20 @@
 .context-menu-button:hover,
 .context-menu-button:focus-visible,
 .context-menu-button.active {
-  background: var(--inkwell-surface-muted);
-  color: var(--inkwell-text);
+  background: var(--jottathing-surface-muted);
+  color: var(--jottathing-text);
 }
 
 .context-menu-button:disabled {
   background: transparent;
-  color: var(--inkwell-muted);
+  color: var(--jottathing-muted);
   opacity: 0.45;
 }
 
 .editor-tools button:focus-visible,
 .tool-panel button:focus-visible,
 .context-menu-button:focus-visible {
-  outline: 2px solid var(--inkwell-accent);
+  outline: 2px solid var(--jottathing-accent);
   outline-offset: 2px;
 }
 
@@ -311,7 +311,7 @@
   max-width: 150px;
   margin-left: 16px;
   overflow: hidden;
-  color: var(--inkwell-muted);
+  color: var(--jottathing-muted);
   font-size: 0.75rem;
   font-weight: 600;
   text-overflow: ellipsis;
@@ -323,7 +323,7 @@
   place-items: center;
   width: 18px;
   height: 18px;
-  border-bottom: 2px solid var(--inkwell-accent);
+  border-bottom: 2px solid var(--jottathing-accent);
   font-weight: 850;
   line-height: 1;
 }
@@ -336,7 +336,7 @@
   border-color: transparent;
   border-radius: 5px;
   background: transparent;
-  color: var(--inkwell-text);
+  color: var(--jottathing-text);
   font-size: 0.82rem;
 }
 
@@ -350,19 +350,19 @@
 
 .context-menu-input {
   width: min(290px, calc(100vw - 42px));
-  border-color: var(--inkwell-border);
-  background: var(--inkwell-surface);
+  border-color: var(--jottathing-border);
+  background: var(--jottathing-surface);
 }
 
 .context-menu-select:hover,
 .context-menu-select:focus {
-  background: var(--inkwell-surface-muted);
+  background: var(--jottathing-surface-muted);
   outline: none;
 }
 
 .context-menu-section-label {
   padding: 2px 4px 0;
-  color: var(--inkwell-muted);
+  color: var(--jottathing-muted);
   font-size: 0.72rem;
   font-weight: 800;
   text-transform: uppercase;
@@ -385,7 +385,7 @@
   border: 0;
   border-radius: 5px;
   background: transparent;
-  color: var(--inkwell-text);
+  color: var(--jottathing-text);
   font-size: 0.82rem;
   font-weight: 650;
   text-align: left;
@@ -394,14 +394,14 @@
 .context-swatch:hover,
 .context-swatch:focus-visible,
 .context-swatch.active {
-  background: var(--inkwell-surface-muted);
+  background: var(--jottathing-surface-muted);
 }
 
 .context-swatch-chip {
   display: block;
   width: 14px;
   height: 14px;
-  border: 1px solid var(--inkwell-border-strong);
+  border: 1px solid var(--jottathing-border-strong);
   border-radius: 4px;
 }
 

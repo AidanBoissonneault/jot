@@ -120,11 +120,11 @@ export function createNotionObjectCache({
     let changed = false;
 
     if (
-      store.inkwellRootPage?.id &&
-      !(await notionObjectExists(store, 'page', store.inkwellRootPage.id))
+      store.jottathingRootPage?.id &&
+      !(await notionObjectExists(store, 'page', store.jottathingRootPage.id))
     ) {
-      store.inkwellRootPage = undefined;
-      store.inkwellDatabase = undefined;
+      store.jottathingRootPage = undefined;
+      store.jottathingDatabase = undefined;
       store.projectPages = {};
       store.projectBlocks = {};
       store.threadBlocks = {};
@@ -143,10 +143,10 @@ export function createNotionObjectCache({
 
     if (
       !databaseVerified &&
-      store.inkwellDatabase?.databaseId &&
-      !(await notionObjectExists(store, 'database', store.inkwellDatabase.databaseId))
+      store.jottathingDatabase?.databaseId &&
+      !(await notionObjectExists(store, 'database', store.jottathingDatabase.databaseId))
     ) {
-      store.inkwellDatabase = undefined;
+      store.jottathingDatabase = undefined;
       store.projectPages = {};
       store.projectBlocks = {};
       store.threadBlocks = {};

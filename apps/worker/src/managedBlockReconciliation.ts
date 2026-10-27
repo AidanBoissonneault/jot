@@ -6,7 +6,7 @@ import {
   isUpdateCompatible,
   mappingFromDesired,
   mappingKey,
-  mappingsByInkwellId,
+  mappingsByJottathingId,
   positionAfter,
   reorderedRange,
 } from './managedBlockIdentity.js';
@@ -66,8 +66,8 @@ export async function reconcileManagedBlocks({
   store,
   updateManagedBlock,
 }: ReconcileOptions) {
-  const existingByInkwellId = mappingsByInkwellId(existingMappings);
-  const desiredIds = new Set(desiredBlocks.map((entry) => entry.inkwellBlockId));
+  const existingByJottathingId = mappingsByJottathingId(existingMappings);
+  const desiredIds = new Set(desiredBlocks.map((entry) => entry.jottathingBlockId));
   const mappedNotionIds = new Set(
     existingMappings.map((mapping) => mapping.notionBlockId).filter((id): id is string => Boolean(id)),
   );
@@ -76,7 +76,7 @@ export async function reconcileManagedBlocks({
   let previousNotionBlockId: string | undefined;
 
   for (const entry of desiredBlocks) {
-    const existing = existingByInkwellId.get(entry.inkwellBlockId);
+    const existing = existingByJottathingId.get(entry.jottathingBlockId);
 
     if (!existing?.notionBlockId) {
       const createdBlock = await appendAndTrackBlock(
@@ -167,9 +167,9 @@ export async function rebuildReorderedRange({
   store,
 }: Omit<ReconcileOptions, 'updateManagedBlock'>) {
   const range = reorderedRange(existingMappings, desiredBlocks);
-  const existingByInkwellId = mappingsByInkwellId(existingMappings);
+  const existingByJottathingId = mappingsByJottathingId(existingMappings);
   const affectedDesired = desiredBlocks.slice(range.start, range.end + 1);
-  const affectedIds = new Set(affectedDesired.map((entry) => entry.inkwellBlockId));
+  const affectedIds = new Set(affectedDesired.map((entry) => entry.jottathingBlockId));
   const oldAffectedOrders = existingMappings
     .filter((mapping) => affectedIds.has(mappingKey(mapping)))
     .map((mapping) => mapping.order ?? Number.MAX_SAFE_INTEGER);
@@ -183,7 +183,7 @@ export async function rebuildReorderedRange({
   const previousMapping = desiredBlocks
     .slice(0, range.start)
     .reverse()
-    .map((entry) => existingByInkwellId.get(entry.inkwellBlockId))
+    .map((entry) => existingByJottathingId.get(entry.jottathingBlockId))
     .find((mapping) => mapping?.notionBlockId);
   const createdByOrder: Array<NotionBlock | undefined> = [];
   const children = await listAllBlockChildren(store, notionPageId);
@@ -214,11 +214,11 @@ export async function rebuildReorderedRange({
     }
 
     createdByOrder[entry.order] = createdBlock;
-    rebuiltMappings.set(entry.inkwellBlockId, mappingFromDesired(entry, createdBlock?.id, {}, createdBlock));
+    rebuiltMappings.set(entry.jottathingBlockId, mappingFromDesired(entry, createdBlock?.id, {}, createdBlock));
     previousBlockId = createdBlock?.id ?? previousBlockId;
   }
 
-  if (affectedDesired.some((entry) => !rebuiltMappings.get(entry.inkwellBlockId)?.notionBlockId)) {
+  if (affectedDesired.some((entry) => !rebuiltMappings.get(entry.jottathingBlockId)?.notionBlockId)) {
     throw new Error('Notion did not confirm every reordered block; the original range was preserved.');
   }
 
@@ -231,9 +231,9 @@ export async function rebuildReorderedRange({
 
   store.blockMappings[localPageId] = desiredBlocks
     .map((entry) => {
-      const rebuilt = rebuiltMappings.get(entry.inkwellBlockId);
+      const rebuilt = rebuiltMappings.get(entry.jottathingBlockId);
       if (rebuilt) return rebuilt;
-      const previous = existingByInkwellId.get(entry.inkwellBlockId);
+      const previous = existingByJottathingId.get(entry.jottathingBlockId);
       return mappingFromDesired(entry, previous?.notionBlockId, previous);
     })
     .filter((mapping) => mapping.notionBlockId);

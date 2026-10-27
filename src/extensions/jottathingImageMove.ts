@@ -1,10 +1,10 @@
-export type InkwellImageMovePayload = {
+export type JottathingImageMovePayload = {
   kind: 'image';
   pos: number;
   attrs: Record<string, unknown>;
 };
 
-type RememberedImageMovePayload = InkwellImageMovePayload & {
+type RememberedImageMovePayload = JottathingImageMovePayload & {
   createdAt: number;
 };
 
@@ -14,7 +14,7 @@ type DropData = {
   getData(type: string): string;
 };
 
-export const INKWELL_IMAGE_MOVE_MIME = 'application/x-inkwell-image-move';
+export const JOTTATHING_IMAGE_MOVE_MIME = 'application/x-jottathing-image-move';
 const PROSEMIRROR_SLICE_MIME = 'application/x-prosemirror-slice';
 const IMAGE_MOVE_MEMORY_TTL_MS = 30_000;
 
@@ -24,18 +24,18 @@ export function isEditorInternalDrop(dataTransfer: DropData | null | undefined):
   return Array.from(dataTransfer?.types ?? []).includes(PROSEMIRROR_SLICE_MIME);
 }
 
-export function rememberInkwellImageMovePayload(payload: InkwellImageMovePayload) {
+export function rememberJottathingImageMovePayload(payload: JottathingImageMovePayload) {
   rememberedImageMovePayload = {
     ...payload,
     createdAt: Date.now(),
   };
 }
 
-export function readInkwellImageMovePayload(
+export function readJottathingImageMovePayload(
   dataTransfer: DropData | null | undefined,
-): InkwellImageMovePayload | null {
-  const raw = dataTransfer?.getData(INKWELL_IMAGE_MOVE_MIME) ?? '';
-  const parsedPayload = parseInkwellImageMovePayload(raw);
+): JottathingImageMovePayload | null {
+  const raw = dataTransfer?.getData(JOTTATHING_IMAGE_MOVE_MIME) ?? '';
+  const parsedPayload = parseJottathingImageMovePayload(raw);
 
   if (parsedPayload) {
     rememberedImageMovePayload = null;
@@ -52,13 +52,13 @@ export function readInkwellImageMovePayload(
   return null;
 }
 
-function parseInkwellImageMovePayload(raw: string): InkwellImageMovePayload | null {
+function parseJottathingImageMovePayload(raw: string): JottathingImageMovePayload | null {
   if (!raw) {
     return null;
   }
 
   try {
-    const payload = JSON.parse(raw) as Partial<InkwellImageMovePayload>;
+    const payload = JSON.parse(raw) as Partial<JottathingImageMovePayload>;
 
     if (
       payload.kind === 'image' &&
@@ -84,7 +84,7 @@ function parseInkwellImageMovePayload(raw: string): InkwellImageMovePayload | nu
 
 function readRememberedImageMovePayload(
   dataTransfer: DropData | null | undefined,
-): InkwellImageMovePayload | null {
+): JottathingImageMovePayload | null {
   if (
     !rememberedImageMovePayload ||
     Date.now() - rememberedImageMovePayload.createdAt > IMAGE_MOVE_MEMORY_TTL_MS
@@ -117,7 +117,7 @@ function hasImageLikeDropData(dataTransfer: DropData | null | undefined): boolea
   );
 }
 
-function rememberedImageMovePayloadWithoutTimestamp(): InkwellImageMovePayload {
+function rememberedImageMovePayloadWithoutTimestamp(): JottathingImageMovePayload {
   return {
     kind: rememberedImageMovePayload?.kind ?? 'image',
     pos: rememberedImageMovePayload?.pos ?? 0,

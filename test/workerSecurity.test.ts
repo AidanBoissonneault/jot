@@ -15,7 +15,7 @@ import type { WorkerEnv } from '@/apps/worker/src/types';
 
 const env = {
   WORKER_URL: 'https://sync.example.test',
-  INKWELL_EXTENSION_ORIGIN: 'chrome-extension://inkwelldevextension',
+  JOTTATHING_EXTENSION_ORIGIN: 'chrome-extension://jottathingdevextension',
   TRUSTED_ORIGINS: 'http://localhost:3000, https://sidepanel.example.test/path',
   NOTION_OAUTH_CLIENT_ID: 'client-id-test',
   NOTION_OAUTH_CLIENT_SECRET: 'client-secret-test',
@@ -108,7 +108,7 @@ function initializeWebhookRoutes(database: FakeWebhookDatabase): void {
   initSingletons(env);
 }
 
-function stubAuthenticatedInkwellSession(sessionToken: string, accountId: string): void {
+function stubAuthenticatedJottathingSession(sessionToken: string, accountId: string): void {
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
     const url = new URL(input instanceof Request ? input.url : String(input));
     if (url.pathname.endsWith('/session')) {
@@ -141,7 +141,7 @@ describe('Notion OAuth generation binding', () => {
           workspace_name: 'OAuth workspace',
         }), { headers: { 'Content-Type': 'application/json' } });
       }
-      if (url.pathname.endsWith('/inkwell_oauth_generation')) {
+      if (url.pathname.endsWith('/jottathing_oauth_generation')) {
         return new Response(JSON.stringify({ generation: '7' }), { headers: { 'Content-Type': 'application/json' } });
       }
       if (url.pathname.endsWith('/rpc/commit_notion_oauth_session')) {
@@ -157,13 +157,13 @@ describe('Notion OAuth generation binding', () => {
     const authorizeUrl = new URL(start.headers.get('location')!);
     const state = authorizeUrl.searchParams.get('state')!;
     const cookie = start.headers.get('set-cookie')!;
-    const stateCookie = decodeURIComponent(cookie.match(/inkwell_notion_oauth_state=([^;]+)/)![1]);
+    const stateCookie = decodeURIComponent(cookie.match(/jottathing_notion_oauth_state=([^;]+)/)![1]);
     expect(stateCookie).toBe(state);
     await expect(notionOAuthGenerationFromState(env.NOTION_OAUTH_CLIENT_SECRET!, state)).resolves.toBe('7');
 
     const callback = await workerApp.request(
       `/auth/notion/callback?code=authorization-code&state=${encodeURIComponent(state)}`,
-      { headers: { Cookie: `inkwell_notion_oauth_state=${stateCookie}` } },
+      { headers: { Cookie: `jottathing_notion_oauth_state=${stateCookie}` } },
       env,
     );
 
@@ -178,7 +178,7 @@ describe('Notion OAuth generation binding', () => {
     const state = 'v1.7.abcdefghijklmnopqrstuvwx12345678.' + 'a'.repeat(64);
     const response = await workerApp.request(
       `/auth/notion/callback?code=authorization-code&state=${state}`,
-      { headers: { Cookie: `inkwell_notion_oauth_state=${state}` } },
+      { headers: { Cookie: `jottathing_notion_oauth_state=${state}` } },
       env,
     );
     expect(response.status).toBe(400);
@@ -200,7 +200,7 @@ describe('Notion OAuth generation binding', () => {
         revokedTokens.push((JSON.parse(String(init?.body)) as { token: string }).token);
         return new Response('{}', { status: 200 });
       }
-      if (url.pathname.endsWith('/inkwell_oauth_generation')) {
+      if (url.pathname.endsWith('/jottathing_oauth_generation')) {
         return new Response(JSON.stringify({ generation }), { headers: { 'Content-Type': 'application/json' } });
       }
       if (url.pathname.endsWith('/rpc/commit_notion_oauth_session')) {
@@ -218,11 +218,11 @@ describe('Notion OAuth generation binding', () => {
 
     const start = await workerApp.request('/auth/notion/start', {}, env);
     const state = new URL(start.headers.get('location')!).searchParams.get('state')!;
-    const cookie = decodeURIComponent(start.headers.get('set-cookie')!.match(/inkwell_notion_oauth_state=([^;]+)/)![1]);
+    const cookie = decodeURIComponent(start.headers.get('set-cookie')!.match(/jottathing_notion_oauth_state=([^;]+)/)![1]);
     generation = '8';
     const callback = await workerApp.request(
       `/auth/notion/callback?code=authorization-code&state=${encodeURIComponent(state)}`,
-      { headers: { Cookie: `inkwell_notion_oauth_state=${cookie}` } },
+      { headers: { Cookie: `jottathing_notion_oauth_state=${cookie}` } },
       env,
     );
 
@@ -257,7 +257,7 @@ describe('worker request origin policy', () => {
   });
 
   it('allows only configured extension and web origins', () => {
-    expect(isTrustedOrigin(env, 'chrome-extension://inkwelldevextension')).toBe(true);
+    expect(isTrustedOrigin(env, 'chrome-extension://jottathingdevextension')).toBe(true);
     expect(isTrustedOrigin(env, 'http://localhost:3000')).toBe(true);
     expect(isTrustedOrigin(env, 'https://sidepanel.example.test')).toBe(true);
     expect(isTrustedOrigin(env, 'https://sync.example.test')).toBe(true);
@@ -266,7 +266,7 @@ describe('worker request origin policy', () => {
   it('rejects missing, malformed, and lookalike origins', () => {
     expect(isTrustedOrigin(env, undefined)).toBe(false);
     expect(isTrustedOrigin(env, 'chrome-extension://otherextension')).toBe(false);
-    expect(isTrustedOrigin(env, 'chrome-extension://inkwelldevextension.evil')).toBe(false);
+    expect(isTrustedOrigin(env, 'chrome-extension://jottathingdevextension.evil')).toBe(false);
     expect(isTrustedOrigin(env, 'https://sync.example.test.evil')).toBe(false);
     expect(isTrustedOrigin(env, 'null')).toBe(false);
   });
@@ -285,14 +285,14 @@ describe('worker request origin policy', () => {
   it('rejects oversized authenticated sync requests before JSON parsing', async () => {
     const sessionToken = 'sync-size-session-token-test';
     const accountId = 'notion:sync-size-test';
-    stubAuthenticatedInkwellSession(sessionToken, accountId);
+    stubAuthenticatedJottathingSession(sessionToken, accountId);
 
     const response = await workerApp.request('/sync/push', {
       method: 'POST',
       headers: {
         Origin: 'http://localhost:3000',
-        Cookie: `inkwell_session=${sessionToken}`,
-        'X-Inkwell-Account': accountId,
+        Cookie: `jottathing_session=${sessionToken}`,
+        'X-Jottathing-Account': accountId,
         'Content-Type': 'application/json',
         'Content-Length': String(MAX_SYNC_JSON_REQUEST_BYTES + 1),
       },
@@ -310,19 +310,19 @@ describe('worker request origin policy', () => {
       headers: {
         Origin: 'http://localhost:3000',
         'Access-Control-Request-Method': 'DELETE',
-        'Access-Control-Request-Headers': 'authorization, x-inkwell-account',
+        'Access-Control-Request-Headers': 'authorization, x-jottathing-account',
       },
     }, env);
 
     expect(response.status).toBe(204);
     expect(response.headers.get('access-control-allow-origin')).toBe('http://localhost:3000');
     expect(response.headers.get('access-control-allow-methods')).toContain('DELETE');
-    expect(response.headers.get('access-control-allow-headers')).toContain('X-Inkwell-Account');
+    expect(response.headers.get('access-control-allow-headers')).toContain('X-Jottathing-Account');
   });
 });
 
 describe('connected route authorization', () => {
-  it('returns JSON authorization errors for routes without an Inkwell session', async () => {
+  it('returns JSON authorization errors for routes without an Jottathing session', async () => {
     initializeWebhookRoutes({ armed: false, callbackTokenHash: null, retrieved: false, token: null });
     const headers = { Origin: 'http://localhost:3000' };
 
@@ -347,13 +347,13 @@ describe('connected route authorization', () => {
   it('rejects sync requests when the cookie belongs to a different account than the queued data', async () => {
     const sessionToken = 'account-binding-session-token-test';
     const accountId = 'notion:new-account';
-    stubAuthenticatedInkwellSession(sessionToken, accountId);
+    stubAuthenticatedJottathingSession(sessionToken, accountId);
 
     const response = await workerApp.request('/sync/status?pageId=private-local-page', {
       headers: {
         Origin: 'http://localhost:3000',
-        Cookie: `inkwell_session=${sessionToken}`,
-        'X-Inkwell-Account': 'notion:original-account',
+        Cookie: `jottathing_session=${sessionToken}`,
+        'X-Jottathing-Account': 'notion:original-account',
       },
     }, env);
 
@@ -404,8 +404,8 @@ describe('logout lifecycle route', () => {
       if (url.hostname === 'api.notion.com' && url.pathname === '/v1/oauth/revoke') {
         return new Response('{}', { status: 200 });
       }
-      if (url.pathname.endsWith('/rpc/begin_inkwell_notion_logout')
-        || url.pathname.endsWith('/rpc/complete_inkwell_notion_logout')) {
+      if (url.pathname.endsWith('/rpc/begin_jottathing_notion_logout')
+        || url.pathname.endsWith('/rpc/complete_jottathing_notion_logout')) {
         return new Response('true', { headers: { 'Content-Type': 'application/json' } });
       }
       if (url.pathname.endsWith('/session') && method === 'GET') {
@@ -439,7 +439,7 @@ describe('logout lifecycle route', () => {
       method: 'POST',
       headers: {
         Origin: 'http://localhost:3000',
-        Cookie: `inkwell_session=${sessionToken}`,
+        Cookie: `jottathing_session=${sessionToken}`,
         'Content-Type': 'application/json',
       },
       body: '{}',
@@ -454,10 +454,10 @@ describe('logout lifecycle route', () => {
       retryable: false,
     });
     expect(response.headers.get('set-cookie')).toContain('Max-Age=0');
-    const beginIndex = calls.findIndex((call) => call.pathname.endsWith('/rpc/begin_inkwell_notion_logout'));
+    const beginIndex = calls.findIndex((call) => call.pathname.endsWith('/rpc/begin_jottathing_notion_logout'));
     const accountReadIndex = calls.findIndex((call) => call.pathname.endsWith('/account') && call.method === 'GET');
     const revokeIndex = calls.findIndex((call) => call.pathname === '/v1/oauth/revoke');
-    const completeIndex = calls.findIndex((call) => call.pathname.endsWith('/rpc/complete_inkwell_notion_logout'));
+    const completeIndex = calls.findIndex((call) => call.pathname.endsWith('/rpc/complete_jottathing_notion_logout'));
     expect(beginIndex).toBeGreaterThanOrEqual(0);
     expect(accountReadIndex).toBeGreaterThan(beginIndex);
     expect(revokeIndex).toBeGreaterThan(accountReadIndex);
@@ -478,10 +478,10 @@ describe('logout lifecycle route', () => {
       const url = new URL(input instanceof Request ? input.url : String(input));
       const method = init?.method ?? (input instanceof Request ? input.method : 'GET');
 
-      if (url.pathname.endsWith('/rpc/begin_inkwell_notion_logout')) {
+      if (url.pathname.endsWith('/rpc/begin_jottathing_notion_logout')) {
         return new Response('true', { headers: { 'Content-Type': 'application/json' } });
       }
-      if (url.pathname.endsWith('/rpc/complete_inkwell_notion_logout')) {
+      if (url.pathname.endsWith('/rpc/complete_jottathing_notion_logout')) {
         completeAttempts += 1;
         return new Response(JSON.stringify({ message: 'temporary database failure' }), {
           status: 503,
@@ -513,7 +513,7 @@ describe('logout lifecycle route', () => {
       method: 'POST',
       headers: {
         Origin: 'http://localhost:3000',
-        Cookie: `inkwell_session=${sessionToken}`,
+        Cookie: `jottathing_session=${sessionToken}`,
         'Content-Type': 'application/json',
       },
       body: '{}',
@@ -548,7 +548,7 @@ describe('logout lifecycle route', () => {
           user: { id: accountId, name: 'Test user', email: 'test@example.test', image: null, emailVerified: false },
         }]), { headers: { 'Content-Type': 'application/json' } });
       }
-      if (url.pathname.endsWith('/rpc/begin_inkwell_notion_logout')) {
+      if (url.pathname.endsWith('/rpc/begin_jottathing_notion_logout')) {
         return new Response(JSON.stringify({ message: 'function not found' }), {
           status: 404,
           headers: { 'Content-Type': 'application/json' },
@@ -562,7 +562,7 @@ describe('logout lifecycle route', () => {
       method: 'POST',
       headers: {
         Origin: 'http://localhost:3000',
-        Cookie: `inkwell_session=${sessionToken}`,
+        Cookie: `jottathing_session=${sessionToken}`,
         'Content-Type': 'application/json',
       },
       body: '{}',
@@ -613,7 +613,7 @@ describe('connection deletion retry receipts', () => {
           user: { id: accountId, name: 'Test user', email: 'test@example.test', image: null, emailVerified: false },
         }]), { headers: { 'Content-Type': 'application/json' } });
       }
-      if (url.pathname.endsWith('/inkwell_connection_deletion_receipts')) {
+      if (url.pathname.endsWith('/jottathing_connection_deletion_receipts')) {
         if (method === 'GET') {
           return new Response(JSON.stringify(receipt ? [receipt] : []), { headers: { 'Content-Type': 'application/json' } });
         }
@@ -627,7 +627,7 @@ describe('connection deletion retry receipts', () => {
           return new Response(null, { status: 204 });
         }
       }
-      if (url.pathname.endsWith('/rpc/prepare_inkwell_connection_deletion')) {
+      if (url.pathname.endsWith('/rpc/prepare_jottathing_connection_deletion')) {
         const prepareBody = JSON.parse(body || '{}') as Record<string, unknown>;
         receipt ??= {
           request_id_hash: prepareBody.p_request_id_hash,
@@ -642,7 +642,7 @@ describe('connection deletion retry receipts', () => {
           headers: { 'Content-Type': 'application/json' },
         });
       }
-      if (url.pathname.endsWith('/rpc/complete_inkwell_connection_deletion')) {
+      if (url.pathname.endsWith('/rpc/complete_jottathing_connection_deletion')) {
         receipt = { ...receipt, user_id: null, status: 'completed' };
         return new Response('true', { headers: { 'Content-Type': 'application/json' } });
       }
@@ -655,7 +655,7 @@ describe('connection deletion retry receipts', () => {
       method: 'POST',
       headers: {
         Origin: 'http://localhost:3000',
-        Cookie: `inkwell_session=${sessionToken}`,
+        Cookie: `jottathing_session=${sessionToken}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({ requestId }),
@@ -665,9 +665,9 @@ describe('connection deletion retry receipts', () => {
     expect(await response.json()).toEqual({ deleted: true, notionTokenRevoked: true });
     expect(response.headers.get('set-cookie')).toContain('Max-Age=0');
     expect(receipt).toMatchObject({ request_id_hash: requestIdHash, user_id: null, status: 'completed' });
-    expect(calls.some((call) => call.pathname.endsWith('/rpc/complete_inkwell_connection_deletion'))).toBe(true);
+    expect(calls.some((call) => call.pathname.endsWith('/rpc/complete_jottathing_connection_deletion'))).toBe(true);
     expect(calls.some((call) => call.pathname.endsWith('/user') && call.method === 'DELETE')).toBe(false);
-    expect(calls.findIndex((call) => call.pathname.endsWith('/rpc/prepare_inkwell_connection_deletion')))
+    expect(calls.findIndex((call) => call.pathname.endsWith('/rpc/prepare_jottathing_connection_deletion')))
       .toBeLessThan(calls.findIndex((call) => call.pathname.endsWith('/account') && call.method === 'GET'));
   });
 
@@ -678,7 +678,7 @@ describe('connection deletion retry receipts', () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = new URL(input instanceof Request ? input.url : String(input));
       databaseCalls.push(url.pathname);
-      if (url.pathname.endsWith('/inkwell_connection_deletion_receipts')) {
+      if (url.pathname.endsWith('/jottathing_connection_deletion_receipts')) {
         return new Response(JSON.stringify([{
           request_id_hash: requestIdHash,
           user_id: null,
@@ -698,7 +698,7 @@ describe('connection deletion retry receipts', () => {
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ deleted: true, notionTokenRevoked: true });
-    expect(databaseCalls).toEqual(['/rest/v1/inkwell_connection_deletion_receipts']);
+    expect(databaseCalls).toEqual(['/rest/v1/jottathing_connection_deletion_receipts']);
   });
 
   it('keeps a confirmed token revocation when retrying an unfinished deletion', async () => {
@@ -730,7 +730,7 @@ describe('connection deletion retry receipts', () => {
           user: { id: accountId, name: 'Test user', email: 'test@example.test', image: null, emailVerified: false },
         }]), { headers: { 'Content-Type': 'application/json' } });
       }
-      if (url.pathname.endsWith('/inkwell_connection_deletion_receipts')) {
+      if (url.pathname.endsWith('/jottathing_connection_deletion_receipts')) {
         if (method === 'GET') {
           return new Response(JSON.stringify([receipt]), { headers: { 'Content-Type': 'application/json' } });
         }
@@ -738,7 +738,7 @@ describe('connection deletion retry receipts', () => {
         receipt = { ...receipt, ...patchBody };
         return new Response(null, { status: 204 });
       }
-      if (url.pathname.endsWith('/rpc/prepare_inkwell_connection_deletion')) {
+      if (url.pathname.endsWith('/rpc/prepare_jottathing_connection_deletion')) {
         return new Response(JSON.stringify(receipt), { headers: { 'Content-Type': 'application/json' } });
       }
       if (url.pathname.endsWith('/account') && method === 'GET') {
@@ -746,7 +746,7 @@ describe('connection deletion retry receipts', () => {
           headers: { 'Content-Type': 'application/json' },
         });
       }
-      if (url.pathname.endsWith('/rpc/complete_inkwell_connection_deletion')) {
+      if (url.pathname.endsWith('/rpc/complete_jottathing_connection_deletion')) {
         receipt = { ...receipt, user_id: null, status: 'completed' };
         return new Response('true', { headers: { 'Content-Type': 'application/json' } });
       }
@@ -759,7 +759,7 @@ describe('connection deletion retry receipts', () => {
       method: 'POST',
       headers: {
         Origin: 'http://localhost:3000',
-        Cookie: `inkwell_session=${sessionToken}`,
+        Cookie: `jottathing_session=${sessionToken}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({ requestId }),
@@ -1012,15 +1012,15 @@ describe('Notion webhook verification', () => {
   it('rejects media requests over the upload envelope before parsing JSON', async () => {
     const sessionToken = 'media-size-session-token-test';
     const accountId = 'notion:media-test';
-    stubAuthenticatedInkwellSession(sessionToken, accountId);
+    stubAuthenticatedJottathingSession(sessionToken, accountId);
     const response = await workerApp.request('/media/upload', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Content-Length': String(28 * 1024 * 1024),
         Origin: 'http://localhost:3000',
-        Cookie: `inkwell_session=${sessionToken}`,
-        'X-Inkwell-Account': accountId,
+        Cookie: `jottathing_session=${sessionToken}`,
+        'X-Jottathing-Account': accountId,
       },
       body: '{}',
     }, env);
@@ -1031,15 +1031,15 @@ describe('Notion webhook verification', () => {
   it('returns a client error for non-string media fields instead of throwing', async () => {
     const sessionToken = 'media-fields-session-token-test';
     const accountId = 'notion:media-fields-test';
-    stubAuthenticatedInkwellSession(sessionToken, accountId);
+    stubAuthenticatedJottathingSession(sessionToken, accountId);
 
     const response = await workerApp.request('/media/upload', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         Origin: 'http://localhost:3000',
-        Cookie: `inkwell_session=${sessionToken}`,
-        'X-Inkwell-Account': accountId,
+        Cookie: `jottathing_session=${sessionToken}`,
+        'X-Jottathing-Account': accountId,
       },
       body: JSON.stringify({ dataBase64: {}, mimeType: {} }),
     }, env);
@@ -1051,15 +1051,15 @@ describe('Notion webhook verification', () => {
   it('rejects SVG media rather than accepting every image MIME subtype', async () => {
     const sessionToken = 'media-svg-session-token-test';
     const accountId = 'notion:media-svg-test';
-    stubAuthenticatedInkwellSession(sessionToken, accountId);
+    stubAuthenticatedJottathingSession(sessionToken, accountId);
 
     const response = await workerApp.request('/media/upload', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         Origin: 'http://localhost:3000',
-        Cookie: `inkwell_session=${sessionToken}`,
-        'X-Inkwell-Account': accountId,
+        Cookie: `jottathing_session=${sessionToken}`,
+        'X-Jottathing-Account': accountId,
       },
       body: JSON.stringify({ dataBase64: 'PHN2Zz48L3N2Zz4=', mimeType: 'image/svg+xml' }),
     }, env);

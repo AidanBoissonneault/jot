@@ -3,8 +3,8 @@
  */
 import { watch, type Ref, type ShallowRef } from 'vue';
 import type { Editor } from '@tiptap/core';
-import type { useInkwellStore } from '@/src/stores/inkwell';
-import { normalizeInkwellBlockIds } from '@/src/extensions/inkwellBlockIds';
+import type { useJottathingStore } from '@/src/stores/jottathing';
+import { normalizeJottathingBlockIds } from '@/src/extensions/jottathingBlockIds';
 import {
   contentWithSyncConflictBlocks,
   stripSyncConflictBlocks,
@@ -15,7 +15,7 @@ import type { DocumentContent, ProjectPage } from '@/src/types/capture';
 /** Owns page hydration, serialized editor saves, and exit-time persistence. */
 export function useEditorPersistence(
   editor: ShallowRef<Editor | undefined>,
-  store: ReturnType<typeof useInkwellStore>,
+  store: ReturnType<typeof useJottathingStore>,
   pageTitleDraft: Ref<string>,
   isPageTitleEditing: Ref<boolean>,
   isPageTitleDraftDirty: Ref<boolean>,
@@ -125,7 +125,7 @@ export function useEditorPersistence(
           return;
         }
 
-        const content = normalizeInkwellBlockIds(stripSyncConflictBlocks(editorContent));
+        const content = normalizeJottathingBlockIds(stripSyncConflictBlocks(editorContent));
         const title = pageTitleDraft.value;
         const serializedContent = JSON.stringify(content);
 
@@ -162,7 +162,7 @@ export function useEditorPersistence(
 
     const page = { ...store.currentPage };
     const editorContent = editor.value.getJSON() as DocumentContent;
-    const content = normalizeInkwellBlockIds(stripSyncConflictBlocks(editorContent));
+    const content = normalizeJottathingBlockIds(stripSyncConflictBlocks(editorContent));
     const title = pageTitleDraft.value;
     const serializedContent = JSON.stringify(content);
 

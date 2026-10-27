@@ -38,7 +38,8 @@ import type {
 } from '../types.js';
 import type { DocumentContent, Project, ProjectPage } from '../../../../src/types/capture.js';
 
-export const INKWELL_SESSION_COOKIE = 'inkwell_session';
+export const JOTTATHING_SESSION_COOKIE = 'jottathing_session';
+export const LEGACY_SESSION_COOKIE = 'inkwell_session';
 
 export type { BlockOpsInput, PageSyncInput, ProjectSyncInput } from './workerSyncOperations.js';
 export type { EnqueueJob } from './workerQueueOperations.js';
@@ -61,7 +62,7 @@ let workerSyncOperations: ReturnType<typeof createWorkerSyncOperations>;
 let workerQueueOperations: ReturnType<typeof createWorkerQueueOperations>;
 let workerInstallationState: ReturnType<typeof createWorkerInstallationState>;
 let workerNotionOperations: ReturnType<typeof createWorkerNotionOperations>;
-let ensureInkwellRootPage: RootHelpers['ensureInkwellRootPage'];
+let ensureJottathingRootPage: RootHelpers['ensureJottathingRootPage'];
 let ensureProjectRootPage: RootHelpers['ensureProjectRootPage'];
 let pageSummary: RootHelpers['pageSummary'];
 let archiveThreadToggle: DatabaseHelpers['archiveThreadToggle'];
@@ -80,13 +81,14 @@ function initSingletons(env: WorkerEnv): void {
   auth = createAuth(supabase);
   workerInstallationState = createWorkerInstallationState({
     auth,
-    cookieName: INKWELL_SESSION_COOKIE,
-    readInkwellSyncState,
+    cookieName: JOTTATHING_SESSION_COOKIE,
+    legacyCookieName: LEGACY_SESSION_COOKIE,
+    readJottathingSyncState,
     readStore,
   });
 
   const NOTION_VERSION = env.NOTION_VERSION ?? '2026-03-11';
-  const INKWELL_ROOT_PAGE_TITLE = env.INKWELL_ROOT_PAGE_TITLE ?? 'Inkwell';
+  const JOTTATHING_ROOT_PAGE_TITLE = env.JOTTATHING_ROOT_PAGE_TITLE ?? 'Jottathing';
 
   notionRequest = createNotionRequester({ notionVersion: NOTION_VERSION });
   workerNotionOperations = createWorkerNotionOperations({
@@ -99,13 +101,13 @@ function initSingletons(env: WorkerEnv): void {
     createChildPage,
     createWorkspacePage,
     isNotionObjectNotFound,
-    inkwellRootPageTitle: INKWELL_ROOT_PAGE_TITLE,
+    jottathingRootPageTitle: JOTTATHING_ROOT_PAGE_TITLE,
     listAllBlockChildren,
     notionRequest,
     titleFromPage,
     updatePageTitle,
   });
-  ensureInkwellRootPage = rootHelpers.ensureInkwellRootPage;
+  ensureJottathingRootPage = rootHelpers.ensureJottathingRootPage;
   ensureProjectRootPage = rootHelpers.ensureProjectRootPage;
   pageSummary = rootHelpers.pageSummary;
 
@@ -138,7 +140,7 @@ function initSingletons(env: WorkerEnv): void {
     archiveProjectRootPage,
     archiveThreadToggle,
     createChildPage,
-    ensureInkwellRootPage,
+    ensureJottathingRootPage,
     ensureProjectPage,
     ensureProjectRootPage,
     ensureThreadToggle,
@@ -242,27 +244,27 @@ function freshConnectedStore(store: WorkerStore): Promise<WorkerStore> {
 }
 
 /** Reads the current application session cookie. */
-function getInkwellSession(c: ApiContext): Promise<AuthSessionResult | null> {
-  return workerInstallationState.getInkwellSession(c);
+function getJottathingSession(c: ApiContext): Promise<AuthSessionResult | null> {
+  return workerInstallationState.getJottathingSession(c);
 }
 
 /** Requires a valid application session or responds with an unauthorized status. */
-function requireInkwellSession(c: ApiContext): Promise<AuthSessionResult | null> {
-  return workerInstallationState.requireInkwellSession(c);
+function requireJottathingSession(c: ApiContext): Promise<AuthSessionResult | null> {
+  return workerInstallationState.requireJottathingSession(c);
 }
 /** Ensures persisted synchronization state exists. @param installationId - Installation identifier. @returns Completion after upsert. */
-function ensureInkwellSyncStateRow(installationId: Identifier): Promise<void> {
-  return workerStorePersistence.ensureInkwellSyncStateRow(installationId);
+function ensureJottathingSyncStateRow(installationId: Identifier): Promise<void> {
+  return workerStorePersistence.ensureJottathingSyncStateRow(installationId);
 }
 
 /** Loads and normalizes persisted synchronization state. @param installationId - Installation identifier. @returns Normalized state. */
-function readInkwellSyncState(installationId: Identifier): Promise<WorkerStore> {
-  return workerStorePersistence.readInkwellSyncState(installationId);
+function readJottathingSyncState(installationId: Identifier): Promise<WorkerStore> {
+  return workerStorePersistence.readJottathingSyncState(installationId);
 }
 
 /** Serializes worker state into the persistence row. @param installationId - Installation identifier. @param store - Normalized state. @returns Completion after persistence. */
-function writeInkwellSyncState(installationId: Identifier, store: WorkerStore): Promise<void> {
-  return workerStorePersistence.writeInkwellSyncState(installationId, store);
+function writeJottathingSyncState(installationId: Identifier, store: WorkerStore): Promise<void> {
+  return workerStorePersistence.writeJottathingSyncState(installationId, store);
 }
 /** Checks and clears stale cached Notion mappings. */
 function validateNotionCache(
@@ -414,15 +416,15 @@ export {
   createChildPage,
   createWorkspacePage,
   deleteManagedBlock,
-  ensureInkwellRootPage,
-  ensureInkwellSyncStateRow,
+  ensureJottathingRootPage,
+  ensureJottathingSyncStateRow,
   ensureProjectDatabase,
   ensureProjectPage,
   ensureProjectStateContainer,
   ensureThreadToggle,
   freshConnectedStore,
   freshConnectedStoreForInstallation,
-  getInkwellSession,
+  getJottathingSession,
   importManagedBlocks,
   initSingletons,
   enqueueSync,
@@ -434,13 +436,13 @@ export {
   performSyncProjectFolder,
   pushPageToNotion,
   pushPageToNotionForInstallation,
-  readInkwellSyncState,
+  readJottathingSyncState,
   readProjectDatabaseStructure,
   readStore,
   reloadProjectDatabaseFromNotion,
   replaceManagedBlocks,
   requireConnectedStore,
-  requireInkwellSession,
+  requireJottathingSession,
   retrieveNotionPageOrBlock,
   supabase,
   syncProjectToNotion,

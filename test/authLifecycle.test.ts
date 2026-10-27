@@ -25,7 +25,7 @@ function fakeSupabase(failTable?: string) {
         or: (...args: unknown[]) => { calls.push({ table, method: 'or', args }); return builder; },
         maybeSingle: async () => ({ data: null, error }),
         single: async () => ({
-          data: table === 'inkwell_oauth_generation' ? { generation: '7' } : { id: 42 },
+          data: table === 'jottathing_oauth_generation' ? { generation: '7' } : { id: 42 },
           error,
         }),
         then: (resolve, reject) => Promise.resolve({ data: null, error }).then(resolve, reject),
@@ -37,7 +37,7 @@ function fakeSupabase(failTable?: string) {
       const rpcArgs = args as Record<string, unknown>;
       const data = functionName === 'commit_notion_oauth_session'
         ? 42
-        : functionName === 'prepare_inkwell_connection_deletion'
+        : functionName === 'prepare_jottathing_connection_deletion'
           ? {
               request_id_hash: rpcArgs.p_request_id_hash,
               user_id: rpcArgs.p_user_id,
@@ -58,7 +58,7 @@ describe('server authentication data lifecycle', () => {
 
     expect(calls).toContainEqual({
       table: 'rpc',
-      method: 'begin_inkwell_notion_logout',
+      method: 'begin_jottathing_notion_logout',
       args: [{ p_user_id: 'notion:user-42' }],
     });
     await expect(createAuth(fakeSupabase('rpc').client).beginNotionLogout('notion:user-42'))
@@ -71,7 +71,7 @@ describe('server authentication data lifecycle', () => {
 
     expect(calls).toContainEqual({
       table: 'rpc',
-      method: 'complete_inkwell_notion_logout',
+      method: 'complete_jottathing_notion_logout',
       args: [{
         p_user_id: 'notion:user-42',
         p_session_token_hash: hash('session-token-test'),
@@ -86,10 +86,10 @@ describe('server authentication data lifecycle', () => {
     const { calls, client } = fakeSupabase();
     await expect(createAuth(client).getNotionOAuthGeneration()).resolves.toBe('7');
     expect(calls).toContainEqual({
-      table: 'inkwell_oauth_generation', method: 'select', args: ['generation'],
+      table: 'jottathing_oauth_generation', method: 'select', args: ['generation'],
     });
-    expect(calls).toContainEqual({ table: 'inkwell_oauth_generation', method: 'eq', args: ['id', 1] });
-    await expect(createAuth(fakeSupabase('inkwell_oauth_generation').client).getNotionOAuthGeneration())
+    expect(calls).toContainEqual({ table: 'jottathing_oauth_generation', method: 'eq', args: ['id', 1] });
+    await expect(createAuth(fakeSupabase('jottathing_oauth_generation').client).getNotionOAuthGeneration())
       .rejects.toThrow('Unable to start a secure Notion connection.');
   });
 
@@ -180,6 +180,7 @@ describe('server authentication data lifecycle', () => {
     expect(migration).toContain('public."user"');
     expect(migration).toContain('public.account');
     expect(migration).toContain('public.notion_installations');
+    // This migration predates the forward rename and must remain replayable for old installations.
     expect(migration).toContain('public.inkwell_sync_state');
     expect(migration).toContain('v_existing_token IS DISTINCT FROM p_session_token_hash');
     expect(insertSession).toBeGreaterThanOrEqual(0);
@@ -196,11 +197,11 @@ describe('server authentication data lifecycle', () => {
 
     expect(calls).toContainEqual({
       table: 'rpc',
-      method: 'complete_inkwell_connection_deletion',
+      method: 'complete_jottathing_connection_deletion',
       args: [{ p_request_id_hash: requestIdHash }],
     });
     await expect(createAuth(fakeSupabase('rpc').client).completeConnectionDeletionReceipt(requestIdHash))
-      .rejects.toThrow('Unable to complete the Inkwell connection deletion.');
+      .rejects.toThrow('Unable to complete the Jottathing connection deletion.');
   });
 
   it('prepares deletion under the OAuth serialization transaction', async () => {
@@ -217,7 +218,7 @@ describe('server authentication data lifecycle', () => {
 
     expect(calls).toContainEqual({
       table: 'rpc',
-      method: 'prepare_inkwell_connection_deletion',
+      method: 'prepare_jottathing_connection_deletion',
       args: [{ p_request_id_hash: requestIdHash, p_user_id: 'notion:user-42' }],
     });
     await expect(createAuth(fakeSupabase('rpc').client)
@@ -237,6 +238,7 @@ describe('server authentication data lifecycle', () => {
     const pendingCheck = oauthFunction.indexOf("receipt.status = 'pending'");
     const persistUser = oauthFunction.indexOf('INSERT INTO public."user"');
 
+    // Migration 009 is historical; migration 20261027150302 renames these objects in place.
     expect(migration).toContain('CREATE OR REPLACE FUNCTION public.prepare_inkwell_connection_deletion(');
     expect(migration).toContain('CREATE TABLE IF NOT EXISTS public.inkwell_oauth_generation');
     expect(migration).toContain('UPDATE public.notion_installations');

@@ -1,5 +1,5 @@
 /**
- * @file Parses YouTube URLs and produces privacy-enhanced embed URLs for Inkwell media nodes.
+ * @file Parses YouTube URLs and produces privacy-enhanced embed URLs for Jottathing media nodes.
  * @author Aidan Boissonneault
  * @lastModified September 2026
  */

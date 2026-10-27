@@ -11,13 +11,13 @@ describe('managed block snapshot replacement', () => {
     const appendManagedBlocks = vi.fn(async (_store, _pageId, blocks, _position) => [{
       id: `notion-${blocks[0].paragraph.id}`,
     }]);
-    const queuedBlock = (id: string, index: number, afterInkwellBlockId?: string) => ({
+    const queuedBlock = (id: string, index: number, afterJottathingBlockId?: string) => ({
       type: 'block_create',
-      inkwellBlockId: id,
+      jottathingBlockId: id,
       payload: {
-        block: { type: 'paragraph', attrs: { inkwellBlockId: id } },
+        block: { type: 'paragraph', attrs: { jottathingBlockId: id } },
         index,
-        afterInkwellBlockId,
+        afterJottathingBlockId,
       },
     });
 
@@ -38,7 +38,7 @@ describe('managed block snapshot replacement', () => {
       listAllBlockChildren: vi.fn(async () => []),
       tiptapDocumentToNotionBlocks: vi.fn((content) => [{
         type: 'paragraph',
-        paragraph: { id: content.content[0].attrs.inkwellBlockId },
+        paragraph: { id: content.content[0].attrs.jottathingBlockId },
       }]),
       kindFromNotionBlock: vi.fn(() => 'paragraph'),
       hash: vi.fn((value) => value),
@@ -51,8 +51,8 @@ describe('managed block snapshot replacement', () => {
       {
         type: 'doc',
         content: [
-          { type: 'paragraph', attrs: { inkwellBlockId: 'first' } },
-          { type: 'paragraph', attrs: { inkwellBlockId: 'second' } },
+          { type: 'paragraph', attrs: { jottathingBlockId: 'first' } },
+          { type: 'paragraph', attrs: { jottathingBlockId: 'second' } },
         ],
       },
     );
@@ -63,7 +63,7 @@ describe('managed block snapshot replacement', () => {
     const store = {
       blockMappings: {
         'local-page': [{
-          inkwellBlockId: 'existing',
+          jottathingBlockId: 'existing',
           notionBlockId: 'notion-existing',
           order: 0,
         }],
@@ -77,11 +77,11 @@ describe('managed block snapshot replacement', () => {
       notionPageId: 'notion-page',
       ops: [{
         type: 'block_create',
-        inkwellBlockId: 'created',
+        jottathingBlockId: 'created',
         payload: {
-          block: { type: 'paragraph', attrs: { inkwellBlockId: 'created' } },
+          block: { type: 'paragraph', attrs: { jottathingBlockId: 'created' } },
           index: 1,
-          afterInkwellBlockId: 'existing',
+          afterJottathingBlockId: 'existing',
         },
       }],
       content: { type: 'doc', content: [] },
@@ -95,7 +95,7 @@ describe('managed block snapshot replacement', () => {
       hash: vi.fn(() => 'created-hash'),
     });
 
-    expect(store.blockMappings['local-page'].map((mapping) => mapping.inkwellBlockId)).toEqual([
+    expect(store.blockMappings['local-page'].map((mapping) => mapping.jottathingBlockId)).toEqual([
       'existing',
       'created',
     ]);
@@ -129,9 +129,9 @@ describe('managed block snapshot replacement', () => {
       notionPageId: 'notion-page',
       ops: [{
         type: 'block_create',
-        inkwellBlockId: 'durable-note',
+        jottathingBlockId: 'durable-note',
         payload: {
-          block: { type: 'paragraph', attrs: { inkwellBlockId: 'durable-note' } },
+          block: { type: 'paragraph', attrs: { jottathingBlockId: 'durable-note' } },
           index: 0,
         },
       }],
@@ -160,7 +160,7 @@ describe('managed block snapshot replacement', () => {
     const store = {
       blockMappings: {
         'local-page': [{
-          inkwellBlockId: 'block-one',
+          jottathingBlockId: 'block-one',
           notionBlockId: 'duplicated-notion-block',
         }],
       },
@@ -194,7 +194,7 @@ describe('managed block snapshot replacement', () => {
 describe('managed block replacement safety', () => {
   test('an empty snapshot never deletes existing Notion content', async () => {
     const existingMapping = {
-      inkwellBlockId: 'block-one',
+      jottathingBlockId: 'block-one',
       localNodeId: 'block-one',
       localPageId: 'local-page',
       notionBlockId: 'notion-block-one',
@@ -241,8 +241,8 @@ describe('managed block replacement safety', () => {
       content: {
         type: 'doc',
         content: [
-          { type: 'paragraph', attrs: { inkwellBlockId: 'first' }, content: [{ type: 'text', text: 'First' }] },
-          { type: 'paragraph', attrs: { inkwellBlockId: 'second' }, content: [{ type: 'text', text: 'Second' }] },
+          { type: 'paragraph', attrs: { jottathingBlockId: 'first' }, content: [{ type: 'text', text: 'First' }] },
+          { type: 'paragraph', attrs: { jottathingBlockId: 'second' }, content: [{ type: 'text', text: 'Second' }] },
         ],
       },
       listAllBlockChildren: vi.fn(async () => existingBlocks),
@@ -307,8 +307,8 @@ describe('managed block replacement safety', () => {
     const store = {
       blockMappings: {
         'local-page': [
-          { inkwellBlockId: 'a', localNodeId: 'a', localPageId: 'local-page', notionBlockId: 'old-a', kind: 'paragraph', order: 0, lastSyncedHash: 'a', oldState: null, newState: null },
-          { inkwellBlockId: 'b', localNodeId: 'b', localPageId: 'local-page', notionBlockId: 'old-b', kind: 'paragraph', order: 1, lastSyncedHash: 'b', oldState: null, newState: null },
+          { jottathingBlockId: 'a', localNodeId: 'a', localPageId: 'local-page', notionBlockId: 'old-a', kind: 'paragraph', order: 0, lastSyncedHash: 'a', oldState: null, newState: null },
+          { jottathingBlockId: 'b', localNodeId: 'b', localPageId: 'local-page', notionBlockId: 'old-b', kind: 'paragraph', order: 1, lastSyncedHash: 'b', oldState: null, newState: null },
         ],
       },
     };
@@ -337,8 +337,8 @@ describe('managed block replacement safety', () => {
       content: {
         type: 'doc',
         content: [
-          { type: 'paragraph', attrs: { inkwellBlockId: 'b' }, content: [{ type: 'text', text: 'B' }] },
-          { type: 'paragraph', attrs: { inkwellBlockId: 'a' }, content: [{ type: 'text', text: 'A' }] },
+          { type: 'paragraph', attrs: { jottathingBlockId: 'b' }, content: [{ type: 'text', text: 'B' }] },
+          { type: 'paragraph', attrs: { jottathingBlockId: 'a' }, content: [{ type: 'text', text: 'A' }] },
         ],
       },
       listAllBlockChildren: vi.fn(async () => oldBlocks),

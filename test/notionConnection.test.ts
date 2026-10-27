@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ref } from 'vue';
 import { useNotionConnection } from '@/entrypoints/sidepanel/composables/useNotionConnection';
-import type { useInkwellStore } from '@/src/stores/inkwell';
+import type { useJottathingStore } from '@/src/stores/jottathing';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -17,7 +17,7 @@ describe('Notion connection controls', () => {
       },
       errorMessage: '',
       deleteConnection: vi.fn(async () => ({ notionTokenRevoked: true })),
-    } as unknown as ReturnType<typeof useInkwellStore>;
+    } as unknown as ReturnType<typeof useJottathingStore>;
     const confirm = vi.fn(() => false);
     vi.stubGlobal('window', { clearInterval: vi.fn(), confirm });
 
@@ -41,7 +41,7 @@ describe('Notion connection controls', () => {
         order.push('server-and-local-delete');
         return { notionTokenRevoked: true };
       }),
-    } as unknown as ReturnType<typeof useInkwellStore>;
+    } as unknown as ReturnType<typeof useJottathingStore>;
     vi.stubGlobal('window', { clearInterval: vi.fn(), confirm: () => true });
 
     const connection = useNotionConnection(

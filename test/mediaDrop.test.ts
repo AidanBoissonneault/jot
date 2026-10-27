@@ -11,11 +11,11 @@ import {
   readYoutubeDropSrc,
 } from '@/src/extensions/mediaDrop';
 import {
-  INKWELL_IMAGE_MOVE_MIME,
+  JOTTATHING_IMAGE_MOVE_MIME,
   isEditorInternalDrop,
-  readInkwellImageMovePayload,
-  rememberInkwellImageMovePayload,
-} from '@/src/extensions/inkwellImageMove';
+  readJottathingImageMovePayload,
+  rememberJottathingImageMovePayload,
+} from '@/src/extensions/jottathingImageMove';
 
 describe('media drop helpers', () => {
   it('extracts public image URLs from dropped HTML, URI lists, and plain text', () => {
@@ -139,9 +139,9 @@ describe('media drop helpers', () => {
 
   it('reads explicit image move drag payloads', () => {
     expect(
-      readInkwellImageMovePayload(
+      readJottathingImageMovePayload(
         dropData({
-          [INKWELL_IMAGE_MOVE_MIME]: JSON.stringify({
+          [JOTTATHING_IMAGE_MOVE_MIME]: JSON.stringify({
             kind: 'image',
             pos: 3,
             attrs: { src: 'https://example.com/capture.png', width: '42%' },
@@ -155,23 +155,23 @@ describe('media drop helpers', () => {
     });
 
     expect(
-      readInkwellImageMovePayload(
+      readJottathingImageMovePayload(
         dropData({
-          [INKWELL_IMAGE_MOVE_MIME]: JSON.stringify({ kind: 'image', pos: -1, attrs: {} }),
+          [JOTTATHING_IMAGE_MOVE_MIME]: JSON.stringify({ kind: 'image', pos: -1, attrs: {} }),
         }),
       ),
     ).toBeNull();
   });
 
   it('falls back to remembered same-session image move payloads', () => {
-    rememberInkwellImageMovePayload({
+    rememberJottathingImageMovePayload({
       kind: 'image',
       pos: 7,
       attrs: { src: 'https://example.com/remembered.png', width: '55%' },
     });
 
     expect(
-      readInkwellImageMovePayload(
+      readJottathingImageMovePayload(
         dropData({
           'application/x-prosemirror-slice': '0 0 []',
           'text/html': '<img src="https://example.com/remembered.png">',
@@ -185,7 +185,7 @@ describe('media drop helpers', () => {
   });
 
   it('treats remembered chrome-extension blob image drops as image moves', () => {
-    rememberInkwellImageMovePayload({
+    rememberJottathingImageMovePayload({
       kind: 'image',
       pos: 11,
       attrs: {
@@ -194,7 +194,7 @@ describe('media drop helpers', () => {
     });
 
     expect(
-      readInkwellImageMovePayload(
+      readJottathingImageMovePayload(
         dropData({
           'text/plain':
             'blob:chrome-extension://aenmkafokhhihmlkeoijbbnbfneohnkj/f534f216-f53e-4ec7-b0e8-baf322412d8b',

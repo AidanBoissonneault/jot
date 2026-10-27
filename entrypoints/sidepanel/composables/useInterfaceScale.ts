@@ -1,4 +1,4 @@
-﻿/** @file Persisted sidepanel display scale and immediate preview behavior. */
+/** @file Persisted sidepanel display scale and immediate preview behavior. */
 import { computed, ref, watch } from 'vue';
 import {
   DEFAULT_INTERFACE_SCALE,
@@ -34,7 +34,7 @@ export function useInterfaceScale() {
     interfaceScale,
     (scale) => {
       document.documentElement.style.setProperty(
-        '--inkwell-base-font-size',
+        '--jottathing-base-font-size',
         `${(14 * scale) / 100}px`,
       );
     },

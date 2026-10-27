@@ -28,7 +28,7 @@ type HighlightNode = {
 };
 
 const syntaxHighlighter = createLowlight(common);
-const syntaxHighlightPluginKey = new PluginKey<DecorationSet>('inkwellCodeSyntaxHighlight');
+const syntaxHighlightPluginKey = new PluginKey<DecorationSet>('jottathingCodeSyntaxHighlight');
 const LOWLIGHT_LANGUAGE_ALIASES: Record<string, string> = {
   'c++': 'cpp',
   'c#': 'csharp',
@@ -100,14 +100,14 @@ export const CodeNotebook = CodeBlock.extend({
       let currentNode = node;
       let runnerToken = '';
       const wrapper = document.createElement('figure');
-      wrapper.className = 'inkwell-code-cell';
+      wrapper.className = 'jottathing-code-cell';
 
       const toolbar = document.createElement('figcaption');
-      toolbar.className = 'inkwell-code-toolbar';
+      toolbar.className = 'jottathing-code-toolbar';
       toolbar.contentEditable = 'false';
 
       const languageSelect = document.createElement('select');
-      languageSelect.className = 'inkwell-code-language';
+      languageSelect.className = 'jottathing-code-language';
       languageSelect.setAttribute('aria-label', 'Code language');
       for (const language of CODE_LANGUAGES) {
         const option = document.createElement('option');
@@ -117,15 +117,15 @@ export const CodeNotebook = CodeBlock.extend({
       }
 
       const actions = document.createElement('span');
-      actions.className = 'inkwell-code-actions';
+      actions.className = 'jottathing-code-actions';
       const runButton = document.createElement('button');
       runButton.type = 'button';
-      runButton.className = 'inkwell-code-run';
+      runButton.className = 'jottathing-code-run';
       runButton.textContent = 'Run';
       runButton.title = 'Run this code in an isolated browser sandbox';
       const clearButton = document.createElement('button');
       clearButton.type = 'button';
-      clearButton.className = 'inkwell-code-clear';
+      clearButton.className = 'jottathing-code-clear';
       clearButton.textContent = 'Clear output';
       clearButton.title = 'Clear output';
       clearButton.hidden = true;
@@ -138,7 +138,7 @@ export const CodeNotebook = CodeBlock.extend({
       pre.append(code);
 
       const output = document.createElement('div');
-      output.className = 'inkwell-code-output';
+      output.className = 'jottathing-code-output';
       output.contentEditable = 'false';
       output.hidden = true;
 
@@ -197,13 +197,13 @@ export const CodeNotebook = CodeBlock.extend({
         runButton.textContent = 'Running…';
 
         const frame = document.createElement('iframe');
-        frame.className = 'inkwell-code-runner';
+        frame.className = 'jottathing-code-runner';
         frame.title = `${codeLanguageLabel(language)} output`;
         frame.sandbox.add('allow-scripts');
         frame.src = browser.runtime.getURL('/code-runner.html');
         frame.addEventListener('load', () => {
           frame.contentWindow?.postMessage({
-            type: 'inkwell.codeRunner.run',
+            type: 'jottathing.codeRunner.run',
             token: runnerToken,
             language,
             code: codeText,
@@ -222,11 +222,11 @@ export const CodeNotebook = CodeBlock.extend({
           return;
         }
 
-        if (event.data.type === 'inkwell.codeRunner.resize' && event.data.height) {
+        if (event.data.type === 'jottathing.codeRunner.resize' && event.data.height) {
           frame.style.height = `${Math.min(480, Math.max(72, event.data.height))}px`;
         }
 
-        if (event.data.type === 'inkwell.codeRunner.complete') {
+        if (event.data.type === 'jottathing.codeRunner.complete') {
           runButton.disabled = false;
           runButton.textContent = 'Run';
         }

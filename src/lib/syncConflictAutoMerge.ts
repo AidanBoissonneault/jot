@@ -56,15 +56,15 @@ export function autoMergeUniquePageAdditions(
     type: conflict.localContent.type ?? 'doc',
     attrs: {
       ...conflict.localContent.attrs,
-      inkwellConflictResolution: true,
-      inkwellPreserveRemoteBlocks: true,
+      jottathingConflictResolution: true,
+      jottathingPreserveRemoteBlocks: true,
     },
     content: [...localBlocks, ...remoteAdditions],
   };
 }
 
 function blockId(block: DocumentContent): string | undefined {
-  const value = block.attrs?.inkwellBlockId;
+  const value = block.attrs?.jottathingBlockId;
   return typeof value === 'string' && value ? value : undefined;
 }
 
@@ -85,8 +85,8 @@ function withoutIdentity(value: unknown): unknown {
   const record = value as Record<string, unknown>;
   const isFileUpload = Boolean(record.notionFileUploadId);
   return Object.fromEntries(Object.entries(record)
-    .filter(([key]) => key !== 'inkwellBlockId' && key !== 'notionBlockId' &&
-      key !== 'inkwellConflictResolution' && key !== 'inkwellPreserveRemoteBlocks' &&
+    .filter(([key]) => key !== 'jottathingBlockId' && key !== 'notionBlockId' &&
+      key !== 'jottathingConflictResolution' && key !== 'jottathingPreserveRemoteBlocks' &&
       key !== 'uploadState' && !(isFileUpload && key === 'src'))
     .sort(([first], [second]) => first.localeCompare(second))
     .map(([key, nested]) => [key, key === 'src' ? stableMediaUrl(nested) : withoutIdentity(nested)]));

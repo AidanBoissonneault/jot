@@ -1,4 +1,4 @@
-﻿/* Top bar, sync status, shell, and shared action styles. */
+/* Top bar, sync status, shell, and shared action styles. */
 /* Sidepanel-scoped design and editor styles shared by the composed views. */
 .shell {
   display: grid;
@@ -15,7 +15,7 @@
   align-content: center;
   gap: 12px;
   min-height: 240px;
-  color: var(--inkwell-muted);
+  color: var(--jottathing-muted);
   text-align: center;
 }
 
@@ -28,8 +28,8 @@
 .workspace-loading-spinner {
   width: 24px;
   height: 24px;
-  border: 2px solid var(--inkwell-border);
-  border-top-color: var(--inkwell-accent);
+  border: 2px solid var(--jottathing-border);
+  border-top-color: var(--jottathing-accent);
   border-radius: 50%;
   animation: workspace-spinner 800ms linear infinite;
 }
@@ -39,7 +39,7 @@
 }
 
 .workspace-load-error h1 {
-  color: var(--inkwell-text);
+  color: var(--jottathing-text);
   font-size: 1rem;
 }
 
@@ -63,7 +63,7 @@
   gap: 8px;
   align-items: center;
   padding-bottom: 10px;
-  border-bottom: 1px solid var(--inkwell-border);
+  border-bottom: 1px solid var(--jottathing-border);
 }
 
 .topbar-status {
@@ -88,7 +88,7 @@
 }
 
 .topbar-meta small {
-  color: var(--inkwell-muted);
+  color: var(--jottathing-muted);
   font-size: 0.78rem;
 }
 
@@ -110,7 +110,7 @@
   border-color: transparent;
   border-radius: 4px;
   background: transparent;
-  color: var(--inkwell-text);
+  color: var(--jottathing-text);
   font-size: 1rem;
   font-weight: 800;
   text-align: left;
@@ -121,7 +121,7 @@
 
 .project-name-display:hover,
 .page-title-display:hover {
-  background: var(--inkwell-surface-muted);
+  background: var(--jottathing-surface-muted);
 }
 
 .project-name-input {
@@ -157,10 +157,10 @@
   gap: 8px;
   overflow-y: auto;
   padding: 8px;
-  border: 1px solid var(--inkwell-border);
-  border-radius: var(--inkwell-radius);
-  background: var(--inkwell-surface);
-  box-shadow: var(--inkwell-shadow);
+  border: 1px solid var(--jottathing-border);
+  border-radius: var(--jottathing-radius);
+  background: var(--jottathing-surface);
+  box-shadow: var(--jottathing-shadow);
 }
 
 .category-form {
@@ -193,9 +193,9 @@
   gap: 5px;
   min-height: 28px;
   padding: 0 8px;
-  border-color: var(--inkwell-border);
-  background: var(--inkwell-surface-muted);
-  color: var(--inkwell-text);
+  border-color: var(--jottathing-border);
+  background: var(--jottathing-surface-muted);
+  color: var(--jottathing-text);
   font-size: 0.75rem;
   font-weight: 700;
 }
@@ -210,7 +210,7 @@
   display: flex;
   gap: 7px;
   padding-top: 8px;
-  border-top: 1px solid var(--inkwell-border);
+  border-top: 1px solid var(--jottathing-border);
 }
 
 .category-color-picker .category-swatch {
@@ -224,7 +224,7 @@
 
 .category-color-picker .category-swatch.active {
   border-color: white;
-  box-shadow: 0 0 0 2px var(--inkwell-text);
+  box-shadow: 0 0 0 2px var(--jottathing-text);
 }
 
 .sync-badge {
@@ -236,16 +236,16 @@
   min-height: 28px;
   width: 28px;
   padding: 0;
-  border: 1px solid var(--inkwell-border);
+  border: 1px solid var(--jottathing-border);
   border-radius: 999px;
-  background: var(--inkwell-surface-muted);
-  color: var(--inkwell-text);
+  background: var(--jottathing-surface-muted);
+  color: var(--jottathing-text);
   font-size: 0.82rem;
   font-weight: 750;
 }
 
 .sync-badge:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--inkwell-accent) 34%, transparent);
+  outline: 2px solid color-mix(in srgb, var(--jottathing-accent) 34%, transparent);
   outline-offset: 2px;
 }
 
@@ -254,7 +254,7 @@
   width: 8px;
   height: 8px;
   border-radius: 999px;
-  background: var(--inkwell-muted);
+  background: var(--jottathing-muted);
 }
 
 .sync-label {
@@ -386,15 +386,15 @@
 }
 
 .topbar-actions button.active {
-  border-color: var(--inkwell-accent);
-  background: var(--inkwell-accent-soft);
-  color: var(--inkwell-accent-strong);
+  border-color: var(--jottathing-accent);
+  background: var(--jottathing-accent-soft);
+  color: var(--jottathing-accent-strong);
 }
 
 .secondary-button {
-  border-color: var(--inkwell-border);
-  background: var(--inkwell-surface-muted);
-  color: var(--inkwell-text);
+  border-color: var(--jottathing-border);
+  background: var(--jottathing-surface-muted);
+  color: var(--jottathing-text);
 }
 
 .sync-conflict-menu {
@@ -406,16 +406,16 @@
   max-height: min(60vh, 420px);
   overflow-y: auto;
   padding: 6px;
-  border: 1px solid var(--inkwell-border);
+  border: 1px solid var(--jottathing-border);
   border-radius: 10px;
-  background: var(--inkwell-surface);
+  background: var(--jottathing-surface);
   box-shadow: 0 12px 32px rgb(15 23 42 / 18%);
-  color: var(--inkwell-text);
+  color: var(--jottathing-text);
 }
 
 .sync-conflict-menu-heading {
   padding: 7px 9px 8px;
-  color: var(--inkwell-muted);
+  color: var(--jottathing-muted);
   font-size: 0.76rem;
   font-weight: 750;
   text-transform: uppercase;
@@ -424,12 +424,12 @@
 
 .sync-conflict-menu-item {
   padding: 8px 9px;
-  border-top: 1px solid var(--inkwell-border);
+  border-top: 1px solid var(--jottathing-border);
 }
 
 .sync-conflict-menu-page {
   overflow: hidden;
-  color: var(--inkwell-text);
+  color: var(--jottathing-text);
   font-size: 0.88rem;
   font-weight: 700;
   text-overflow: ellipsis;
@@ -439,7 +439,7 @@
 .sync-conflict-menu-project {
   margin-top: 2px;
   overflow: hidden;
-  color: var(--inkwell-muted);
+  color: var(--jottathing-muted);
   font-size: 0.76rem;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -454,10 +454,10 @@
 .sync-conflict-menu-actions button {
   min-height: 28px;
   padding: 4px 8px;
-  border: 1px solid var(--inkwell-border);
+  border: 1px solid var(--jottathing-border);
   border-radius: 6px;
-  background: var(--inkwell-surface-muted);
-  color: var(--inkwell-text);
+  background: var(--jottathing-surface-muted);
+  color: var(--jottathing-text);
   cursor: pointer;
   font-size: 0.76rem;
   font-weight: 650;
@@ -465,13 +465,13 @@
 
 .sync-conflict-menu-actions button:hover,
 .sync-conflict-menu-actions button:focus-visible {
-  border-color: var(--inkwell-accent);
+  border-color: var(--jottathing-accent);
   outline: none;
 }
 
 .danger-button {
   border-color: #d9a09c;
-  background: var(--inkwell-surface);
+  background: var(--jottathing-surface);
   color: #9f2d25;
 }
 
@@ -562,7 +562,7 @@
 }
 
 .editor-header p {
-  color: var(--inkwell-muted);
+  color: var(--jottathing-muted);
 }
 
 .auth-gate {
@@ -571,10 +571,10 @@
   align-content: start;
   margin-top: 12px;
   padding: 14px;
-  border: 1px solid var(--inkwell-border);
-  border-radius: var(--inkwell-radius);
-  background: var(--inkwell-surface);
-  box-shadow: var(--inkwell-shadow);
+  border: 1px solid var(--jottathing-border);
+  border-radius: var(--jottathing-radius);
+  background: var(--jottathing-surface);
+  box-shadow: var(--jottathing-shadow);
 }
 
 .auth-gate h2,
@@ -587,7 +587,7 @@
 }
 
 .auth-gate p {
-  color: var(--inkwell-muted);
+  color: var(--jottathing-muted);
 }
 
 .legal-disclosure {
@@ -597,7 +597,7 @@
 
 .legal-disclosure p {
   margin: 0;
-  color: var(--inkwell-muted);
+  color: var(--jottathing-muted);
 }
 
 .legal-consent {
@@ -605,7 +605,7 @@
   grid-template-columns: auto minmax(0, 1fr);
   gap: 8px;
   align-items: start;
-  color: var(--inkwell-muted);
+  color: var(--jottathing-muted);
   font-size: 0.8rem;
   line-height: 1.4;
 }
@@ -614,12 +614,12 @@
   width: 16px;
   height: 16px;
   margin: 1px 0 0;
-  accent-color: var(--inkwell-accent);
+  accent-color: var(--jottathing-accent);
 }
 
 .legal-consent a,
 .legal-links a {
-  color: var(--inkwell-accent);
+  color: var(--jottathing-accent);
   font-weight: 750;
   text-decoration: none;
 }

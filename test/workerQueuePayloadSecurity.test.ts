@@ -20,7 +20,7 @@ function createQueueHarness() {
 
   const supabase = {
     from: vi.fn((table: string) => {
-      if (table === 'inkwell_sync_queue_payloads') {
+      if (table === 'jottathing_sync_queue_payloads') {
         return {
           insert: query.insert,
           delete: vi.fn(() => ({

@@ -10,16 +10,16 @@ export function createWorkerStorePersistence(supabase: WorkerSupabaseClient) {
   /** Fills all state collections and nullable connection values. */
   function normalizeStore(store: Partial<WorkerStore>): WorkerStore {
     return {
-      ignoredInkwellDatabaseIds: store.ignoredInkwellDatabaseIds ?? new Set<string>(),
+      ignoredJottathingDatabaseIds: store.ignoredJottathingDatabaseIds ?? new Set<string>(),
       installationId: store.installationId,
       parentPages: safeRecord(store.parentPages),
       projectPages: safeRecord(store.projectPages),
       projectBlocks: safeRecord(store.projectBlocks),
       threadBlocks: safeRecord(store.threadBlocks),
-      inkwellRootPage: store.inkwellRootPage,
-      inkwellDatabase: store.inkwellDatabase,
+      jottathingRootPage: store.jottathingRootPage,
+      jottathingDatabase: store.jottathingDatabase,
       notePages: safeRecord(store.notePages),
-      blockMappings: safeRecord(store.blockMappings),
+      blockMappings: normalizeBlockMappings(store.blockMappings),
       logs: store.logs ?? [],
       tokens: store.tokens,
     };
@@ -33,7 +33,7 @@ export function createWorkerStorePersistence(supabase: WorkerSupabaseClient) {
   /** Persists normalized state for its connected installation. */
   async function writeStore(store: WorkerStore): Promise<void> {
     if (store.installationId) {
-      await writeInkwellSyncState(store.installationId, store);
+      await writeJottathingSyncState(store.installationId, store);
     }
   }
 
@@ -44,14 +44,14 @@ export function createWorkerStorePersistence(supabase: WorkerSupabaseClient) {
   }
 
   /** Ensures persisted synchronization state exists. */
-  async function ensureInkwellSyncStateRow(installationId: Identifier): Promise<void> {
+  async function ensureJottathingSyncStateRow(installationId: Identifier): Promise<void> {
     const { error } = await supabase
-      .from('inkwell_sync_state')
+      .from('jottathing_sync_state')
       .upsert(
         { installation_id: installationId },
         { onConflict: 'installation_id', ignoreDuplicates: true },
       );
-    if (error) throw new Error('Unable to ensure Inkwell synchronization state.');
+    if (error) throw new Error('Unable to ensure Jottathing synchronization state.');
   }
 
   /** Copies JSON-backed dictionaries into prototype-free maps before key lookups or writes. */
@@ -65,34 +65,52 @@ export function createWorkerStorePersistence(supabase: WorkerSupabaseClient) {
     return record;
   }
 
+  /** Renames a persisted identity field while retaining the exact opaque block ID value. */
+  function normalizeBlockMappings(value: unknown): WorkerStore['blockMappings'] {
+    const mappings = safeRecord<unknown>(value);
+    return Object.fromEntries(Object.entries(mappings).map(([pageId, entries]) => [
+      pageId,
+      Array.isArray(entries)
+        ? entries.map((entry) => {
+            if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return entry;
+            const mapping = entry as Record<string, unknown>;
+            const blockId = mapping.jottathingBlockId ?? mapping.inkwellBlockId;
+            if (typeof blockId !== 'string' || !blockId) return mapping;
+            const { inkwellBlockId: _legacyId, ...remaining } = mapping;
+            return { ...remaining, jottathingBlockId: blockId };
+          })
+        : entries,
+    ])) as WorkerStore['blockMappings'];
+  }
+
   /** Loads and normalizes persisted synchronization state. */
-  async function readInkwellSyncState(installationId: Identifier): Promise<WorkerStore> {
-    await ensureInkwellSyncStateRow(installationId);
+  async function readJottathingSyncState(installationId: Identifier): Promise<WorkerStore> {
+    await ensureJottathingSyncStateRow(installationId);
 
     const { data: row, error } = await supabase
-      .from('inkwell_sync_state')
+      .from('jottathing_sync_state')
       .select('*')
       .eq('installation_id', installationId)
       .single();
 
-    if (error) throw new Error('Unable to read Inkwell synchronization state.');
+    if (error) throw new Error('Unable to read Jottathing synchronization state.');
     if (!row) return normalizeStore({});
 
     return normalizeStore({
-      inkwellRootPage:
-        row.inkwell_database_id && !row.inkwell_data_source_id
+      jottathingRootPage:
+        row.jottathing_database_id && !row.jottathing_data_source_id
           ? {
-              id: row.inkwell_database_id,
-              parentPageId: row.inkwell_parent_page_id,
-              title: row.inkwell_database_title,
+              id: row.jottathing_database_id,
+              parentPageId: row.jottathing_parent_page_id,
+              title: row.jottathing_database_title,
             }
           : undefined,
-      inkwellDatabase: row.inkwell_database_id
+      jottathingDatabase: row.jottathing_database_id
         ? {
-            databaseId: row.inkwell_database_id,
-            dataSourceId: row.inkwell_data_source_id,
-            parentPageId: row.inkwell_parent_page_id,
-            title: row.inkwell_database_title,
+            databaseId: row.jottathing_database_id,
+            dataSourceId: row.jottathing_data_source_id,
+            parentPageId: row.jottathing_parent_page_id,
+            title: row.jottathing_database_title,
             propertyIds: {},
             url: undefined,
             views: {},
@@ -109,23 +127,23 @@ export function createWorkerStorePersistence(supabase: WorkerSupabaseClient) {
   }
 
   /** Serializes worker state into the installation persistence row. */
-  async function writeInkwellSyncState(
+  async function writeJottathingSyncState(
     installationId: Identifier,
     store: WorkerStore,
   ): Promise<void> {
-    await ensureInkwellSyncStateRow(installationId);
+    await ensureJottathingSyncStateRow(installationId);
     const { error } = await supabase
-      .from('inkwell_sync_state')
+      .from('jottathing_sync_state')
       .update({
-        inkwell_database_id: store.inkwellDatabase?.databaseId ?? store.inkwellRootPage?.id ?? null,
-        inkwell_data_source_id: store.inkwellDatabase?.dataSourceId ?? null,
-        inkwell_parent_page_id:
-          store.inkwellDatabase?.parentPageId ??
-          store.inkwellRootPage?.id ??
-          store.inkwellRootPage?.parentPageId ??
+        jottathing_database_id: store.jottathingDatabase?.databaseId ?? store.jottathingRootPage?.id ?? null,
+        jottathing_data_source_id: store.jottathingDatabase?.dataSourceId ?? null,
+        jottathing_parent_page_id:
+          store.jottathingDatabase?.parentPageId ??
+          store.jottathingRootPage?.id ??
+          store.jottathingRootPage?.parentPageId ??
           null,
-        inkwell_database_title:
-          store.inkwellDatabase?.title ?? store.inkwellRootPage?.title ?? null,
+        jottathing_database_title:
+          store.jottathingDatabase?.title ?? store.jottathingRootPage?.title ?? null,
         note_pages_json: safeRecord(store.notePages),
         block_mappings_json: safeRecord(store.blockMappings),
         parent_pages_json: safeRecord(store.parentPages),
@@ -135,15 +153,15 @@ export function createWorkerStorePersistence(supabase: WorkerSupabaseClient) {
         updated_at: new Date().toISOString(),
       })
       .eq('installation_id', installationId);
-    if (error) throw new Error('Unable to save Inkwell synchronization state.');
+    if (error) throw new Error('Unable to save Jottathing synchronization state.');
   }
 
   return {
     appendLog,
-    ensureInkwellSyncStateRow,
-    readInkwellSyncState,
+    ensureJottathingSyncStateRow,
+    readJottathingSyncState,
     readStore,
-    writeInkwellSyncState,
+    writeJottathingSyncState,
     writeStore,
   };
 }

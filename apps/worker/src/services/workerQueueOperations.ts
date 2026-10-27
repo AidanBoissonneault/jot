@@ -52,7 +52,7 @@ export function createWorkerQueueOperations(dependencies: WorkerQueueDependencie
     applyManagedBlockOps,
     archiveThreadToggle,
     createChildPage,
-    ensureInkwellRootPage,
+    ensureJottathingRootPage,
     ensureProjectPage,
     ensureProjectRootPage,
     ensureThreadToggle,
@@ -89,12 +89,12 @@ export function createWorkerQueueOperations(dependencies: WorkerQueueDependencie
       },
       { onConflict: 'installation_id,local_id' },
     );
-    if (syncStateError) throw new Error('Unable to record the pending Inkwell sync.');
+    if (syncStateError) throw new Error('Unable to record the pending Jottathing sync.');
 
     const jobId = crypto.randomUUID();
     const message: SyncQueueMessage = { ...job, queuedVersion: version };
     const { error: payloadError } = await supabase
-      .from('inkwell_sync_queue_payloads')
+      .from('jottathing_sync_queue_payloads')
       .insert({
         id: jobId,
         installation_id: job.installationId,
@@ -108,7 +108,7 @@ export function createWorkerQueueOperations(dependencies: WorkerQueueDependencie
       await env.SYNC_QUEUE.send(reference);
     } catch {
       await supabase
-        .from('inkwell_sync_queue_payloads')
+        .from('jottathing_sync_queue_payloads')
         .delete()
         .eq('id', jobId);
       throw new Error('Unable to publish the pending sync job.');
@@ -190,7 +190,7 @@ export function createWorkerQueueOperations(dependencies: WorkerQueueDependencie
           appendLog,
           archiveThreadToggle,
           createChildPage,
-          ensureInkwellRootPage,
+          ensureJottathingRootPage,
           ensureProjectPage,
           ensureProjectRootPage,
           ensureThreadToggle,
@@ -218,7 +218,7 @@ export function createWorkerQueueOperations(dependencies: WorkerQueueDependencie
 
       if (ensureProjectPage && ensureThreadToggle) {
         const projectPage = await ensureProjectPage(freshStore, project, {
-          isForcedMerge: page.content.attrs?.inkwellConflictResolution === true,
+          isForcedMerge: page.content.attrs?.jottathingConflictResolution === true,
           selectedParentPageId,
           syncState: false,
         });
@@ -253,10 +253,10 @@ export function createWorkerQueueOperations(dependencies: WorkerQueueDependencie
           kind: 'thread',
         };
       } else {
-        const inkwellRootPage = await ensureInkwellRootPage(freshStore, { selectedParentPageId });
+        const jottathingRootPage = await ensureJottathingRootPage(freshStore, { selectedParentPageId });
         const projectRootPage = await ensureProjectRootPage(
           freshStore,
-          inkwellRootPage.id,
+          jottathingRootPage.id,
           project,
           { candidateNotionPageId: page.notionParentPageId },
         );

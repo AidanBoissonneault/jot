@@ -65,7 +65,7 @@ function seedLocalWorkspace(syncConfig: SyncConfig = connectedConfig) {
     pages: [page],
     projects: [project],
     syncConfig,
-    inkwellUserPreferences: { interfaceScale: 110 },
+    jottathingUserPreferences: { interfaceScale: 110 },
   });
 }
 
@@ -81,7 +81,7 @@ afterEach(() => {
   resetBrowserStorage();
 });
 
-describe('Inkwell connection data lifecycle', () => {
+describe('Jottathing connection data lifecycle', () => {
   it('clears the connection on logout while preserving documents and queued local data', async () => {
     seedLocalWorkspace({
       ...connectedConfig,
@@ -167,7 +167,7 @@ describe('Inkwell connection data lifecycle', () => {
     expect(readBrowserStorage().pages).toEqual([page]);
   });
 
-  it('removes all local Inkwell data after the server confirms connection deletion', async () => {
+  it('removes all local Jottathing data after the server confirms connection deletion', async () => {
     seedLocalWorkspace();
     stubJsonResponse({ deleted: true, notionTokenRevoked: true });
 
@@ -188,7 +188,7 @@ describe('Inkwell connection data lifecycle', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     await expect(notionClient.deleteConnection()).rejects.toThrow('response lost');
-    const pendingDeletion = readExtensionStorage().inkwellPendingConnectionDeletion as {
+    const pendingDeletion = readExtensionStorage().jottathingPendingConnectionDeletion as {
       requestId: string;
     };
     expect(pendingDeletion.requestId).toMatch(/^[A-Za-z0-9_-]{40,128}$/);
@@ -214,7 +214,7 @@ describe('Inkwell connection data lifecycle', () => {
       'extension storage is temporarily unavailable',
     );
     expect(readBrowserStorage()).toEqual({});
-    expect(readExtensionStorage()).toHaveProperty('inkwellPendingConnectionDeletion');
+    expect(readExtensionStorage()).toHaveProperty('jottathingPendingConnectionDeletion');
 
     await expect(notionClient.deleteConnection()).resolves.toEqual({ notionTokenRevoked: true });
     expect(readBrowserStorage()).toEqual({});
@@ -225,7 +225,7 @@ describe('Inkwell connection data lifecycle', () => {
     seedLocalWorkspace();
     const requestId = 'startup-retry-request-id-0123456789-abcdefghijklmnopqrstuvwxyz';
     await browser.storage.local.set({
-      inkwellPendingConnectionDeletion: {
+      jottathingPendingConnectionDeletion: {
         requestId,
         serverUrl: connectedConfig.serverUrl,
         userEmail: connectedConfig.userEmail,
@@ -245,7 +245,7 @@ describe('Inkwell connection data lifecycle', () => {
     seedLocalWorkspace();
     await idbSet('syncConfig', { ...connectedConfig, userId: 'notion:other-account' });
     await browser.storage.local.set({
-      inkwellPendingConnectionDeletion: {
+      jottathingPendingConnectionDeletion: {
         requestId: 'different-account-request-id-0123456789-abcdefghijklmnopqrstuvwxyz',
         serverUrl: connectedConfig.serverUrl,
         userId: connectedConfig.userId,
@@ -276,7 +276,7 @@ describe('Inkwell connection data lifecycle', () => {
 
     expect(fetchMock).not.toHaveBeenCalled();
     expect(readBrowserStorage().pages).toEqual([page]);
-    expect(readExtensionStorage()).not.toHaveProperty('inkwellPendingConnectionDeletion');
+    expect(readExtensionStorage()).not.toHaveProperty('jottathingPendingConnectionDeletion');
   });
 
   it('keeps local documents when deletion is requested while signed out', async () => {
@@ -289,7 +289,7 @@ describe('Inkwell connection data lifecycle', () => {
 
     expect(fetchMock).not.toHaveBeenCalled();
     expect(readBrowserStorage().pages).toMatchObject([{ id: page.id, title: page.title }]);
-    expect(readExtensionStorage()).not.toHaveProperty('inkwellPendingConnectionDeletion');
+    expect(readExtensionStorage()).not.toHaveProperty('jottathingPendingConnectionDeletion');
   });
 
   it('blocks stale IndexedDB writes while connection data is being deleted', async () => {

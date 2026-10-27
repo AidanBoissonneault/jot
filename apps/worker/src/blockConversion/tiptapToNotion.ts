@@ -131,7 +131,7 @@ function tiptapNodeToNotionBlock(node: DocumentContent): NotionBlockPayload {
     const videoUrl = normalizeYoutubeVideoUrl(src);
     if (!videoUrl) return paragraphFallback('');
 
-    // Keep playback as an Inkwell concern. A regular linked paragraph remains
+    // Keep playback as an Jottathing concern. A regular linked paragraph remains
     // usable in Notion clients and exports that do not support video embeds.
     return paragraphFallback([
       textNodeToRichText({

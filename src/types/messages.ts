@@ -31,69 +31,69 @@ export type CaptureSelectionPayload = {
 };
 
 export type CaptureSelectionMessage = {
-  type: 'inkwell.captureSelection';
+  type: 'jottathing.captureSelection';
   payload: CaptureSelectionPayload;
 };
 
 export type InsertCaptureRequestMessage = {
-  type: 'inkwell.insertCaptureRequest';
+  type: 'jottathing.insertCaptureRequest';
   payload: CaptureSelectionPayload;
 };
 
 export type HeadingDragStartedMessage = {
-  type: 'inkwell.headingDragStarted';
+  type: 'jottathing.headingDragStarted';
   payload: CaptureSelectionPayload;
 };
 
 export type ConsumeHeadingDragMessage = {
-  type: 'inkwell.consumeHeadingDrag';
+  type: 'jottathing.consumeHeadingDrag';
   payload?: {
     text?: string;
   };
 };
 
 export type TextDragStartedMessage = {
-  type: 'inkwell.textDragStarted';
+  type: 'jottathing.textDragStarted';
   payload: CaptureSelectionPayload;
 };
 
 export type ConsumeTextDragMessage = {
-  type: 'inkwell.consumeTextDrag';
+  type: 'jottathing.consumeTextDrag';
   payload?: {
     text?: string;
   };
 };
 
 export type ProjectPageUpdatedMessage = {
-  type: 'inkwell.projectPageUpdated';
+  type: 'jottathing.projectPageUpdated';
   payload: {
     page: ProjectPage;
   };
 };
 
 export type OpenSourceRequestMessage = {
-  type: 'inkwell.openSourceRequest';
+  type: 'jottathing.openSourceRequest';
   payload: SourceOpenPayload;
 };
 
 export type RestoreHighlightMessage = {
-  type: 'inkwell.restoreHighlight';
+  type: 'jottathing.restoreHighlight';
   payload: SourceOpenPayload;
 };
 
 export type PrepareConnectionDeletionMessage = {
-  type: 'inkwell.prepareConnectionDeletion';
+  type: 'jottathing.prepareConnectionDeletion';
 };
 
 export type AbortConnectionDeletionMessage = {
-  type: 'inkwell.abortConnectionDeletion';
+  type: 'jottathing.abortConnectionDeletion';
 };
 
 export type CompleteConnectionDeletionMessage = {
-  type: 'inkwell.completeConnectionDeletion';
+  type: 'jottathing.completeConnectionDeletion';
 };
 
-export type InkwellRuntimeMessage =
+export type JottathingRuntimeMessage =
   | CaptureSelectionMessage
   | AbortConnectionDeletionMessage
   | CompleteConnectionDeletionMessage

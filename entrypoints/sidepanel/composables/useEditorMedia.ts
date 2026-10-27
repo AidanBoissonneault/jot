@@ -2,7 +2,7 @@
 import { ref, type Ref, type ShallowRef } from 'vue';
 import type { Editor } from '@tiptap/core';
 import { notionClient } from '@/src/services/notionClient';
-import type { useInkwellStore } from '@/src/stores/inkwell';
+import type { useJottathingStore } from '@/src/stores/jottathing';
 import {
   AUDIO_UPLOAD_MAX_BYTES,
   IMAGE_UPLOAD_MAX_BYTES,
@@ -14,7 +14,7 @@ import type { EditorMenu } from '../components/editor/editorToolbarContext';
 /** Owns editor media URLs, local file insertion, uploads, and node status updates. */
 export function useEditorMedia(
   editor: ShallowRef<Editor | undefined>,
-  store: ReturnType<typeof useInkwellStore>,
+  store: ReturnType<typeof useJottathingStore>,
   activeEditorMenu: Ref<EditorMenu>,
   uiMessage: Ref<string>,
   skipNextEditorUpdate: () => void,
@@ -106,7 +106,7 @@ export function useEditorMedia(
     }
     const localSrc = await fileToDataUrl(file);
     skipNextEditorUpdate();
-    // The upload-state attributes are defined by the Inkwell image extension.
+    // The upload-state attributes are defined by the Jottathing image extension.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     editor.value
       ?.chain()
@@ -137,7 +137,7 @@ export function useEditorMedia(
     const editorInstance = editor.value;
     if (editorInstance) {
       const insertPos = editorInstance.state.selection.from;
-      // The upload-state attributes are defined by the Inkwell audio extension.
+      // The upload-state attributes are defined by the Jottathing audio extension.
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       editorInstance
         .chain()

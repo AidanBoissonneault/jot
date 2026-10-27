@@ -34,7 +34,7 @@ declare global {
   }
 }
 
-const storagePrefix = 'inkwell-marketing-extension:';
+const storagePrefix = 'jottathing-marketing-extension:';
 const runtimeListeners = new Set<RuntimeListener>();
 const storageListeners = new Set<ChangeListener>();
 
@@ -109,7 +109,7 @@ const localStorageArea = {
 
 const browserApi: Window['browser'] = {
   runtime: {
-    id: 'inkwell-local-marketing-preview',
+    id: 'jottathing-local-marketing-preview',
     onMessage: {
       addListener(listener) {
         runtimeListeners.add(listener);

@@ -1,22 +1,22 @@
-﻿/** @file Editor context menu state, source lookup, positioning, and clipboard workflows. */
+/** @file Editor context menu state, source lookup, positioning, and clipboard workflows. */
 import { computed, nextTick, ref, watch, type ShallowRef } from 'vue';
 import type { Editor } from '@tiptap/core';
 import { Selection } from '@tiptap/pm/state';
 import type { EditorView } from '@tiptap/pm/view';
 import {
-  decodeInkwellSource,
-  isAccessibleInkwellSource,
-  INKWELL_SOURCE_ATTR,
-  safeInkwellSourceUrl,
-} from '@/src/extensions/inkwellLink';
+  decodeJottathingSource,
+  isAccessibleJottathingSource,
+  JOTTATHING_SOURCE_ATTR,
+  safeJottathingSourceUrl,
+} from '@/src/extensions/jottathingLink';
 import { sourceFromProjectState } from '@/src/extensions/sourceRegistry';
-import type { useInkwellStore } from '@/src/stores/inkwell';
+import type { useJottathingStore } from '@/src/stores/jottathing';
 import type { OpenSourceRequestMessage, SourceOpenPayload } from '@/src/types/messages';
 
 /** Owns context-menu placement, captured selection, source lookup, and clipboard actions. */
 export function useEditorContextMenu(
   editor: ShallowRef<Editor | undefined>,
-  store: ReturnType<typeof useInkwellStore>,
+  store: ReturnType<typeof useJottathingStore>,
   applyLink: (href: string) => void,
 ) {
   const editorContextMenuRef = ref<HTMLElement | null>(null);
@@ -43,7 +43,7 @@ export function useEditorContextMenu(
 
   const editorContextMenuSourceHost = computed(() => {
     const payload = editorContextMenuSource.value;
-    const sourceUrl = payload ? safeInkwellSourceUrl(payload) : null;
+    const sourceUrl = payload ? safeJottathingSourceUrl(payload) : null;
     try {
       return sourceUrl ? new URL(sourceUrl).hostname.replace(/^www\./, '') : '';
     } catch {
@@ -158,15 +158,15 @@ export function useEditorContextMenu(
 
   function sourceForContextTarget(target: EventTarget | null) {
     if (!(target instanceof Element)) return null;
-    const sourceElement = target.closest('[data-inkwell-source]');
-    const source = decodeInkwellSource(sourceElement?.getAttribute('data-inkwell-source'));
-    if (isAccessibleInkwellSource(source)) return source;
+    const sourceElement = target.closest('[data-jottathing-source]');
+    const source = decodeJottathingSource(sourceElement?.getAttribute('data-jottathing-source'));
+    if (isAccessibleJottathingSource(source)) return source;
 
     const blockId = target
-      .closest('[data-inkwell-block-id]')
-      ?.getAttribute('data-inkwell-block-id');
+      .closest('[data-jottathing-block-id]')
+      ?.getAttribute('data-jottathing-block-id');
     const stateSource = sourceFromProjectState(store.currentProject?.stateContent, blockId);
-    return isAccessibleInkwellSource(stateSource) ? stateSource : null;
+    return isAccessibleJottathingSource(stateSource) ? stateSource : null;
   }
 
   function collectNodeSources(
@@ -178,10 +178,10 @@ export function useEditorContextMenu(
     blockIds: Set<string>,
   ) {
     if (!node) return;
-    collectSource(node.attrs?.[INKWELL_SOURCE_ATTR], sources);
-    const blockId = node.attrs?.inkwellBlockId;
+    collectSource(node.attrs?.[JOTTATHING_SOURCE_ATTR], sources);
+    const blockId = node.attrs?.jottathingBlockId;
     if (typeof blockId === 'string' && blockId) blockIds.add(blockId);
-    for (const mark of node.marks ?? []) collectSource(mark.attrs?.[INKWELL_SOURCE_ATTR], sources);
+    for (const mark of node.marks ?? []) collectSource(mark.attrs?.[JOTTATHING_SOURCE_ATTR], sources);
   }
 
   function collectProjectStateSources(
@@ -194,8 +194,8 @@ export function useEditorContextMenu(
   }
 
   function collectSource(value: unknown, sources: Map<string, SourceOpenPayload>) {
-    const payload = decodeInkwellSource(value);
-    if (!isAccessibleInkwellSource(payload) || !payload) return;
+    const payload = decodeJottathingSource(value);
+    if (!isAccessibleJottathingSource(payload) || !payload) return;
     const key = [
       payload.sourceUrl,
       payload.highlightMeta.xpath,
@@ -207,15 +207,15 @@ export function useEditorContextMenu(
 
   async function openEditorContextSource() {
     const payload = editorContextMenuSource.value;
-    if (!payload || !isAccessibleInkwellSource(payload)) return;
+    if (!payload || !isAccessibleJottathingSource(payload)) return;
     hideEditorContextMenu();
     await browser.runtime
       .sendMessage({
-        type: 'inkwell.openSourceRequest',
+        type: 'jottathing.openSourceRequest',
         payload,
       } satisfies OpenSourceRequestMessage)
       .catch(async () => {
-        const url = safeInkwellSourceUrl(payload);
+        const url = safeJottathingSourceUrl(payload);
         if (url) await browser.tabs.create({ active: true, url });
       });
   }

@@ -7,7 +7,7 @@ export default defineConfig({
   modules: ['@wxt-dev/module-vue'],
   manifestVersion: 3,
   manifest: {
-    name: 'Inkwell',
+    name: 'Jottathing',
     description:
       'Capture web highlights into structured Notion projects without breaking flow.',
     version: '0.1.0',
@@ -21,7 +21,7 @@ export default defineConfig({
     host_permissions: ['http://*/*', 'https://*/*'],
     content_security_policy: extensionContentSecurityPolicy(isProduction),
     action: {
-      default_title: 'Open Inkwell',
+      default_title: 'Open Jottathing',
     },
   },
 });

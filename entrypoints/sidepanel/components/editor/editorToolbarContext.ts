@@ -2,17 +2,17 @@
 import type { IconProp } from '@fortawesome/fontawesome-svg-core';
 import type { Editor } from '@tiptap/core';
 import type { ComputedRef, Ref, ShallowRef } from 'vue';
-import type { useInkwellStore } from '@/src/stores/inkwell';
+import type { useJottathingStore } from '@/src/stores/jottathing';
 
 export type EditorToolbarMode = 'style' | 'insert' | 'controls';
 export type EditorMenu =
   'type' | 'marks' | 'color' | 'link' | 'lists' | 'blocks' | 'media' | 'history' | 'record' | null;
 export type RecordingPhase = 'idle' | 'requesting_permission' | 'recording' | 'processing';
-type InkwellStore = ReturnType<typeof useInkwellStore>;
+type JottathingStore = ReturnType<typeof useJottathingStore>;
 
 export interface EditorToolbarContext {
   editor: ShallowRef<Editor | undefined>;
-  store: InkwellStore;
+  store: JottathingStore;
   audioStream: Ref<MediaStream | null>;
   editorToolbarModes: ComputedRef<
     ReadonlyArray<{ id: EditorToolbarMode; label: string; icon: IconProp }>

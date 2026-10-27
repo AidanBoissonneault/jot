@@ -1,0 +1,48 @@
+name = "inkwell-sync"
+main = "src/worker.ts"
+compatibility_date = "2025-05-01"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = true
+routes = [{ pattern = "sync.inkwell.byaidan.com", custom_domain = true }]
+
+[observability]
+enabled = true
+
+[observability.logs]
+enabled = true
+invocation_logs = true
+
+[observability.traces]
+enabled = true
+
+[[durable_objects.bindings]]
+name = "SYNC_EVENTS"
+class_name = "SyncEventsDO"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["SyncEventsDO"]
+
+[[queues.producers]]
+queue   = "jottathing-sync-queue"
+binding = "SYNC_QUEUE"
+
+[[queues.consumers]]
+queue             = "jottathing-sync-queue"
+max_batch_size    = 1
+max_batch_timeout = 30
+max_retries       = 3
+max_concurrency   = 1
+dead_letter_queue = "jottathing-sync-dlq"
+
+[[queues.consumers]]
+queue             = "jottathing-sync-dlq"
+max_batch_size    = 100
+max_batch_timeout = 30
+max_retries       = 3
+
+[vars]
+NOTION_VERSION = "2026-03-11"
+JOTTATHING_ROOT_PAGE_TITLE = "Jottathing"
+WORKER_URL = "https://sync.jottathing.byaidan.com"
+TRUSTED_ORIGINS = "chrome-extension://mfpjgeohimhcjdnlikbaibjfijdchmhc,chrome-extension://fpmkfddbnjalacgkciemoceecidjnoee"

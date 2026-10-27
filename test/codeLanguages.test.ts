@@ -41,7 +41,7 @@ describe('code languages', () => {
       type: 'codeBlock',
       attrs: {
         language: 'javascript',
-        inkwellBlockId: expect.any(String),
+        jottathingBlockId: expect.any(String),
       },
       content: [{ type: 'text', text: 'const answer = 42;' }],
     });

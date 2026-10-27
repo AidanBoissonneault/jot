@@ -20,7 +20,7 @@ interface RootPageDependencies {
   appendLog: AppendLog;
   createChildPage: (store: WorkerStore, parentPageId: string, title: string) => Promise<NotionObject>;
   createWorkspacePage: (store: WorkerStore, title: string) => Promise<NotionObject>;
-  inkwellRootPageTitle: string;
+  jottathingRootPageTitle: string;
   isNotionObjectNotFound: (error: unknown) => boolean;
   listAllBlockChildren: ListAllBlockChildren;
   notionRequest: NotionRequester;
@@ -35,13 +35,13 @@ interface ProjectPageCandidate extends NotionParentPage {
 
 /** Describes the root page helpers contract used by this API feature. */
 export interface RootPageHelpers {
-  ensureInkwellRootPage: (
+  ensureJottathingRootPage: (
     store: WorkerStore,
     options?: { selectedParentPageId: string | undefined },
   ) => Promise<NotionParentPage>;
   ensureProjectRootPage: (
     store: WorkerStore,
-    inkwellRootPageId: string,
+    jottathingRootPageId: string,
     project: Project,
     options?: { candidateNotionPageId: string | undefined },
   ) => Promise<NotionParentPage>;
@@ -58,23 +58,23 @@ export function createRootPageHelpers({
   createChildPage,
   createWorkspacePage,
   isNotionObjectNotFound,
-  inkwellRootPageTitle = 'Inkwell',
+  jottathingRootPageTitle = 'Jottathing',
   listAllBlockChildren,
   notionRequest,
   titleFromPage,
   updatePageTitle,
-}: Omit<RootPageDependencies, 'inkwellRootPageTitle'> & Partial<Pick<RootPageDependencies, 'inkwellRootPageTitle'>>): RootPageHelpers {
+}: Omit<RootPageDependencies, 'jottathingRootPageTitle'> & Partial<Pick<RootPageDependencies, 'jottathingRootPageTitle'>>): RootPageHelpers {
   /**
-   * Resolves the configured Inkwell root page, adopting or creating it as needed.
+   * Resolves the configured Jottathing root page, adopting or creating it as needed.
    * @param store - Normalized worker state.
    * @param options - Optional explicitly selected parent page.
    * @returns The accessible root-page summary.
    */
-  async function ensureInkwellRootPage(
+  async function ensureJottathingRootPage(
     store: WorkerStore,
     { selectedParentPageId }: { selectedParentPageId: string | undefined } = { selectedParentPageId: undefined },
   ): Promise<NotionParentPage> {
-    const stored = store.inkwellRootPage;
+    const stored = store.jottathingRootPage;
 
     if (selectedParentPageId) {
       if (stored?.id === selectedParentPageId) {
@@ -87,15 +87,15 @@ export function createRootPageHelpers({
 
       try {
         const page = await notionRequest(store, `/pages/${selectedParentPageId}`);
-        store.inkwellRootPage = {
+        store.jottathingRootPage = {
           id: page.id,
           parentPageId: undefined,
-          title: titleFromPage(page) || inkwellRootPageTitle,
+          title: titleFromPage(page) || jottathingRootPageTitle,
           url: page.url,
         };
-        store.inkwellDatabase = undefined;
-        appendLog(store, 'root_page_adopted', store.inkwellRootPage.title);
-        return pageSummary(store.inkwellRootPage);
+        store.jottathingDatabase = undefined;
+        appendLog(store, 'root_page_adopted', store.jottathingRootPage.title);
+        return pageSummary(store.jottathingRootPage);
       } catch (error) {
         if (!isNotionObjectNotFound(error) && !isBlockNotPageError(error)) {
           throw error;
@@ -117,17 +117,17 @@ export function createRootPageHelpers({
       }
     }
 
-    const page = await createWorkspacePage(store, inkwellRootPageTitle);
-    store.inkwellRootPage = {
+    const page = await createWorkspacePage(store, jottathingRootPageTitle);
+    store.jottathingRootPage = {
       id: page.id,
       parentPageId: undefined,
-      title: titleFromPage(page) || inkwellRootPageTitle,
+      title: titleFromPage(page) || jottathingRootPageTitle,
       url: page.url,
     };
-    store.inkwellDatabase = undefined;
-    appendLog(store, 'root_page_created', store.inkwellRootPage.title);
+    store.jottathingDatabase = undefined;
+    appendLog(store, 'root_page_created', store.jottathingRootPage.title);
 
-    return pageSummary(store.inkwellRootPage);
+    return pageSummary(store.jottathingRootPage);
   }
 
   /**
@@ -144,13 +144,13 @@ export function createRootPageHelpers({
   ): Promise<NotionParentPage | undefined> {
     try {
       const page = await notionRequest(store, `/pages/${stored.id}`);
-      store.inkwellRootPage = {
+      store.jottathingRootPage = {
         id: page.id,
         parentPageId,
-        title: titleFromPage(page) || stored.title || inkwellRootPageTitle,
+        title: titleFromPage(page) || stored.title || jottathingRootPageTitle,
         url: page.url,
       };
-      return pageSummary(store.inkwellRootPage);
+      return pageSummary(store.jottathingRootPage);
     } catch (error) {
       appendLog(store, 'root_page_lookup_error', errorMessage(error));
       return undefined;
@@ -158,23 +158,23 @@ export function createRootPageHelpers({
   }
 
   /**
-   * Resolves a legacy project child page under the Inkwell root.
+   * Resolves a legacy project child page under the Jottathing root.
    * @param store - Normalized worker state.
-   * @param inkwellRootPageId - Owning root-page identifier.
+   * @param jottathingRootPageId - Owning root-page identifier.
    * @param project - Local project to represent.
    * @param options - Optional existing Notion page candidate.
    * @returns The project-page summary.
    */
   async function ensureProjectRootPage(
     store: WorkerStore,
-    inkwellRootPageId: string,
+    jottathingRootPageId: string,
     project: Project,
     { candidateNotionPageId }: { candidateNotionPageId: string | undefined } = { candidateNotionPageId: undefined },
   ): Promise<NotionParentPage> {
     const stored = store.projectPages[project.id];
 
-    if (stored?.notionPageId && stored.parentPageId === inkwellRootPageId) {
-      const existing = await refreshProjectRootPage(store, inkwellRootPageId, project, stored);
+    if (stored?.notionPageId && stored.parentPageId === jottathingRootPageId) {
+      const existing = await refreshProjectRootPage(store, jottathingRootPageId, project, stored);
 
       if (existing) {
         return existing;
@@ -183,7 +183,7 @@ export function createRootPageHelpers({
 
     const candidate = await adoptCandidateProjectPage(
       store,
-      inkwellRootPageId,
+      jottathingRootPageId,
       project,
       candidateNotionPageId,
     );
@@ -194,29 +194,29 @@ export function createRootPageHelpers({
 
     const matchingChild = await findChildPageByTitle(
       store,
-      inkwellRootPageId,
+      jottathingRootPageId,
       project.name || 'Untitled Project',
     );
 
     if (matchingChild) {
-      return storeProjectRootPage(store, inkwellRootPageId, project, matchingChild, 'project_page_adopted');
+      return storeProjectRootPage(store, jottathingRootPageId, project, matchingChild, 'project_page_adopted');
     }
 
-    const page = await createChildPage(store, inkwellRootPageId, project.name || 'Untitled Project');
-    return storeProjectRootPage(store, inkwellRootPageId, project, page, 'project_page_created');
+    const page = await createChildPage(store, jottathingRootPageId, project.name || 'Untitled Project');
+    return storeProjectRootPage(store, jottathingRootPageId, project, page, 'project_page_created');
   }
 
   /**
    * Refreshes and, when needed, renames a stored project root page.
    * @param store - Normalized worker state.
-   * @param inkwellRootPageId - Owning root-page identifier.
+   * @param jottathingRootPageId - Owning root-page identifier.
    * @param project - Local project metadata.
    * @param stored - Stored project-page mapping.
    * @returns The refreshed page summary or undefined.
    */
   async function refreshProjectRootPage(
     store: WorkerStore,
-    inkwellRootPageId: string,
+    jottathingRootPageId: string,
     project: Project,
     stored: StoredPage,
   ): Promise<NotionParentPage | undefined> {
@@ -228,7 +228,7 @@ export function createRootPageHelpers({
         await updatePageTitle(store, page.id, title);
       }
 
-      return storeProjectRootPage(store, inkwellRootPageId, project, {
+      return storeProjectRootPage(store, jottathingRootPageId, project, {
         ...page,
         title,
       });
@@ -241,14 +241,14 @@ export function createRootPageHelpers({
   /**
    * Adopts a caller-provided project page when it belongs to the expected root.
    * @param store - Normalized worker state.
-   * @param inkwellRootPageId - Expected root-page identifier.
+   * @param jottathingRootPageId - Expected root-page identifier.
    * @param project - Local project metadata.
    * @param candidateNotionPageId - Candidate Notion page identifier.
    * @returns The adopted page summary or undefined.
    */
   async function adoptCandidateProjectPage(
     store: WorkerStore,
-    inkwellRootPageId: string,
+    jottathingRootPageId: string,
     project: Project,
     candidateNotionPageId: string | undefined,
   ): Promise<NotionParentPage | undefined> {
@@ -259,7 +259,7 @@ export function createRootPageHelpers({
     try {
       const page = await notionRequest(store, `/pages/${candidateNotionPageId}`);
 
-      if (parentPageIdFromNotionPage(page) !== inkwellRootPageId) {
+      if (parentPageIdFromNotionPage(page) !== jottathingRootPageId) {
         return undefined;
       }
 
@@ -269,7 +269,7 @@ export function createRootPageHelpers({
         await updatePageTitle(store, page.id, title);
       }
 
-      return storeProjectRootPage(store, inkwellRootPageId, project, {
+      return storeProjectRootPage(store, jottathingRootPageId, project, {
         ...page,
         title,
       }, 'project_page_adopted');
@@ -282,16 +282,16 @@ export function createRootPageHelpers({
   /**
    * Finds an accessible child page with an exact title match.
    * @param store - Normalized worker state.
-   * @param inkwellRootPageId - Parent block identifier.
+   * @param jottathingRootPageId - Parent block identifier.
    * @param title - Desired child-page title.
    * @returns A page candidate or undefined.
    */
   async function findChildPageByTitle(
     store: WorkerStore,
-    inkwellRootPageId: string,
+    jottathingRootPageId: string,
     title: string,
   ): Promise<ProjectPageCandidate | undefined> {
-    const children = await listAllBlockChildren(store, inkwellRootPageId).catch((error) => {
+    const children = await listAllBlockChildren(store, jottathingRootPageId).catch((error) => {
       appendLog(store, 'project_page_lookup_error', errorMessage(error));
       return [];
     });
@@ -305,7 +305,7 @@ export function createRootPageHelpers({
     return child
       ? {
           id: child.id,
-          parentPageId: inkwellRootPageId,
+          parentPageId: jottathingRootPageId,
           title,
           url: undefined,
           last_edited_time: child.last_edited_time,
@@ -316,7 +316,7 @@ export function createRootPageHelpers({
   /**
    * Persists and summarizes a resolved legacy project page.
    * @param store - Normalized worker state.
-   * @param inkwellRootPageId - Owning root-page identifier.
+   * @param jottathingRootPageId - Owning root-page identifier.
    * @param project - Local project metadata.
    * @param page - Resolved Notion page.
    * @param logEvent - Optional event name to append.
@@ -324,7 +324,7 @@ export function createRootPageHelpers({
    */
   function storeProjectRootPage(
     store: WorkerStore,
-    inkwellRootPageId: string,
+    jottathingRootPageId: string,
     project: Project,
     page: NotionObject | ProjectPageCandidate,
     logEvent: string | undefined = undefined,
@@ -338,7 +338,7 @@ export function createRootPageHelpers({
       dataSourceId: undefined,
       kind: undefined,
       notionPageId: page.id,
-      parentPageId: inkwellRootPageId,
+      parentPageId: jottathingRootPageId,
       title,
       lastEditedTime: page.last_edited_time,
     };
@@ -349,14 +349,14 @@ export function createRootPageHelpers({
 
     return pageSummary({
       id: page.id,
-      parentPageId: inkwellRootPageId,
+      parentPageId: jottathingRootPageId,
       title,
       url: pageUrl,
     });
   }
 
   return {
-    ensureInkwellRootPage,
+    ensureJottathingRootPage,
     ensureProjectRootPage,
     pageSummary,
   };
@@ -371,7 +371,7 @@ function pageSummary(page: NotionParentPage): NotionParentPage {
   return {
     id: page.id,
     parentPageId: page.parentPageId,
-    title: page.title || 'Inkwell',
+    title: page.title || 'Jottathing',
     url: page.url,
   };
 }

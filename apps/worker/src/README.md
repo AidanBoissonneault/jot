@@ -1,4 +1,4 @@
-# Inkwell API source
+# Jottathing API source
 
 Last edited: September 2026  
 Author: Aidan Boissonneault
@@ -39,3 +39,11 @@ This directory contains the Cloudflare Worker API and separates transport, featu
 ## Entry point
 
 `worker.ts` creates the Hono app, registers each route feature, initializes the runtime per request, delegates Queue batches, and exports the durable object.
+
+## Production deployment
+
+`../wrangler.toml` deploys the public `jottathing-sync` Worker and its service binding to the
+existing backend. `../wrangler.core.toml` configures the application Worker, its Durable Object,
+and the Jottathing queues. Production secrets remain attached to that backend during the rename.
+Its `WORKER_URL` and the Notion integration callback both use
+`https://sync.jottathing.byaidan.com/auth/notion/callback`; the old hostname remains an alias.

@@ -1,5 +1,5 @@
 /**
- * @file Composes the Inkwell API feature routes and Cloudflare Worker entry points.
+ * @file Composes the Jottathing API feature routes and Cloudflare Worker entry points.
  * @author Aidan Boissonneault
  * @lastModified September 2026
  */
@@ -21,7 +21,7 @@ import { notionApiErrorResponse } from './workerUtils.js';
 
 export { SyncEventsDO } from './syncEvents.js';
 
-/** Hono application containing every public Inkwell API feature. */
+/** Hono application containing every public Jottathing API feature. */
 export const app = new Hono<{ Bindings: WorkerEnv }>();
 
 app.use('*', async (c, next) => {
@@ -57,7 +57,7 @@ const worker: ExportedHandler<WorkerEnv, SyncQueueReference> = {
 
   /** Processes a synchronization Queue batch. */
   queue(batch, env) {
-    return batch.queue === 'inkwell-sync-dlq'
+    return batch.queue === 'jottathing-sync-dlq'
       ? processSyncDeadLetterQueue(batch, env)
       : processSyncQueue(batch, env);
   },

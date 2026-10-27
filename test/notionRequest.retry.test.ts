@@ -117,7 +117,7 @@ describe('Notion request retry policy', () => {
 
     expect(failure?.status).toBe(403);
     expect(failure?.body.code).toBe('notion_access_denied');
-    expect(failure?.body.message).toContain('shared with Inkwell');
+    expect(failure?.body.message).toContain('shared with Jottathing');
   });
 
   test('refuses endpoints that can leave the Notion API route tree', async () => {

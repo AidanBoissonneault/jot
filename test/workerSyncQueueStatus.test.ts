@@ -10,7 +10,7 @@ vi.mock('../apps/worker/src/services/workerRuntime.js', () => ({
   appendLog: vi.fn(),
   importManagedBlocks: vi.fn(),
   readProjectDatabaseStructure: vi.fn(),
-  readInkwellSyncState: vi.fn(),
+  readJottathingSyncState: vi.fn(),
   reloadProjectDatabaseFromNotion: vi.fn(),
   retrieveNotionPageOrBlock: vi.fn(),
   validateNotionCache: vi.fn(),
@@ -41,7 +41,7 @@ describe('sync queue status', () => {
     const query = makeQueueQuery([]);
     runtime.supabase.from.mockReturnValue(query);
     await expect(hasPendingSyncQueuePayload(42)).resolves.toBe(false);
-    expect(runtime.supabase.from).toHaveBeenCalledWith('inkwell_sync_queue_payloads');
+    expect(runtime.supabase.from).toHaveBeenCalledWith('jottathing_sync_queue_payloads');
     expect(query.select).toHaveBeenCalledWith('id');
     expect(query.eq).toHaveBeenCalledWith('installation_id', 42);
     expect(query.eq).toHaveBeenCalledWith('status', 'pending');

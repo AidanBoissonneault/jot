@@ -13,23 +13,23 @@ vi.mock('@tiptap/vue-3', () => ({
   },
 }));
 vi.mock('@/src/extensions/codeNotebook', () => ({ CodeNotebook: {} }));
-vi.mock('@/src/extensions/inkwellBlockIds', () => ({
-  InkwellBlockIds: {},
-  normalizeInkwellBlockIds: (content: unknown) => content,
+vi.mock('@/src/extensions/jottathingBlockIds', () => ({
+  JottathingBlockIds: {},
+  normalizeJottathingBlockIds: (content: unknown) => content,
 }));
-vi.mock('@/src/extensions/inkwellLink', () => ({
-  decodeInkwellSource: () => undefined,
-  INKWELL_SOURCE_ATTR: 'inkwellSource',
-  InkwellLink: {},
+vi.mock('@/src/extensions/jottathingLink', () => ({
+  decodeJottathingSource: () => undefined,
+  JOTTATHING_SOURCE_ATTR: 'jottathingSource',
+  JottathingLink: {},
 }));
 vi.mock('@/src/extensions/media', () => ({ MediaKit: {} }));
 vi.mock('@/src/extensions/syncConflictBlock', () => ({
-  InkwellSyncConflict: { configure: () => ({}) },
+  JottathingSyncConflict: { configure: () => ({}) },
 }));
 vi.mock('@/src/extensions/textFormatting', () => ({ PortableTextEditingKit: {} }));
 vi.mock('@/src/services/notionClient', () => ({ notionClient: syncHarness }));
 
-import { useInkwellEditor } from '@/entrypoints/sidepanel/composables/useInkwellEditor';
+import { useJottathingEditor } from '@/entrypoints/sidepanel/composables/useJottathingEditor';
 import { useEditorPersistence } from '@/entrypoints/sidepanel/composables/useEditorPersistence';
 
 afterEach(() => {
@@ -67,7 +67,7 @@ describe('editor block-focus autosave', () => {
     });
     const saveEditorContent = vi.fn(async () => undefined);
 
-    useInkwellEditor({
+    useJottathingEditor({
       editorStateVersion: ref(0),
       handlers: { handleDrop: () => false, showContextMenu: () => undefined },
       isApplyingStoredContent: ref(false),

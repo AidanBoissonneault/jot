@@ -55,7 +55,7 @@ export interface WorkerSyncDependencies {
     parentPageId: string,
     title: string,
   ) => Promise<NotionObject>;
-  ensureInkwellRootPage: RootHelpers['ensureInkwellRootPage'];
+  ensureJottathingRootPage: RootHelpers['ensureJottathingRootPage'];
   ensureProjectPage: DatabaseHelpers['ensureProjectPage'] | undefined;
   ensureProjectRootPage: RootHelpers['ensureProjectRootPage'];
   ensureThreadToggle: DatabaseHelpers['ensureThreadToggle'] | undefined;
@@ -93,7 +93,7 @@ export function createWorkerSyncOperations(dependencies: WorkerSyncDependencies)
     archiveProjectRootPage,
     archiveThreadToggle,
     createChildPage,
-    ensureInkwellRootPage,
+    ensureJottathingRootPage,
     ensureProjectPage,
     ensureProjectRootPage,
     ensureThreadToggle,
@@ -128,7 +128,7 @@ export function createWorkerSyncOperations(dependencies: WorkerSyncDependencies)
           appendLog,
           archiveThreadToggle,
           createChildPage,
-          ensureInkwellRootPage,
+          ensureJottathingRootPage,
           ensureProjectPage,
           ensureProjectRootPage,
           ensureThreadToggle,
@@ -152,7 +152,7 @@ export function createWorkerSyncOperations(dependencies: WorkerSyncDependencies)
       store: freshStore,
       project,
       selectedParentPageId,
-      ensureInkwellRootPage,
+      ensureJottathingRootPage,
       ensureProjectPage,
       ensureProjectRootPage,
       archiveProjectRootPage,

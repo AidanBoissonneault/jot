@@ -16,8 +16,8 @@ import {
   pauseIdbWrites,
   resumeIdbWrites,
 } from '@/src/services/idbStore';
-import { createInkwellBlockId, normalizeInkwellBlockIds } from '@/src/extensions/inkwellBlockIds';
-import { INKWELL_SOURCE_ATTR, storeInkwellSource } from '@/src/extensions/inkwellLink';
+import { createJottathingBlockId, normalizeJottathingBlockIds } from '@/src/extensions/jottathingBlockIds';
+import { JOTTATHING_SOURCE_ATTR, storeJottathingSource } from '@/src/extensions/jottathingLink';
 import {
   addSourceToProjectState,
   capturedBlockId,
@@ -30,6 +30,7 @@ import type {
 } from '@/src/types/messages';
 import { normalizeCodeLanguage } from '@/src/lib/codeLanguages';
 import { cleanSyncServerUrl } from '@/src/lib/syncServerUrl';
+import { getBrandedStorageValue } from '@/src/services/brandedStorage';
 import { pruneOrphanedProjectStateSources } from '@/src/lib/projectStateSources';
 import { stripSyncConflictBlocks } from '@/src/lib/syncConflictReview';
 import type {
@@ -74,7 +75,7 @@ import {
   type ProjectSyncEvent,
 } from '@/src/services/syncQueue';
 
-type InkwellStorage = {
+type JottathingStorage = {
   activePageIdsByProject?: Record<string, string>;
   captures?: Capture[];
   currentProjectId?: string;
@@ -98,7 +99,7 @@ type OptimisticPageCreation = {
 };
 
 
-const STORAGE_KEYS: Array<keyof InkwellStorage> = [
+const STORAGE_KEYS: Array<keyof JottathingStorage> = [
   'activePageIdsByProject',
   'captures',
   'currentProjectId',
@@ -117,7 +118,8 @@ const DEFAULT_SYNC_CONFIG: SyncConfig = {
   authenticated: false,
   connected: false,
 };
-const PENDING_CONNECTION_DELETION_KEY = 'inkwellPendingConnectionDeletion';
+const PENDING_CONNECTION_DELETION_KEY = 'jottathingPendingConnectionDeletion';
+const LEGACY_PENDING_CONNECTION_DELETION_KEY = 'inkwellPendingConnectionDeletion';
 const LEGACY_SYNC_CREDENTIALS_SCRUBBED_KEY = '__legacy_sync_credentials_scrubbed__';
 
 type PendingConnectionDeletion = {
@@ -130,14 +132,14 @@ type PendingConnectionDeletion = {
 
 const defaultProjects: Project[] = [
   {
-    id: 'project-inkwell',
-    name: 'Inkwell',
+    id: 'project-jottathing',
+    name: 'Jottathing',
     status: 'active',
     category: 'General',
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     stateContent: emptyDocument(),
-    tags: ['inkwell'],
+    tags: ['jottathing'],
   },
 ];
 
@@ -162,7 +164,7 @@ let workspaceWriteVersion = 0;
 let workspaceWriteQueue: Promise<void> = Promise.resolve();
 
 function emptyDocument(): DocumentContent {
-  return normalizeInkwellBlockIds({
+  return normalizeJottathingBlockIds({
     type: 'doc',
     content: [
       {
@@ -200,7 +202,7 @@ export function sourcePayloadFromCapture(payload: CaptureSelectionPayload): Sour
 }
 
 export function createCapturedContent(payload: CaptureSelectionPayload): DocumentContent[] {
-  const source = storeInkwellSource(sourcePayloadFromCapture(payload));
+  const source = storeJottathingSource(sourcePayloadFromCapture(payload));
 
   if (payload.highlightMeta.isHeading || payload.highlightMeta.sourceBlockType === 'heading') {
     return createLinkedHeadingContent(payload);
@@ -215,8 +217,8 @@ export function createCapturedContent(payload: CaptureSelectionPayload): Documen
         type: 'codeBlock',
         attrs: {
           language: normalizeCodeLanguage(payload.highlightMeta.codeLanguage),
-          inkwellBlockId: createInkwellBlockId(),
-          [INKWELL_SOURCE_ATTR]: source,
+          jottathingBlockId: createJottathingBlockId(),
+          [JOTTATHING_SOURCE_ATTR]: source,
         },
         content: payload.text ? [{ type: 'text', text: payload.text }] : undefined,
       },
@@ -231,8 +233,8 @@ export function createCapturedContent(payload: CaptureSelectionPayload): Documen
       {
         type: 'paragraph',
         attrs: {
-          inkwellBlockId: createInkwellBlockId(),
-          [INKWELL_SOURCE_ATTR]: source,
+          jottathingBlockId: createJottathingBlockId(),
+          [JOTTATHING_SOURCE_ATTR]: source,
         },
         content: payload.text ? [{ type: 'text', text: payload.text }] : undefined,
       },
@@ -246,8 +248,8 @@ export function createCapturedContent(payload: CaptureSelectionPayload): Documen
     {
       type: 'blockquote',
       attrs: {
-        inkwellBlockId: createInkwellBlockId(),
-        [INKWELL_SOURCE_ATTR]: source,
+        jottathingBlockId: createJottathingBlockId(),
+        [JOTTATHING_SOURCE_ATTR]: source,
       },
       content: [textParagraph(payload.text)],
     },
@@ -261,14 +263,14 @@ export function createLinkedHeadingContent(
   payload: CaptureSelectionPayload,
 ): DocumentContent[] {
   const level = payload.highlightMeta.headingLevel ?? 2;
-  const source = storeInkwellSource(sourcePayloadFromCapture(payload));
+  const source = storeJottathingSource(sourcePayloadFromCapture(payload));
 
   return [
     {
       type: 'heading',
       attrs: {
-        inkwellBlockId: createInkwellBlockId(),
-        [INKWELL_SOURCE_ATTR]: source,
+        jottathingBlockId: createJottathingBlockId(),
+        [JOTTATHING_SOURCE_ATTR]: source,
         level,
       },
       content: [
@@ -349,7 +351,7 @@ function sortProjectsByUpdatedDesc(first: Project, second: Project) {
 async function migrateStorageToIdb(): Promise<void> {
   const done = await idbGet<boolean>('__idb_migrated__');
   if (!done) {
-    const existing = (await browser.storage.local.get(STORAGE_KEYS)) as InkwellStorage;
+    const existing = (await browser.storage.local.get(STORAGE_KEYS)) as JottathingStorage;
     if (Object.keys(existing).length > 0) {
       await idbSetMany(existing as Record<string, unknown>);
     }
@@ -380,11 +382,11 @@ async function scrubLegacyExtensionSyncCredentials(): Promise<void> {
 async function recoverIdbWriteFence(): Promise<void> {
   if (!idbWriteRecoveryPromise) {
     idbWriteRecoveryPromise = (async () => {
-      const deletionState = await browser.storage.local.get(PENDING_CONNECTION_DELETION_KEY) as Record<
-        string,
-        PendingConnectionDeletion | undefined
-      >;
-      if (deletionState[PENDING_CONNECTION_DELETION_KEY]) {
+      const deletionState = await getBrandedStorageValue<PendingConnectionDeletion>(
+        PENDING_CONNECTION_DELETION_KEY,
+        LEGACY_PENDING_CONNECTION_DELETION_KEY,
+      );
+      if (deletionState) {
         isConnectionDeletionPending = true;
         await pauseIdbWrites();
         return;
@@ -399,10 +401,10 @@ async function recoverIdbWriteFence(): Promise<void> {
   await idbWriteRecoveryPromise;
 }
 
-async function readStorage(): Promise<Required<InkwellStorage>> {
+async function readStorage(): Promise<Required<JottathingStorage>> {
   await recoverIdbWriteFence();
   await migrateStorageToIdb();
-  const stored = (await idbGetMany(STORAGE_KEYS)) as InkwellStorage;
+  const stored = (await idbGetMany(STORAGE_KEYS)) as JottathingStorage;
 
   const storedProjects = stored.projects !== undefined ? stored.projects : defaultProjects;
   let projects = (isLegacyStubProjectSet(storedProjects)
@@ -550,7 +552,7 @@ function isLegacyStubProjectSet(projects: Project[]) {
 }
 
 async function writeStorage(
-  storage: Partial<InkwellStorage>,
+  storage: Partial<JottathingStorage>,
   options: { expectedVersion?: number } = {},
 ): Promise<boolean> {
   const write = workspaceWriteQueue.then(async () => {
@@ -607,7 +609,7 @@ function appendContent(page: ProjectPage, content: DocumentContent[]): ProjectPa
 
   return markPageDirty({
     ...page,
-    content: normalizeInkwellBlockIds({
+    content: normalizeJottathingBlockIds({
       ...page.content,
       type: 'doc',
       content: [...existingContent, ...content],
@@ -848,10 +850,10 @@ function isBrowserOffline() {
   return typeof navigator !== 'undefined' && navigator.onLine === false;
 }
 
-function collectInkwellBlockIds(content: DocumentContent, ids: Set<string>): void {
-  const value = content.attrs?.inkwellBlockId;
+function collectJottathingBlockIds(content: DocumentContent, ids: Set<string>): void {
+  const value = content.attrs?.jottathingBlockId;
   if (typeof value === 'string' && value) ids.add(value);
-  for (const child of content.content ?? []) collectInkwellBlockIds(child, ids);
+  for (const child of content.content ?? []) collectJottathingBlockIds(child, ids);
 }
 
 class SyncServerError extends Error {
@@ -894,7 +896,7 @@ async function requestServer<T>(
   }
   const headers = {
     ...(init?.body ? { 'Content-Type': 'application/json' } : {}),
-    ...(requiresAccountBinding ? { 'X-Inkwell-Account': syncConfig.userId } : {}),
+    ...(requiresAccountBinding ? { 'X-Jottathing-Account': syncConfig.userId } : {}),
     ...init?.headers,
   };
   const response = await fetch(`${cleanSyncServerUrl(syncConfig.serverUrl)}${path}`, {
@@ -1193,7 +1195,7 @@ async function enqueuePageSync(
   const { syncConfig } = await readStorage();
   const normalizedPage = {
     ...page,
-    content: normalizeInkwellBlockIds(page.content),
+    content: normalizeJottathingBlockIds(page.content),
   };
   const syncablePage = {
     ...normalizedPage,
@@ -1413,7 +1415,7 @@ function findActiveProjectPages(pages: ProjectPage[], projectId: string, exclude
 function normalizeStoredPage<T extends { content?: DocumentContent; localRevision?: string; status?: string; syncState?: string }>(page: T): T {
   return {
     ...page,
-    content: normalizeInkwellBlockIds(markUnrecoverableTransientMedia(page.content as DocumentContent)),
+    content: normalizeJottathingBlockIds(markUnrecoverableTransientMedia(page.content as DocumentContent)),
     localRevision: page.localRevision ?? crypto.randomUUID(),
     status: page.status ?? 'active',
     syncState: page.syncState ?? 'saved',
@@ -1691,11 +1693,10 @@ async function flushPendingSyncOps(options: { force?: boolean } = {}): Promise<v
 }
 
 async function hasPendingConnectionDeletion(): Promise<boolean> {
-  const stored = await browser.storage.local.get(PENDING_CONNECTION_DELETION_KEY) as Record<
-    string,
-    PendingConnectionDeletion | undefined
-  >;
-  const pending = Boolean(stored[PENDING_CONNECTION_DELETION_KEY]);
+  const pending = Boolean(await getBrandedStorageValue<PendingConnectionDeletion>(
+    PENDING_CONNECTION_DELETION_KEY,
+    LEGACY_PENDING_CONNECTION_DELETION_KEY,
+  ));
   if (pending) {
     isConnectionDeletionPending = true;
     if (queueDeliveryTimer) {
@@ -1751,8 +1752,8 @@ async function deliverPendingSyncOps({ force }: { force: boolean }): Promise<voi
 
 function stripConflictResolutionMarkers(content: DocumentContent): DocumentContent {
   const attrs = { ...(content.attrs ?? {}) };
-  delete attrs.inkwellConflictResolution;
-  delete attrs.inkwellPreserveRemoteBlocks;
+  delete attrs.jottathingConflictResolution;
+  delete attrs.jottathingPreserveRemoteBlocks;
   return {
     ...content,
     ...(content.attrs ? { attrs } : {}),
@@ -1934,7 +1935,7 @@ function msUntilOldestOpIsEligible(ops: BlockSyncOp[], now = Date.now()): number
 
 async function updateStoredSyncConfig(
   config: Partial<SyncConfig>,
-  additionalStorage: Partial<InkwellStorage> = {},
+  additionalStorage: Partial<JottathingStorage> = {},
 ): Promise<SyncConfig> {
   const { syncConfig } = await readStorage();
   const nextConfig = stripStoredSyncCredentials({
@@ -2132,7 +2133,7 @@ export const notionClient = {
     for (const page of pages) {
       if (page.status === 'archived') continue;
       const blockIds = blockIdsByProject.get(page.projectId) ?? new Set<string>();
-      collectInkwellBlockIds(page.content, blockIds);
+      collectJottathingBlockIds(page.content, blockIds);
       blockIdsByProject.set(page.projectId, blockIds);
     }
     const conflicts = [...pageConflicts];
@@ -2217,7 +2218,7 @@ export const notionClient = {
       if (!page || !project) throw new Error('This page is no longer available.');
       const mergedPage = {
         ...page,
-        content: normalizeInkwellBlockIds(content),
+        content: normalizeJottathingBlockIds(content),
         updatedAt: new Date().toISOString(),
         syncState: 'saving' as const,
         syncMessage: undefined,
@@ -2250,7 +2251,7 @@ export const notionClient = {
     if (!project) throw new Error('This project is no longer available.');
     const mergedProject: Project = {
       ...project,
-      stateContent: normalizeInkwellBlockIds(content),
+      stateContent: normalizeJottathingBlockIds(content),
       updatedAt: new Date().toISOString(),
       syncState: 'saving',
       syncMessage: undefined,
@@ -2293,7 +2294,7 @@ export const notionClient = {
 
     const pages = storage.pages.map((page) => ({
       ...page,
-      content: normalizeInkwellBlockIds(page.content),
+      content: normalizeJottathingBlockIds(page.content),
     }));
     await writeStorage({ pages });
 
@@ -2565,11 +2566,11 @@ export const notionClient = {
 
   async refreshSyncSession(allowSignedOut = false): Promise<SyncConfig> {
     const { hasExplicitlyLoggedOut, syncConfig } = await readStorage();
-    const pendingDeletionState = await browser.storage.local.get(PENDING_CONNECTION_DELETION_KEY) as Record<
-      string,
-      PendingConnectionDeletion | undefined
-    >;
-    if (pendingDeletionState[PENDING_CONNECTION_DELETION_KEY]) {
+    const pendingDeletionState = await getBrandedStorageValue<PendingConnectionDeletion>(
+      PENDING_CONNECTION_DELETION_KEY,
+      LEGACY_PENDING_CONNECTION_DELETION_KEY,
+    );
+    if (pendingDeletionState) {
       try {
         await notionClient.deleteConnection();
         return (await readStorage()).syncConfig;
@@ -2983,7 +2984,7 @@ export const notionClient = {
         syncConfig: persistedSyncConfig,
       };
     } catch {
-      throw new Error('Unable to clear the local Inkwell account state.');
+      throw new Error('Unable to clear the local Jottathing account state.');
     } finally {
       isSessionLogoutPending = false;
     }
@@ -2991,11 +2992,10 @@ export const notionClient = {
 
   async deleteConnection(): Promise<{ notionTokenRevoked: boolean }> {
     const { syncConfig: storedSyncConfig } = await readStorage();
-    const extensionStorage = await browser.storage.local.get(PENDING_CONNECTION_DELETION_KEY) as Record<
-      string,
-      PendingConnectionDeletion | undefined
-    >;
-    let pendingDeletion = extensionStorage[PENDING_CONNECTION_DELETION_KEY];
+    let pendingDeletion = await getBrandedStorageValue<PendingConnectionDeletion>(
+      PENDING_CONNECTION_DELETION_KEY,
+      LEGACY_PENDING_CONNECTION_DELETION_KEY,
+    );
     if (pendingDeletion) {
       const isDifferentAuthenticatedConnection = storedSyncConfig.authenticated && (
         cleanSyncServerUrl(storedSyncConfig.serverUrl) !== pendingDeletion.serverUrl ||
@@ -3007,11 +3007,11 @@ export const notionClient = {
         !/^[A-Za-z0-9_-]{40,128}$/.test(pendingDeletion.requestId) ||
         isDifferentAuthenticatedConnection
       ) {
-        throw new Error('A previous Inkwell deletion is pending for another connection. Reconnect that account to finish it.');
+        throw new Error('A previous Jottathing deletion is pending for another connection. Reconnect that account to finish it.');
       }
     } else {
       if (!storedSyncConfig.authenticated || !storedSyncConfig.userId) {
-        throw new Error('Sign in to the Notion account that owns this Inkwell data before deleting the connection. Your local documents are unchanged.');
+        throw new Error('Sign in to the Notion account that owns this Jottathing data before deleting the connection. Your local documents are unchanged.');
       }
       if (
         storedSyncConfig.syncQueueOwnerUserId === null ||
@@ -3045,10 +3045,10 @@ export const notionClient = {
     let localDataCleared = false;
     try {
       const prepared = await browser.runtime.sendMessage({
-        type: 'inkwell.prepareConnectionDeletion',
+        type: 'jottathing.prepareConnectionDeletion',
       });
       if (prepared === false) {
-        throw new Error('The background service could not pause Inkwell sync before deletion.');
+        throw new Error('The background service could not pause Jottathing sync before deletion.');
       }
       await pauseIdbWrites();
       await Promise.allSettled(
@@ -3064,7 +3064,7 @@ export const notionClient = {
         method: 'POST',
         body: JSON.stringify({ requestId: pendingDeletion.requestId }),
       }, syncConfig);
-      if (!response.deleted) throw new Error('The Inkwell connection could not be deleted.');
+      if (!response.deleted) throw new Error('The Jottathing connection could not be deleted.');
       serverDeleted = true;
 
       await idbClear();
@@ -3077,13 +3077,13 @@ export const notionClient = {
       if (!serverDeleted) {
         await resumeIdbWrites();
         void Promise.resolve(browser.runtime.sendMessage({
-          type: 'inkwell.abortConnectionDeletion',
+          type: 'jottathing.abortConnectionDeletion',
         })).catch(() => undefined);
       } else if (localDataCleared) {
         await resumeIdbWrites({ adoptCurrentEpoch: true });
         isConnectionDeletionPending = false;
         void Promise.resolve(browser.runtime.sendMessage({
-          type: 'inkwell.completeConnectionDeletion',
+          type: 'jottathing.completeConnectionDeletion',
         })).catch(() => undefined);
       }
     }
@@ -3318,7 +3318,7 @@ export const notionClient = {
 
     const updatedPage = markPageDirty({
       ...page,
-      content: normalizeInkwellBlockIds(page.content),
+      content: normalizeJottathingBlockIds(page.content),
     });
 
     await writeStorage({
@@ -3357,7 +3357,7 @@ export const notionClient = {
       );
 
     if (!page || !project) {
-      throw new Error('No Inkwell page is available for this capture.');
+      throw new Error('No Jottathing page is available for this capture.');
     }
 
     const capturedContent = createCapturedContent(payload);

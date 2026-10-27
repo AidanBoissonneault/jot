@@ -66,7 +66,7 @@ export type SyncBlockOperation = {
   type: SyncBlockOperationType;
   pageId: string;
   projectId: string;
-  inkwellBlockId?: string;
+  jottathingBlockId?: string;
   sequence: number;
   createdAt: string;
   localVersion: number;
@@ -81,7 +81,7 @@ export type SyncBlockOperation = {
     previousBlock?: DocumentContent;
     order?: string[];
     index?: number;
-    afterInkwellBlockId?: string;
+    afterJottathingBlockId?: string;
     replaceAll?: boolean;
     selectedParentPageId?: string;
   };

@@ -3,7 +3,7 @@
  */
 import { NodeSelection, TextSelection } from '@tiptap/pm/state';
 import type { EditorView } from '@tiptap/pm/view';
-import type { InkwellImageMovePayload } from '@/src/extensions/inkwellImageMove';
+import type { JottathingImageMovePayload } from '@/src/extensions/jottathingImageMove';
 
 /** Moves the editor selection to the document position under a pointer event. */
 export function moveEditorSelectionToDrop(view: EditorView, event: DragEvent): void {
@@ -20,7 +20,7 @@ export function moveEditorSelectionToDrop(view: EditorView, event: DragEvent): v
 export function moveImageNodeAtDrop(
   view: EditorView,
   event: DragEvent,
-  payload: InkwellImageMovePayload,
+  payload: JottathingImageMovePayload,
 ): boolean {
   const imageType = view.state.schema.nodes.image;
   const source = findImageMoveSource(view, payload);
@@ -60,7 +60,7 @@ export function moveImageNodeAtDrop(
 export function readSelectedImageMovePayload(
   view: EditorView,
   event: DragEvent,
-): InkwellImageMovePayload | null {
+): JottathingImageMovePayload | null {
   const { selection } = view.state;
 
   if (
@@ -109,7 +109,7 @@ function isChromeExtensionBlobImageDrop(event: DragEvent): boolean {
   );
 }
 
-function findImageMoveSource(view: EditorView, payload: InkwellImageMovePayload) {
+function findImageMoveSource(view: EditorView, payload: JottathingImageMovePayload) {
   const imageType = view.state.schema.nodes.image;
   const nodeAtPayloadPos = view.state.doc.nodeAt(payload.pos);
 
@@ -117,7 +117,7 @@ function findImageMoveSource(view: EditorView, payload: InkwellImageMovePayload)
     return { pos: payload.pos, node: nodeAtPayloadPos };
   }
 
-  const payloadBlockId = String(payload.attrs.inkwellBlockId ?? '');
+  const payloadBlockId = String(payload.attrs.jottathingBlockId ?? '');
   const payloadSrc = String(payload.attrs.src ?? '');
   let fallback: { pos: number; node: NonNullable<typeof nodeAtPayloadPos> } | null = null;
 
@@ -126,7 +126,7 @@ function findImageMoveSource(view: EditorView, payload: InkwellImageMovePayload)
       return true;
     }
 
-    if (payloadBlockId && node.attrs.inkwellBlockId === payloadBlockId) {
+    if (payloadBlockId && node.attrs.jottathingBlockId === payloadBlockId) {
       fallback = { pos, node };
       return false;
     }

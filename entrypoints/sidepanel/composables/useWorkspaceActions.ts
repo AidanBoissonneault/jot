@@ -1,9 +1,9 @@
-﻿/** @file Project and page selection, creation, renaming, and archive actions. */
+/** @file Project and page selection, creation, renaming, and archive actions. */
 import { ref, type Ref } from 'vue';
 import { notionClient } from '@/src/services/notionClient';
-import type { useInkwellStore } from '@/src/stores/inkwell';
+import type { useJottathingStore } from '@/src/stores/jottathing';
 
-type InkwellStore = ReturnType<typeof useInkwellStore>;
+type JottathingStore = ReturnType<typeof useJottathingStore>;
 
 export interface ArchiveTarget {
   kind: 'project' | 'page';
@@ -12,7 +12,7 @@ export interface ArchiveTarget {
 }
 
 interface WorkspaceActionOptions {
-  store: InkwellStore;
+  store: JottathingStore;
   pageTitleDraft: Ref<string>;
   projectNameDraft: Ref<string>;
   newProjectNameDraft: Ref<string>;

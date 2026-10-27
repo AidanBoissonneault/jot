@@ -2,7 +2,7 @@
 import type { DocumentContent } from '../../../src/types/capture.js';
 import type { BlockMapping, HashValue, NotionBlockPayload } from './types.js';
 
-const INKWELL_BLOCK_ID_ATTR = 'inkwellBlockId';
+const JOTTATHING_BLOCK_ID_ATTR = 'jottathingBlockId';
 
 /** Notion child insertion position used while reconciling an ordered block list. */
 export interface BlockPosition {
@@ -12,7 +12,7 @@ export interface BlockPosition {
 
 /** Desired local identity, serialized payload, and sync hash for one block. */
 export interface DesiredManagedBlock {
-  inkwellBlockId: string;
+  jottathingBlockId: string;
   kind: string;
   lastSyncedHash: string;
   localNodeId: string;
@@ -52,10 +52,10 @@ export function desiredManagedBlocks({
   const nodes = content?.content ?? [];
 
   return notionBlocks.map((notionBlock, index) => {
-    const inkwellBlockId = inkwellBlockIdFromNode(nodes[index], index);
+    const jottathingBlockId = jottathingBlockIdFromNode(nodes[index], index);
     return {
-      inkwellBlockId,
-      localNodeId: inkwellBlockId,
+      jottathingBlockId,
+      localNodeId: jottathingBlockId,
       localPageId,
       notionBlock,
       kind: kindFromNotionBlock(notionBlock),
@@ -65,9 +65,9 @@ export function desiredManagedBlocks({
   });
 }
 
-/** Reads a node's stable Inkwell identifier or derives a positional fallback. */
-function inkwellBlockIdFromNode(node: DocumentContent | undefined, index: number): string {
-  const value = node?.attrs?.[INKWELL_BLOCK_ID_ATTR];
+/** Reads a node's stable Jottathing identifier or derives a positional fallback. */
+function jottathingBlockIdFromNode(node: DocumentContent | undefined, index: number): string {
+  const value = node?.attrs?.[JOTTATHING_BLOCK_ID_ATTR] ?? node?.attrs?.inkwellBlockId;
   return typeof value === 'string' && value ? value : `block-${index}`;
 }
 
@@ -81,7 +81,7 @@ export function mappingFromDesired(
   const nextState = stateFromSyncedBlock(entry.notionBlock, syncedState);
   return {
     localPageId: entry.localPageId,
-    inkwellBlockId: entry.inkwellBlockId,
+    jottathingBlockId: entry.jottathingBlockId,
     localNodeId: entry.localNodeId,
     notionBlockId,
     kind: entry.kind,
@@ -118,7 +118,7 @@ function objectValue(value: unknown): Record<string, unknown> | undefined {
 }
 
 /** Indexes persisted mappings by stable local identity. */
-export function mappingsByInkwellId(mappings: BlockMapping[]): Map<string, BlockMapping> {
+export function mappingsByJottathingId(mappings: BlockMapping[]): Map<string, BlockMapping> {
   const result = new Map<string, BlockMapping>();
   for (const mapping of mappings) result.set(mappingKey(mapping), mapping);
   return result;
@@ -126,7 +126,7 @@ export function mappingsByInkwellId(mappings: BlockMapping[]): Map<string, Block
 
 /** Returns the stable local key for a current or legacy mapping. */
 export function mappingKey(mapping: BlockMapping): string {
-  return mapping.inkwellBlockId ?? mapping.localNodeId;
+  return mapping.jottathingBlockId ?? mapping.localNodeId;
 }
 
 /** Computes the shared mapping identifiers in old and desired order. */
@@ -134,11 +134,11 @@ function commonOrderedIds(
   existingMappings: BlockMapping[],
   desiredBlocks: DesiredManagedBlock[],
 ): { newCommon: string[]; oldCommon: string[] } {
-  const desiredIds = new Set(desiredBlocks.map((entry) => entry.inkwellBlockId));
+  const desiredIds = new Set(desiredBlocks.map((entry) => entry.jottathingBlockId));
   const existingIds = new Set(existingMappings.map(mappingKey));
   const oldCommon = existingMappings.map(mappingKey).filter((id) => desiredIds.has(id));
   const newCommon = desiredBlocks
-    .map((entry) => entry.inkwellBlockId)
+    .map((entry) => entry.jottathingBlockId)
     .filter((id) => existingIds.has(id));
   return { oldCommon, newCommon };
 }
@@ -166,7 +166,7 @@ export function reorderedRange(
 
   const affectedIds = new Set(newCommon.slice(first, last + 1));
   const indexes = desiredBlocks
-    .map((entry, index) => (affectedIds.has(entry.inkwellBlockId) ? index : -1))
+    .map((entry, index) => (affectedIds.has(entry.jottathingBlockId) ? index : -1))
     .filter((index) => index >= 0);
 
   return { start: Math.min(...indexes), end: Math.max(...indexes) };
@@ -192,7 +192,7 @@ export function previousMappedBlockId(
   order: number,
 ): string | undefined {
   for (let index = order - 1; index >= 0; index -= 1) {
-    const mapping = mappingsById.get(desiredBlocks[index]?.inkwellBlockId);
+    const mapping = mappingsById.get(desiredBlocks[index]?.jottathingBlockId);
     if (mapping?.notionBlockId) return mapping.notionBlockId;
   }
   return undefined;

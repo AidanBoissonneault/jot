@@ -20,7 +20,7 @@ import type {
   WorkerStore,
 } from './types.js';
 
-const INKWELL_BLOCK_ID_ATTR = 'inkwellBlockId';
+const JOTTATHING_BLOCK_ID_ATTR = 'jottathingBlockId';
 
 /** Describes the import managed blocks options contract used by this API feature. */
 interface ImportManagedBlocksOptions {
@@ -90,15 +90,15 @@ function rebuildImportedBlockMappings({
   const content = (imported.content ?? []).map((node: DocumentContent, index: number) => {
     const notionBlock = notionBlocks[index];
     const existing = existingByNotionId.get(notionBlock?.id);
-    const inkwellBlockId =
-      existing?.inkwellBlockId ?? existing?.localNodeId ?? `inkwell-block-${randomUUID()}`;
+    const jottathingBlockId =
+      existing?.jottathingBlockId ?? existing?.localNodeId ?? `jottathing-block-${randomUUID()}`;
     const fileUploadId = fileUploadIdFromMapping(existing);
 
     return {
       ...node,
       attrs: {
         ...(node.attrs ?? {}),
-        [INKWELL_BLOCK_ID_ATTR]: inkwellBlockId,
+        [JOTTATHING_BLOCK_ID_ATTR]: jottathingBlockId,
         ...(notionBlock?.id && isMediaNode(node) ? { notionBlockId: notionBlock.id } : {}),
         ...(fileUploadId ? { notionFileUploadId: fileUploadId, uploadState: 'done' } : {}),
       },
@@ -121,8 +121,8 @@ function rebuildImportedBlockMappings({
 
     return {
       localPageId,
-      inkwellBlockId: String(node.attrs?.[INKWELL_BLOCK_ID_ATTR]),
-      localNodeId: String(node.attrs?.[INKWELL_BLOCK_ID_ATTR]),
+      jottathingBlockId: String(node.attrs?.[JOTTATHING_BLOCK_ID_ATTR]),
+      localNodeId: String(node.attrs?.[JOTTATHING_BLOCK_ID_ATTR]),
       notionBlockId: importedBlock.id,
       kind: kindFromNotionBlock(notionBlock),
       order: index,

@@ -71,7 +71,7 @@ export function registerNotionRoutes(app: Hono<{ Bindings: WorkerEnv }>): void {
     const parsed = await readLimitedJsonBody<CreateNotionPageRequest>(c.req.raw, MAX_CONTROL_JSON_REQUEST_BYTES);
     if (parsed.tooLarge) return c.json({ error: 'Request is too large.' }, 413);
     const body = (parsed.body ?? {}) as Partial<CreateNotionPageRequest>;
-    const title = String(body?.title ?? '').trim() || 'Inkwell';
+    const title = String(body?.title ?? '').trim() || 'Jottathing';
     const store = await requireConnectedStore(c);
     const page = await createWorkspacePage(store, title);
   

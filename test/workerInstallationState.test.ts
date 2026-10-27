@@ -4,9 +4,9 @@ import type { WorkerStore } from '@/apps/worker/src/types';
 
 const store = {
   blockMappings: {},
-  ignoredInkwellDatabaseIds: new Set<string>(),
-  inkwellDatabase: undefined,
-  inkwellRootPage: undefined,
+  ignoredJottathingDatabaseIds: new Set<string>(),
+  jottathingDatabase: undefined,
+  jottathingRootPage: undefined,
   installationId: 42,
   logs: [],
   notePages: {},
@@ -20,8 +20,8 @@ const store = {
 function createState(getActiveInstallationWithTokensById: ReturnType<typeof vi.fn>) {
   return createWorkerInstallationState({
     auth: { getActiveInstallationWithTokensById } as never,
-    cookieName: 'inkwell_session',
-    readInkwellSyncState: async () => ({} as WorkerStore),
+    cookieName: 'jottathing_session',
+    readJottathingSyncState: async () => ({} as WorkerStore),
     readStore: () => ({} as WorkerStore),
   });
 }

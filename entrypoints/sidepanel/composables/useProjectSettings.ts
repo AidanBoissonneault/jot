@@ -2,11 +2,11 @@
 import { ref, watch, type Ref } from 'vue';
 import { visibleProjectStateContent } from '@/src/extensions/sourceRegistry';
 import { plainTextFromDocument } from '@/src/lib/documentText';
-import type { useInkwellStore } from '@/src/stores/inkwell';
+import type { useJottathingStore } from '@/src/stores/jottathing';
 
 /** Coordinates project-level settings with local page persistence. */
 export function useProjectSettings(
-  store: ReturnType<typeof useInkwellStore>,
+  store: ReturnType<typeof useJottathingStore>,
   projectCategoryDraft: Ref<string>,
   isProjectCategoryDraftDirty: Ref<boolean>,
   projectCategoryDraftRevision: Ref<number>,

@@ -3,7 +3,7 @@ import { Image } from '@tiptap/extension-image';
 import { Youtube } from '@tiptap/extension-youtube';
 import { Audio } from '@tiptap/extension-audio';
 import { NodeSelection } from '@tiptap/pm/state';
-import { INKWELL_IMAGE_MOVE_MIME, rememberInkwellImageMovePayload } from '@/src/extensions/inkwellImageMove';
+import { JOTTATHING_IMAGE_MOVE_MIME, rememberJottathingImageMovePayload } from '@/src/extensions/jottathingImageMove';
 import { notionClient } from '@/src/services/notionClient';
 import { cleanSyncServerUrl } from '@/src/lib/syncServerUrl';
 import { youtubeEmbedUrl } from '@/src/lib/youtubeUtils';
@@ -12,7 +12,7 @@ export { youtubeEmbedUrl } from '@/src/lib/youtubeUtils';
 const YOUTUBE_ALLOW =
   'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share';
 
-export const InkwellImage = Image.extend({
+export const JottathingImage = Image.extend({
   addAttributes() {
     return {
       ...this.parent?.(),
@@ -41,7 +41,7 @@ export const InkwellImage = Image.extend({
   addNodeView() {
     return ({ node, editor, getPos }) => {
       const wrapper = document.createElement('div');
-      wrapper.className = 'inkwell-image-wrapper';
+      wrapper.className = 'jottathing-image-wrapper';
       wrapper.draggable = true;
       wrapper.tabIndex = -1;
       const uploadState = String(node.attrs.uploadState ?? 'idle');
@@ -142,7 +142,7 @@ export const InkwellImage = Image.extend({
 
       wrapper.appendChild(img);
       const resizeHandle = document.createElement('span');
-      resizeHandle.className = 'inkwell-image-resize-handle';
+      resizeHandle.className = 'jottathing-image-resize-handle';
       resizeHandle.setAttribute('aria-hidden', 'true');
       wrapper.appendChild(resizeHandle);
 
@@ -177,9 +177,9 @@ export const InkwellImage = Image.extend({
           pos,
           attrs: currentNode.attrs,
         };
-        rememberInkwellImageMovePayload(payload);
+        rememberJottathingImageMovePayload(payload);
         event.dataTransfer?.setData(
-          INKWELL_IMAGE_MOVE_MIME,
+          JOTTATHING_IMAGE_MOVE_MIME,
           JSON.stringify(payload),
         );
         event.dataTransfer?.setData('text/plain', String(currentNode.attrs.src ?? ''));
@@ -232,7 +232,7 @@ export const InkwellImage = Image.extend({
       wrapper.addEventListener('dragstart', onDragStart, true);
       img.addEventListener('dragstart', onDragStart, true);
       resizeHandle.addEventListener('pointerdown', onResizePointerDown);
-      applyImageBlockId(wrapper, currentNode.attrs.inkwellBlockId);
+      applyImageBlockId(wrapper, currentNode.attrs.jottathingBlockId);
 
       return {
         dom: wrapper,
@@ -251,7 +251,7 @@ export const InkwellImage = Image.extend({
           }
 
           currentNode = nextNode;
-          applyImageBlockId(wrapper, nextNode.attrs.inkwellBlockId);
+          applyImageBlockId(wrapper, nextNode.attrs.jottathingBlockId);
           applyImageUploadState(wrapper, String(nextNode.attrs.uploadState ?? 'idle'));
           restoreImageElement(wrapper, img);
           const nextSrc = String(nextNode.attrs.src ?? '');
@@ -264,7 +264,7 @@ export const InkwellImage = Image.extend({
         stopEvent(event) {
           return (
             event.target instanceof Element &&
-            event.target.closest('.inkwell-image-resize-handle') !== null
+            event.target.closest('.jottathing-image-resize-handle') !== null
           );
         },
         destroy() {
@@ -279,7 +279,7 @@ export const InkwellImage = Image.extend({
   },
 });
 
-export const InkwellYoutube = Youtube.configure({
+export const JottathingYoutube = Youtube.configure({
   nocookie: true,
   controls: true,
   allowFullscreen: true,
@@ -312,7 +312,7 @@ export const InkwellYoutube = Youtube.configure({
   },
 });
 
-const InkwellAudio = Audio.extend({
+const JottathingAudio = Audio.extend({
   addCommands() {
     return {
       setAudio:
@@ -342,7 +342,7 @@ const InkwellAudio = Audio.extend({
   addNodeView() {
     return ({ editor, getPos, node }) => {
       const wrapper = document.createElement('div');
-      wrapper.className = 'inkwell-audio-wrapper';
+      wrapper.className = 'jottathing-audio-wrapper';
       const uploadState = String(node.attrs.uploadState ?? 'idle');
       let currentNode = node;
       let isRefreshing = false;
@@ -413,12 +413,12 @@ const InkwellAudio = Audio.extend({
 
 function showImageFallback(wrapper: HTMLElement, img: HTMLImageElement, src: string) {
   img.remove();
-  if (wrapper.querySelector('[data-inkwell-image-fallback]')) {
+  if (wrapper.querySelector('[data-jottathing-image-fallback]')) {
     return;
   }
 
   const link = document.createElement('a');
-  link.dataset.inkwellImageFallback = '';
+  link.dataset.jottathingImageFallback = '';
   link.href = src;
   link.textContent = 'Open image';
   link.target = '_blank';
@@ -427,7 +427,7 @@ function showImageFallback(wrapper: HTMLElement, img: HTMLImageElement, src: str
 }
 
 function restoreImageElement(wrapper: HTMLElement, img: HTMLImageElement) {
-  wrapper.querySelector('[data-inkwell-image-fallback]')?.remove();
+  wrapper.querySelector('[data-jottathing-image-fallback]')?.remove();
   if (!img.isConnected) wrapper.prepend(img);
 }
 
@@ -497,12 +497,12 @@ function applyImageBlockId(wrapper: HTMLElement, value: unknown) {
   const blockId = typeof value === 'string' ? value : '';
 
   if (blockId) {
-    wrapper.setAttribute('data-inkwell-block-id', blockId);
-    wrapper.setAttribute('data-inkwell-image-block-id', blockId);
+    wrapper.setAttribute('data-jottathing-block-id', blockId);
+    wrapper.setAttribute('data-jottathing-image-block-id', blockId);
     wrapper.title = blockId;
   } else {
-    wrapper.removeAttribute('data-inkwell-block-id');
-    wrapper.removeAttribute('data-inkwell-image-block-id');
+    wrapper.removeAttribute('data-jottathing-block-id');
+    wrapper.removeAttribute('data-jottathing-image-block-id');
     wrapper.removeAttribute('title');
   }
 }
@@ -515,6 +515,6 @@ export const MediaKit = Extension.create({
   name: 'mediaKit',
 
   addExtensions() {
-    return [InkwellImage, InkwellYoutube, InkwellAudio];
+    return [JottathingImage, JottathingYoutube, JottathingAudio];
   },
 });

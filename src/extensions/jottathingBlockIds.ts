@@ -2,13 +2,16 @@ import { Extension } from '@tiptap/core';
 import { Plugin } from '@tiptap/pm/state';
 import type { DocumentContent } from '@/src/types/capture';
 import {
-  decodeInkwellSource,
-  encodeInkwellSource,
-  INKWELL_SOURCE_ATTR,
-  storeInkwellSource,
-} from '@/src/extensions/inkwellLink';
+  decodeJottathingSource,
+  encodeJottathingSource,
+  JOTTATHING_SOURCE_ATTR,
+  storeJottathingSource,
+} from '@/src/extensions/jottathingLink';
 
-const INKWELL_BLOCK_ID_ATTR = 'inkwellBlockId';
+const JOTTATHING_BLOCK_ID_ATTR = 'jottathingBlockId';
+const LEGACY_BLOCK_ID_ATTR = 'inkwellBlockId';
+const LEGACY_BLOCK_ID_DATA_ATTR = 'data-inkwell-block-id';
+const LEGACY_SOURCE_DATA_ATTR = 'data-inkwell-source';
 
 const TOP_LEVEL_BLOCK_TYPES = [
   'paragraph',
@@ -24,37 +27,40 @@ const TOP_LEVEL_BLOCK_TYPES = [
   'taskList',
 ];
 
-export const InkwellBlockIds = Extension.create({
-  name: 'inkwellBlockIds',
+export const JottathingBlockIds = Extension.create({
+  name: 'jottathingBlockIds',
 
   addGlobalAttributes() {
     return [
       {
         types: TOP_LEVEL_BLOCK_TYPES,
         attributes: {
-          [INKWELL_BLOCK_ID_ATTR]: {
+          [JOTTATHING_BLOCK_ID_ATTR]: {
             default: null,
-            parseHTML: (element) => element.getAttribute('data-inkwell-block-id'),
+            parseHTML: (element) =>
+              element.getAttribute('data-jottathing-block-id') ??
+              element.getAttribute(LEGACY_BLOCK_ID_DATA_ATTR),
             renderHTML: (attributes) => {
-              const value = attributes[INKWELL_BLOCK_ID_ATTR];
+              const value = attributes[JOTTATHING_BLOCK_ID_ATTR];
 
               return typeof value === 'string' && value
-                ? { 'data-inkwell-block-id': value }
+                ? { 'data-jottathing-block-id': value }
                 : {};
             },
           },
-          [INKWELL_SOURCE_ATTR]: {
+          [JOTTATHING_SOURCE_ATTR]: {
             default: null,
             parseHTML: (element) => {
-              const payload = decodeInkwellSource(
-                element.getAttribute('data-inkwell-source'),
+              const payload = decodeJottathingSource(
+                element.getAttribute('data-jottathing-source') ??
+                element.getAttribute(LEGACY_SOURCE_DATA_ATTR),
               );
-              return payload ? storeInkwellSource(payload) : null;
+              return payload ? storeJottathingSource(payload) : null;
             },
             renderHTML: (attributes) => {
-              const payload = decodeInkwellSource(attributes[INKWELL_SOURCE_ATTR]);
+              const payload = decodeJottathingSource(attributes[JOTTATHING_SOURCE_ATTR]);
               return payload
-                ? { 'data-inkwell-source': encodeInkwellSource(payload) }
+                ? { 'data-jottathing-source': encodeJottathingSource(payload) }
                 : {};
             },
           },
@@ -76,7 +82,7 @@ export const InkwellBlockIds = Extension.create({
               return;
             }
 
-            const value = node.attrs[INKWELL_BLOCK_ID_ATTR];
+            const value = node.attrs[JOTTATHING_BLOCK_ID_ATTR];
             const id = typeof value === 'string' && value ? value : '';
 
             if (id && !seen.has(id)) {
@@ -84,11 +90,11 @@ export const InkwellBlockIds = Extension.create({
               return;
             }
 
-            const nextId = createInkwellBlockId();
+            const nextId = createJottathingBlockId();
             seen.add(nextId);
             transaction = transaction.setNodeMarkup(offset, undefined, {
               ...node.attrs,
-              [INKWELL_BLOCK_ID_ATTR]: nextId,
+              [JOTTATHING_BLOCK_ID_ATTR]: nextId,
             });
             changed = true;
           });
@@ -100,13 +106,39 @@ export const InkwellBlockIds = Extension.create({
   },
 });
 
-export function normalizeInkwellBlockIds(content: DocumentContent): DocumentContent {
+export function normalizeJottathingBlockIds(content: DocumentContent): DocumentContent {
   const seen = new Set<string>();
   let changed = false;
   const children = content.content ?? [];
   const normalizedChildren = children.map((originalNode, index) => {
     let node = stripEmptySourceAttributes(originalNode);
     changed ||= node !== originalNode;
+    const legacyAttrs = node.attrs ?? {};
+    if (LEGACY_BLOCK_ID_ATTR in legacyAttrs) {
+      const { [LEGACY_BLOCK_ID_ATTR]: legacyId, ...attrs } = legacyAttrs;
+      node = {
+        ...node,
+        attrs: {
+          ...attrs,
+          ...(attrs[JOTTATHING_BLOCK_ID_ATTR] == null && typeof legacyId === 'string'
+            ? { [JOTTATHING_BLOCK_ID_ATTR]: legacyId }
+            : {}),
+        },
+      };
+      changed = true;
+    }
+    const sourceAttrs = node.attrs ?? {};
+    if ('inkwellSource' in sourceAttrs) {
+      const { inkwellSource, ...attrs } = sourceAttrs;
+      node = {
+        ...node,
+        attrs: {
+          ...attrs,
+          ...(attrs[JOTTATHING_SOURCE_ATTR] == null ? { [JOTTATHING_SOURCE_ATTR]: inkwellSource } : {}),
+        },
+      };
+      changed = true;
+    }
     const canOwnSource =
       node.type === 'blockquote' ||
       node.type === 'codeBlock' ||
@@ -129,21 +161,21 @@ export function normalizeInkwellBlockIds(content: DocumentContent): DocumentCont
 
     if (
       canOwnSource &&
-      !decodeInkwellSource(node.attrs?.[INKWELL_SOURCE_ATTR]) &&
+      !decodeJottathingSource(node.attrs?.[JOTTATHING_SOURCE_ATTR]) &&
       source
     ) {
       node = {
         ...node,
         attrs: {
           ...node.attrs,
-          [INKWELL_SOURCE_ATTR]: storeInkwellSource(source),
+          [JOTTATHING_SOURCE_ATTR]: storeJottathingSource(source),
         },
       };
       changed = true;
     }
 
     const attrs = node.attrs ?? {};
-    const value = attrs[INKWELL_BLOCK_ID_ATTR];
+    const value = attrs[JOTTATHING_BLOCK_ID_ATTR];
     const id = typeof value === 'string' && value ? value : '';
 
     if (id && !seen.has(id)) {
@@ -152,13 +184,13 @@ export function normalizeInkwellBlockIds(content: DocumentContent): DocumentCont
     }
 
     changed = true;
-    const nextId = createInkwellBlockId();
+    const nextId = createJottathingBlockId();
     seen.add(nextId);
     return {
       ...node,
       attrs: {
         ...attrs,
-        [INKWELL_BLOCK_ID_ATTR]: nextId,
+        [JOTTATHING_BLOCK_ID_ATTR]: nextId,
       },
     };
   });
@@ -176,8 +208,8 @@ function stripEmptySourceAttributes(node: DocumentContent): DocumentContent {
   let changed = false;
   let attrs = node.attrs;
 
-  if (attrs && attrs[INKWELL_SOURCE_ATTR] == null) {
-    const { [INKWELL_SOURCE_ATTR]: _emptySource, ...remainingAttrs } = attrs;
+  if (attrs && attrs[JOTTATHING_SOURCE_ATTR] == null) {
+    const { [JOTTATHING_SOURCE_ATTR]: _emptySource, ...remainingAttrs } = attrs;
     attrs = remainingAttrs;
     changed = true;
   }
@@ -199,25 +231,25 @@ function stripEmptySourceAttributes(node: DocumentContent): DocumentContent {
 
 function sourceFromNode(
   node: DocumentContent | undefined,
-): ReturnType<typeof decodeInkwellSource> {
+): ReturnType<typeof decodeJottathingSource> {
   if (!node) {
     return null;
   }
 
-  const nodeSource = decodeInkwellSource(node.attrs?.[INKWELL_SOURCE_ATTR]);
+  const nodeSource = decodeJottathingSource(node.attrs?.[JOTTATHING_SOURCE_ATTR]);
   if (nodeSource) {
     return nodeSource;
   }
 
   for (const mark of node.marks ?? []) {
-    const markSource = decodeInkwellSource(mark.attrs?.[INKWELL_SOURCE_ATTR]);
+    const markSource = decodeJottathingSource(mark.attrs?.[JOTTATHING_SOURCE_ATTR]);
     if (markSource) {
       return markSource;
     }
   }
 
   for (const child of node.content ?? []) {
-    const childSource: ReturnType<typeof decodeInkwellSource> = sourceFromNode(child);
+    const childSource: ReturnType<typeof decodeJottathingSource> = sourceFromNode(child);
     if (childSource) {
       return childSource;
     }
@@ -240,7 +272,7 @@ function sourceFromSourceParagraph(
 function sourceFromLink(
   node: DocumentContent,
   sourceText: string,
-): ReturnType<typeof decodeInkwellSource> {
+): ReturnType<typeof decodeJottathingSource> {
   for (const mark of node.marks ?? []) {
     const href = mark.type === 'link' ? mark.attrs?.href : undefined;
     const payload = sourcePayloadFromHref(href, sourceText);
@@ -301,8 +333,8 @@ function textFromDocumentNode(node: DocumentContent): string {
   return (node.content ?? []).map(textFromDocumentNode).join('');
 }
 
-export function createInkwellBlockId() {
-  return `inkwell-block-${globalThis.crypto?.randomUUID?.() ?? fallbackId()}`;
+export function createJottathingBlockId() {
+  return `jottathing-block-${globalThis.crypto?.randomUUID?.() ?? fallbackId()}`;
 }
 
 function fallbackId() {

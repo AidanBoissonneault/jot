@@ -1,24 +1,29 @@
 import type { DocumentContent } from '../types/capture.js';
 
-export const SOURCE_REGISTRY_PREFIX = 'inkwell_sources_v1:';
-export const SOURCE_ENTRY_PREFIX = 'inkwell_source_v1:';
+export const SOURCE_REGISTRY_PREFIX = 'jottathing_sources_v1:';
+export const LEGACY_SOURCE_REGISTRY_PREFIX = 'inkwell_sources_v1:';
+export const SOURCE_ENTRY_PREFIX = 'jottathing_source_v1:';
+export const LEGACY_SOURCE_ENTRY_PREFIX = 'inkwell_source_v1:';
 export const SOURCE_BLOCK_ID_PREFIX = 'source:';
-export const SOURCE_V2_PREFIX = 'inkwell_source_v2:';
-export const LINKS_V1_PREFIX = 'inkwell_links_v1:';
+export const SOURCE_V2_PREFIX = 'jottathing_source_v2:';
+export const LEGACY_SOURCE_V2_PREFIX = 'inkwell_source_v2:';
+export const LINKS_V1_PREFIX = 'jottathing_links_v1:';
+export const LEGACY_LINKS_V1_PREFIX = 'inkwell_links_v1:';
 
-/** Removes source entries that point to Inkwell blocks which no longer exist. */
+/** Removes source entries that point to Jottathing blocks which no longer exist. */
 export function pruneOrphanedProjectStateSources(
   stateContent: DocumentContent,
-  existingInkwellBlockIds: ReadonlySet<string>,
+  existingJottathingBlockIds: ReadonlySet<string>,
 ): DocumentContent {
   let changed = false;
   let hasUnparsedSourceV2 = false;
   const sourceV2Nodes: Array<{ node: DocumentContent; source: SourceV2 }> = [];
   const content = (stateContent.content ?? []).flatMap((node) => {
     const text = codeBlockText(node);
-    if (text?.startsWith(SOURCE_V2_PREFIX)) {
-      const source = parseSourceV2(text.slice(SOURCE_V2_PREFIX.length));
-      if (source?.inkwellBlockId && !existingInkwellBlockIds.has(source.inkwellBlockId)) {
+    const sourceV2Payload = text ? prefixedPayload(text, SOURCE_V2_PREFIX, LEGACY_SOURCE_V2_PREFIX) : undefined;
+    if (sourceV2Payload !== undefined) {
+      const source = parseSourceV2(sourceV2Payload);
+      if (source?.jottathingBlockId && !existingJottathingBlockIds.has(source.jottathingBlockId)) {
         changed = true;
         return [];
       }
@@ -27,21 +32,23 @@ export function pruneOrphanedProjectStateSources(
       return [node];
     }
 
-    if (text?.startsWith(SOURCE_ENTRY_PREFIX)) {
-      const blockId = sourceEntryBlockId(text);
-      if (blockId && !existingInkwellBlockIds.has(blockId)) {
+    const sourceEntryPayload = text ? prefixedPayload(text, SOURCE_ENTRY_PREFIX, LEGACY_SOURCE_ENTRY_PREFIX) : undefined;
+    if (sourceEntryPayload !== undefined) {
+      const blockId = sourceEntryBlockId(sourceEntryPayload);
+      if (blockId && !existingJottathingBlockIds.has(blockId)) {
         changed = true;
         return [];
       }
       return [node];
     }
 
-    if (!text?.startsWith(SOURCE_REGISTRY_PREFIX)) return [node];
-    const registry = parseRegistry(text.slice(SOURCE_REGISTRY_PREFIX.length));
+    const registryPayload = text ? prefixedPayload(text, SOURCE_REGISTRY_PREFIX, LEGACY_SOURCE_REGISTRY_PREFIX) : undefined;
+    if (registryPayload === undefined) return [node];
+    const registry = parseRegistry(registryPayload);
     if (!registry) return [node];
 
     const retained = Object.fromEntries(Object.entries(registry)
-      .filter(([blockId]) => existingInkwellBlockIds.has(blockId)));
+      .filter(([blockId]) => existingJottathingBlockIds.has(blockId)));
     if (Object.keys(retained).length === Object.keys(registry).length) return [node];
 
     changed = true;
@@ -66,9 +73,10 @@ export function pruneOrphanedProjectStateSources(
   const sourceV2Replacements = new Map<DocumentContent, DocumentContent>();
   const contentWithLinks = content.flatMap((node) => {
     const text = codeBlockText(node);
-    if (!text?.startsWith(LINKS_V1_PREFIX)) return [node];
+    const linksPayload = text ? prefixedPayload(text, LINKS_V1_PREFIX, LEGACY_LINKS_V1_PREFIX) : undefined;
+    if (linksPayload === undefined) return [node];
 
-    const links = parseLinks(text.slice(LINKS_V1_PREFIX.length));
+    const links = parseLinks(linksPayload);
     if (!links) return [node];
     if (hasUnparsedSourceV2) return [node];
     if (!liveSourceNodes.size || !linkRefs.length) {
@@ -77,7 +85,7 @@ export function pruneOrphanedProjectStateSources(
     }
 
     // The source v2 records point into this URL array by numeric index. Keep
-    // only URLs still referenced by a live Inkwell block, and rewrite those
+    // only URLs still referenced by a live Jottathing block, and rewrite those
     // indexes when removing gaps from the array.
     const referencedIndexes = [...new Set(linkRefs)].sort((first, second) => first - second);
     if (referencedIndexes.some((index) => index >= links.length)) return [node];
@@ -115,21 +123,24 @@ export function pruneOrphanedProjectStateSources(
     : stateContent;
 }
 
-/** Reads captured Inkwell block IDs referenced by one project-state source node. */
+/** Reads captured Jottathing block IDs referenced by one project-state source node. */
 export function projectStateSourceBlockIds(node: DocumentContent): string[] {
   const text = codeBlockText(node);
-  if (text?.startsWith(SOURCE_ENTRY_PREFIX)) {
-    const blockId = sourceEntryBlockId(text);
+  const sourceEntryPayload = text ? prefixedPayload(text, SOURCE_ENTRY_PREFIX, LEGACY_SOURCE_ENTRY_PREFIX) : undefined;
+  if (sourceEntryPayload !== undefined) {
+    const blockId = sourceEntryBlockId(sourceEntryPayload);
     return blockId ? [blockId] : [];
   }
 
-  if (text?.startsWith(SOURCE_V2_PREFIX)) {
-    const source = parseSourceV2(text.slice(SOURCE_V2_PREFIX.length));
-    return source?.inkwellBlockId ? [source.inkwellBlockId] : [];
+  const sourceV2Payload = text ? prefixedPayload(text, SOURCE_V2_PREFIX, LEGACY_SOURCE_V2_PREFIX) : undefined;
+  if (sourceV2Payload !== undefined) {
+    const source = parseSourceV2(sourceV2Payload);
+    return source?.jottathingBlockId ? [source.jottathingBlockId] : [];
   }
 
-  if (text?.startsWith(SOURCE_REGISTRY_PREFIX)) {
-    const registry = parseRegistry(text.slice(SOURCE_REGISTRY_PREFIX.length));
+  const registryPayload = text ? prefixedPayload(text, SOURCE_REGISTRY_PREFIX, LEGACY_SOURCE_REGISTRY_PREFIX) : undefined;
+  if (registryPayload !== undefined) {
+    const registry = parseRegistry(registryPayload);
     return registry ? Object.keys(registry) : [];
   }
 
@@ -137,22 +148,29 @@ export function projectStateSourceBlockIds(node: DocumentContent): string[] {
 }
 
 type SourceV2 = {
-  inkwellBlockId?: string;
+  jottathingBlockId?: string;
   source: Record<string, unknown> & { u?: unknown };
 };
 
+function prefixedPayload(text: string, prefix: string, legacyPrefix: string): string | undefined {
+  if (text.startsWith(prefix)) return text.slice(prefix.length);
+  if (text.startsWith(legacyPrefix)) return text.slice(legacyPrefix.length);
+  return undefined;
+}
+
 function parseSourceV2(value: string): SourceV2 | undefined {
   try {
-    const parsed = JSON.parse(value) as { i?: unknown; s?: unknown };
+    const parsed = JSON.parse(value) as { i?: unknown; s?: unknown; inkwellBlockId?: unknown };
+    const blockId = parsed.i ?? parsed.inkwellBlockId;
     if (
-      typeof parsed.i !== 'string' ||
-      !parsed.i ||
+      typeof blockId !== 'string' ||
+      !blockId ||
       !parsed.s ||
       typeof parsed.s !== 'object' ||
       Array.isArray(parsed.s)
     ) return undefined;
     return {
-      inkwellBlockId: parsed.i,
+      jottathingBlockId: blockId,
       source: parsed.s as Record<string, unknown> & { u?: unknown },
     };
   } catch {
@@ -179,10 +197,11 @@ function replaceCodeBlockText(node: DocumentContent, text: string): DocumentCont
   };
 }
 
-function sourceEntryBlockId(text: string): string | undefined {
+function sourceEntryBlockId(payload: string): string | undefined {
   try {
-    const value = JSON.parse(text.slice(SOURCE_ENTRY_PREFIX.length)) as { blockId?: unknown };
-    return typeof value.blockId === 'string' && value.blockId ? value.blockId : undefined;
+    const value = JSON.parse(payload) as { blockId?: unknown; inkwellBlockId?: unknown };
+    const blockId = value.blockId ?? value.inkwellBlockId;
+    return typeof blockId === 'string' && blockId ? blockId : undefined;
   } catch {
     return undefined;
   }

@@ -1,11 +1,11 @@
 import type { ComputedRef, Ref } from 'vue';
-import type { useInkwellStore } from '@/src/stores/inkwell';
+import type { useJottathingStore } from '@/src/stores/jottathing';
 
-type InkwellStore = ReturnType<typeof useInkwellStore>;
+type JottathingStore = ReturnType<typeof useJottathingStore>;
 
 /** State and operations supplied by the sidepanel to the settings view. */
 export interface SettingsPageContext {
-  store: InkwellStore;
+  store: JottathingStore;
   projectStateDraft: Ref<string>;
   isResyncing: Ref<boolean>;
   saveProjectMetadata: () => Promise<void>;

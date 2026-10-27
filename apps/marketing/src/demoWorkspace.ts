@@ -2,7 +2,7 @@
 import { idbGetMany, idbSet, idbSetMany } from '../../../src/services/idbStore';
 import type { DocumentContent, Project, ProjectPage } from '../../../src/types/capture';
 
-const preparedKey = '__inkwell_marketing_demo_names_v1__';
+const preparedKey = '__jottathing_marketing_demo_names_v1__';
 const workspaceKeys = [
   'projects',
   'pages',
@@ -18,14 +18,14 @@ function emptyDocument(): DocumentContent {
 
 function createDemoProject(now: string): Project {
   return {
-    id: 'project-inkwell',
+    id: 'project-jottathing',
     name: 'Demo',
     status: 'active',
     category: 'General',
     createdAt: now,
     updatedAt: now,
     stateContent: emptyDocument(),
-    tags: ['inkwell'],
+    tags: ['jottathing'],
     syncState: 'saved',
   };
 }
@@ -68,7 +68,7 @@ export async function prepareDemoWorkspace(): Promise<void> {
     : '';
   const project = activeProjects.find((item) => item.id === storedProjectId) ?? activeProjects[0]!;
 
-  if (project.name === 'Inkwell') {
+  if (project.name === 'Jottathing') {
     const renamedProject = { ...project, name: 'Demo', updatedAt: now };
     projects = projects.map((item) => item.id === project.id ? renamedProject : item);
   }

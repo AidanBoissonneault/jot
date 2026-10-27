@@ -1,7 +1,7 @@
 import { vi } from 'vitest';
 
 type StorageData = Record<string, unknown>;
-const IDB_WRITE_CONTROL_KEY = '__inkwell_write_control__';
+const IDB_WRITE_CONTROL_KEY = '__jottathing_write_control__';
 
 // --- IndexedDB mock ---
 

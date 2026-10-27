@@ -4,7 +4,7 @@ import { mountSidepanel } from '../../../entrypoints/sidepanel/bootstrap';
 import './style.css';
 
 await prepareDemoWorkspace();
-mountSidepanel('#inkwell-demo-root');
+mountSidepanel('#jottathing-demo-root');
 
 const pageSplit = document.querySelector<HTMLElement>('.page-split');
 const splitter = document.querySelector<HTMLElement>('#split-divider');
@@ -113,7 +113,7 @@ captureButton?.addEventListener('click', async () => {
   if (!text) return;
 
   const result = await window.browser.runtime.sendMessage({
-    type: 'inkwell.insertCaptureRequest',
+    type: 'jottathing.insertCaptureRequest',
     payload: {
       text,
       sourceUrl: window.location.href,

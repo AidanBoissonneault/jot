@@ -4,7 +4,7 @@
  * @lastModified September 2026
  */
 import {
-  INKWELL_DATABASE_TITLE,
+  JOTTATHING_DATABASE_TITLE,
   PROJECT_PROPERTIES,
   activeProjectsView,
   allProjectsView,
@@ -18,11 +18,12 @@ import {
   projectSchema,
   propertyIdMap,
   richText,
+  richTextProperty,
   titleFromDatabase,
   titleFromPage,
 } from './projectDatabaseValues.js';
 import type {
-  InkwellDatabase,
+  JottathingDatabase,
   JsonObject,
   NotionObject,
   NotionRequester,
@@ -65,17 +66,18 @@ export function createProjectDatabaseDiscoveryHelpers({
   isNotionObjectNotFound,
   notionRequest,
 }: ProjectDatabaseDiscoveryDependencies) {
+  const legacyDatabaseTitles = ['Inkwell', 'Jot'];
   /** Ensures the managed project database exists. @param store - Worker state. @param options - Parent selection. @returns Active database. */
   async function ensureProjectDatabase(
     store: WorkerStore,
     { selectedParentPageId, readOnly = false }: ParentSelection = { selectedParentPageId: undefined },
-  ): Promise<InkwellDatabase> {
+  ): Promise<JottathingDatabase> {
     store.projectPages ??= {};
     store.projectBlocks ??= {};
     store.threadBlocks ??= {};
     store.blockMappings ??= {};
-    const ignoredDatabaseIds = store.ignoredInkwellDatabaseIds ?? new Set();
-    const stored = store.inkwellDatabase;
+    const ignoredDatabaseIds = store.ignoredJottathingDatabaseIds ?? new Set();
+    const stored = store.jottathingDatabase;
 
     if (
       stored?.databaseId &&
@@ -94,14 +96,14 @@ export function createProjectDatabaseDiscoveryHelpers({
     // previously cached database under another parent; each installation can
     // otherwise keep reading a different project/page inventory indefinitely.
     if (selectedParentPageId) {
-      store.inkwellDatabase = undefined;
+      store.jottathingDatabase = undefined;
     }
 
     if (!selectedParentPageId) {
       const foundAccessible = await findExistingDatabase(store, { ignoredDatabaseIds });
 
       if (foundAccessible) {
-        store.inkwellDatabase = foundAccessible;
+        store.jottathingDatabase = foundAccessible;
         await ensureProjectSchema(store, foundAccessible.dataSourceId);
         await ensureProjectViews(store, foundAccessible);
         appendLog(store, 'project_database_adopted', foundAccessible.title);
@@ -117,7 +119,7 @@ export function createProjectDatabaseDiscoveryHelpers({
       : undefined;
 
     if (found) {
-      store.inkwellDatabase = found;
+      store.jottathingDatabase = found;
       await ensureProjectSchema(store, found.dataSourceId);
       await ensureProjectViews(store, found);
       appendLog(store, 'project_database_adopted', found.title);
@@ -127,7 +129,7 @@ export function createProjectDatabaseDiscoveryHelpers({
     const created = await createProjectDatabaseWithFallback(store, parentPage?.id, {
       ignoredDatabaseIds,
     });
-    store.inkwellDatabase = created;
+    store.jottathingDatabase = created;
     await ensureProjectViews(store, created);
     appendLog(store, 'project_database_created', created.title);
     return created;
@@ -141,13 +143,13 @@ export function createProjectDatabaseDiscoveryHelpers({
     if (selectedParentPageId) {
       try {
         const page = await notionRequest(store, `/pages/${selectedParentPageId}`);
-        store.inkwellRootPage = {
+        store.jottathingRootPage = {
           id: page.id,
           parentPageId: undefined,
-          title: titleFromPage(page) || INKWELL_DATABASE_TITLE,
+          title: titleFromPage(page) || JOTTATHING_DATABASE_TITLE,
           url: page.url,
         };
-        return store.inkwellRootPage;
+        return store.jottathingRootPage;
       } catch (error) {
         if (!isNotionObjectNotFound(error) && !isBlockNotPageError(error)) {
           throw error;
@@ -162,38 +164,38 @@ export function createProjectDatabaseDiscoveryHelpers({
       return undefined;
     }
 
-    if (store.inkwellRootPage?.id) {
+    if (store.jottathingRootPage?.id) {
       try {
-        const page = await notionRequest(store, `/pages/${store.inkwellRootPage.id}`);
-        store.inkwellRootPage = {
+        const page = await notionRequest(store, `/pages/${store.jottathingRootPage.id}`);
+        store.jottathingRootPage = {
           id: page.id,
           parentPageId: undefined,
-          title: titleFromPage(page) || store.inkwellRootPage.title || INKWELL_DATABASE_TITLE,
+          title: titleFromPage(page) || store.jottathingRootPage.title || JOTTATHING_DATABASE_TITLE,
           url: page.url,
         };
-        return store.inkwellRootPage;
+        return store.jottathingRootPage;
       } catch {
         // Recreate below.
       }
     }
 
-    const page = await createWorkspacePage(store, INKWELL_DATABASE_TITLE);
-    store.inkwellRootPage = {
+    const page = await createWorkspacePage(store, JOTTATHING_DATABASE_TITLE);
+    store.jottathingRootPage = {
       id: page.id,
       parentPageId: undefined,
-      title: titleFromPage(page) || INKWELL_DATABASE_TITLE,
+      title: titleFromPage(page) || JOTTATHING_DATABASE_TITLE,
       url: page.url,
     };
-    appendLog(store, 'database_parent_created', store.inkwellRootPage.title);
-    return store.inkwellRootPage;
+    appendLog(store, 'database_parent_created', store.jottathingRootPage.title);
+    return store.jottathingRootPage;
   }
 
   /** Refreshes a stored database. @param store - Worker state. @param stored - Stored summary. @returns Refreshed summary. */
   async function refreshDatabase(
     store: WorkerStore,
-    stored: InkwellDatabase,
+    stored: JottathingDatabase,
     readOnly = false,
-  ): Promise<InkwellDatabase | undefined> {
+  ): Promise<JottathingDatabase | undefined> {
     try {
       const database = await notionRequest(store, `/databases/${stored.databaseId}`);
 
@@ -212,7 +214,7 @@ export function createProjectDatabaseDiscoveryHelpers({
         dataSourceId,
         parentPageIdFromObject(database) ?? stored.parentPageId,
       );
-      store.inkwellDatabase = refreshed;
+      store.jottathingDatabase = refreshed;
       if (!readOnly) {
         await ensureProjectSchema(store, dataSourceId);
         await ensureProjectViews(store, refreshed);
@@ -224,7 +226,7 @@ export function createProjectDatabaseDiscoveryHelpers({
       // A missing/removed database is recoverable by discovery. Rate limits,
       // network errors, and other transient failures are not evidence that the
       // saved database is wrong; abandoning it can silently select or create a
-      // different Inkwell database.
+      // different Jottathing database.
       if (isNotionObjectNotFound(error)) {
         return undefined;
       }
@@ -237,47 +239,44 @@ export function createProjectDatabaseDiscoveryHelpers({
   async function findExistingDatabase(
     store: WorkerStore,
     { parentPageId, ignoredDatabaseIds = new Set<string>() }: Partial<DatabaseSearchOptions> = {},
-  ): Promise<InkwellDatabase | undefined> {
-    const databases = [];
-    let cursor;
-    const seenCursors = new Set<string>();
+  ): Promise<JottathingDatabase | undefined> {
+    const databases: NotionObject[] = [];
+    const seenDatabaseIds = new Set<string>();
+    for (const query of [JOTTATHING_DATABASE_TITLE, ...legacyDatabaseTitles]) {
+      let cursor: string | undefined;
+      const seenCursors = new Set<string>();
+      do {
+        const body: JsonObject = {
+          query,
+          page_size: 100,
+          filter: { property: 'object', value: 'database' },
+        };
+        if (cursor) body.start_cursor = cursor;
 
-    do {
-      const body: JsonObject = {
-        query: INKWELL_DATABASE_TITLE,
-        page_size: 100,
-        filter: {
-          property: 'object',
-          value: 'database',
-        },
-      };
-
-      if (cursor) {
-        body.start_cursor = cursor;
-      }
-
-      // Discovery failures must stop the operation. Treating an API failure as
-      // an empty result would create a duplicate database and split user data.
-      const response = await notionRequest(store, '/search', {
-        method: 'POST',
-        body,
-      });
-
-      if (!Array.isArray(response.results)) {
-        throw new Error('Notion returned an invalid database search result.');
-      }
-      databases.push(...response.results);
-      if (response.has_more) {
-        const nextCursor = response.next_cursor;
-        if (!nextCursor || seenCursors.has(nextCursor)) {
-          throw new Error('Notion returned an incomplete database search result.');
+        // Discovery failures must stop the operation. Treating an API failure
+        // as empty would create a duplicate database and split user data.
+        const response = await notionRequest(store, '/search', { method: 'POST', body });
+        if (!Array.isArray(response.results)) {
+          throw new Error('Notion returned an invalid database search result.');
         }
-        seenCursors.add(nextCursor);
-        cursor = nextCursor;
-      } else {
-        cursor = undefined;
-      }
-    } while (cursor);
+        for (const database of response.results) {
+          if (!seenDatabaseIds.has(database.id)) {
+            seenDatabaseIds.add(database.id);
+            databases.push(database);
+          }
+        }
+        if (response.has_more) {
+          const nextCursor = response.next_cursor;
+          if (!nextCursor || seenCursors.has(nextCursor)) {
+            throw new Error('Notion returned an incomplete database search result.');
+          }
+          seenCursors.add(nextCursor);
+          cursor = nextCursor;
+        } else {
+          cursor = undefined;
+        }
+      } while (cursor);
+    }
 
     const candidates = [];
 
@@ -287,7 +286,7 @@ export function createProjectDatabaseDiscoveryHelpers({
       if (
         !ignoredDatabaseIds.has(database.id) &&
         !isArchivedObject(database) &&
-        titleFromDatabase(database) === INKWELL_DATABASE_TITLE &&
+        [JOTTATHING_DATABASE_TITLE, ...legacyDatabaseTitles].includes(titleFromDatabase(database)) &&
         (parentPageId === undefined || parentPageIdFromObject(database) === parentPageId) &&
         dataSourceId
       ) {
@@ -303,13 +302,20 @@ export function createProjectDatabaseDiscoveryHelpers({
     candidates.sort(compareDatabaseCandidates);
     const selected = candidates[0];
 
-    return selected
-      ? databaseSummary(
-          selected.database,
-          selected.dataSourceId,
-          parentPageId ?? parentPageIdFromObject(selected.database),
-        )
-      : undefined;
+    if (!selected) return undefined;
+
+    let database = selected.database;
+    if (titleFromDatabase(database) !== JOTTATHING_DATABASE_TITLE) {
+      database = await notionRequest(store, `/databases/${database.id}`, {
+        method: 'PATCH',
+        body: { title: richText(JOTTATHING_DATABASE_TITLE) },
+      });
+    }
+    return databaseSummary(
+      database,
+      selected.dataSourceId,
+      parentPageId ?? parentPageIdFromObject(database),
+    );
   }
 
   /** Counts mapped projects. @param store - Worker state. @param databaseId - Database ID. @returns Mapping count. */
@@ -326,11 +332,20 @@ export function createProjectDatabaseDiscoveryHelpers({
     const seenCursors = new Set<string>();
 
     try {
+      const schema = await notionRequest(store, `/data_sources/${dataSourceId}`);
+      const properties = schema.properties ?? {};
+      const managedProperty = properties[PROJECT_PROPERTIES.managed]
+        ? PROJECT_PROPERTIES.managed
+        : properties['Managed by Inkwell']
+          ? 'Managed by Inkwell'
+          : properties['Managed by Jot']
+            ? 'Managed by Jot'
+            : PROJECT_PROPERTIES.managed;
       do {
         const body: JsonObject = {
           page_size: 100,
           filter: {
-            property: PROJECT_PROPERTIES.managed,
+            property: managedProperty,
             checkbox: { equals: true },
           },
         };
@@ -361,12 +376,12 @@ export function createProjectDatabaseDiscoveryHelpers({
 
       return count;
     } catch (error) {
-      // A same-named, non-Inkwell database will not have the managed property.
+      // A same-named, non-Jottathing database will not have the managed property.
       // Other failures may be transient, so abort discovery instead of making a
       // guess that could split data across databases.
       if (
         errorCode(error) === 'validation_error' &&
-        /managed by inkwell|property/i.test(errorMessage(error))
+        /managed by jottathing|property/i.test(errorMessage(error))
       ) {
         return -1;
       }
@@ -403,7 +418,7 @@ export function createProjectDatabaseDiscoveryHelpers({
     {
       ignoredDatabaseIds = new Set<string>(),
     }: Partial<Pick<DatabaseSearchOptions, 'ignoredDatabaseIds'>> = {},
-  ): Promise<InkwellDatabase> {
+  ): Promise<JottathingDatabase> {
     if (parentPageId) {
       return createProjectDatabase(store, parentPageId);
     }
@@ -420,7 +435,7 @@ export function createProjectDatabaseDiscoveryHelpers({
 
       const parentPage = await ensureDatabaseParentPage(store);
       if (!parentPage) {
-        throw new Error('Unable to create a parent page for the Inkwell database.');
+        throw new Error('Unable to create a parent page for the Jottathing database.');
       }
       return createProjectDatabase(store, parentPage.id);
     }
@@ -430,12 +445,12 @@ export function createProjectDatabaseDiscoveryHelpers({
   async function createProjectDatabase(
     store: WorkerStore,
     parentPageId: string | undefined = undefined,
-  ): Promise<InkwellDatabase> {
+  ): Promise<JottathingDatabase> {
     const database = await notionRequest(store, '/databases', {
       method: 'POST',
       body: {
         parent: databaseParent(parentPageId),
-        title: richText(INKWELL_DATABASE_TITLE),
+        title: richText(JOTTATHING_DATABASE_TITLE),
         is_inline: false,
         initial_data_source: {
           title: richText('Projects'),
@@ -449,7 +464,7 @@ export function createProjectDatabaseDiscoveryHelpers({
     const dataSourceId = firstDataSourceId(fullDatabase) ?? firstDataSourceId(database);
 
     if (!dataSourceId) {
-      throw new Error('Notion did not return a data source for the Inkwell database.');
+      throw new Error('Notion did not return a data source for the Jottathing database.');
     }
 
     return databaseSummary(fullDatabase, dataSourceId, parentPageId);
@@ -473,10 +488,84 @@ export function createProjectDatabaseDiscoveryHelpers({
         body: { properties: missing },
       });
     }
+
+    if (
+      properties['Inkwell ID'] || properties['Jot ID'] ||
+      properties['Managed by Inkwell'] || properties['Managed by Jot']
+    ) {
+      await migrateLegacyProjectProperties(store, dataSourceId, properties);
+    }
+  }
+
+  /** Copies legacy managed fields forward before the renamed fields are used for queries. */
+  async function migrateLegacyProjectProperties(
+    store: WorkerStore,
+    dataSourceId: string,
+    properties: Record<string, JsonObject>,
+  ): Promise<void> {
+    const legacyIdName = properties['Inkwell ID']
+      ? 'Inkwell ID'
+      : properties['Jot ID']
+        ? 'Jot ID'
+        : undefined;
+    const legacyId = legacyIdName ? properties[legacyIdName] : undefined;
+    const legacyManagedName = properties['Managed by Inkwell']
+      ? 'Managed by Inkwell'
+      : properties['Managed by Jot']
+        ? 'Managed by Jot'
+        : undefined;
+    if (!legacyId && !legacyManagedName) return;
+
+    let cursor: string | undefined;
+    const seenCursors = new Set<string>();
+    do {
+      const body: JsonObject = { page_size: 100 };
+      if (cursor) body.start_cursor = cursor;
+      const response = await notionRequest(store, `/data_sources/${dataSourceId}/query`, {
+        method: 'POST',
+        body,
+      });
+      if (!Array.isArray(response.results)) {
+        throw new Error('Notion returned an invalid legacy project-property migration page.');
+      }
+      for (const page of response.results) {
+        const pageProperties = page.properties ?? {};
+        const updates: JsonObject = {};
+        if (
+          legacyId && !richTextProperty(pageProperties[PROJECT_PROPERTIES.jottathingId]).trim()
+        ) {
+          const idValue = legacyIdName ? richTextProperty(pageProperties[legacyIdName]) : '';
+          if (idValue) updates[PROJECT_PROPERTIES.jottathingId] = { rich_text: richText(idValue) };
+        }
+        if (
+          legacyManagedName &&
+          checkboxValue(pageProperties[legacyManagedName]) &&
+          !checkboxValue(pageProperties[PROJECT_PROPERTIES.managed])
+        ) {
+          updates[PROJECT_PROPERTIES.managed] = { checkbox: true };
+        }
+        if (Object.keys(updates).length) {
+          await notionRequest(store, `/pages/${page.id}`, {
+            method: 'PATCH',
+            body: { properties: updates },
+          });
+        }
+      }
+      if (response.has_more) {
+        const nextCursor = response.next_cursor;
+        if (!nextCursor || seenCursors.has(nextCursor)) {
+          throw new Error('Notion returned an incomplete legacy project-property migration.');
+        }
+        seenCursors.add(nextCursor);
+        cursor = nextCursor;
+      } else {
+        cursor = undefined;
+      }
+    } while (cursor);
   }
 
   /** Adds missing managed views. @param store - Worker state. @param database - Database summary. @returns Completion promise. */
-  async function ensureProjectViews(store: WorkerStore, database: InkwellDatabase): Promise<void> {
+  async function ensureProjectViews(store: WorkerStore, database: JottathingDatabase): Promise<void> {
     const existing = await listViews(store, database.databaseId);
     const existingNames = new Set(
       existing.map((view) => stringProperty(view, 'name')).filter(isString),
@@ -511,7 +600,7 @@ export function createProjectDatabaseDiscoveryHelpers({
 
       if (created?.id) {
         database.views[viewName] = created.id;
-        store.inkwellDatabase = database;
+        store.jottathingDatabase = database;
       }
     }
   }
@@ -556,6 +645,10 @@ function stringProperty(value: unknown, key: string): string | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
   const property: unknown = (value as JsonObject)[key];
   return typeof property === 'string' ? property : undefined;
+}
+
+function checkboxValue(property: JsonObject | undefined): boolean {
+  return property?.checkbox === true;
 }
 
 function isString(value: string | undefined): value is string {

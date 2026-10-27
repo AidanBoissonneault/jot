@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 /** Presents the ServerSettingsSection settings section; the parent owns the shared settings state. */
 import type { SettingsPageContext } from './settingsPageContext';
 
@@ -28,7 +28,7 @@ const { serverUrlDraft, saveServerUrl } = props.context;
       </button>
     </form>
     <p id="server-security-note" class="server-security-note">
-      Only use a server you control or trust. It receives Inkwell authentication data and any content you sync to it. HTTPS is required outside localhost development.
+      Only use a server you control or trust. It receives Jottathing authentication data and any content you sync to it. HTTPS is required outside localhost development.
     </p>
   </div>
 </template>

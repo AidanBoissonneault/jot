@@ -193,13 +193,13 @@ onUnmounted(() => {
   align-items: center;
   gap: 6px;
   padding: 5px 10px;
-  background: var(--inkwell-surface);
-  border: 1px solid var(--inkwell-border);
+  background: var(--jottathing-surface);
+  border: 1px solid var(--jottathing-border);
   border-radius: 20px;
-  box-shadow: var(--inkwell-shadow);
+  box-shadow: var(--jottathing-shadow);
   font-size: 12px;
   font-variant-numeric: tabular-nums;
-  color: var(--inkwell-text);
+  color: var(--jottathing-text);
 }
 
 .rec-dot {
@@ -227,7 +227,7 @@ onUnmounted(() => {
 .waveform-bar {
   display: block;
   width: 2px;
-  background: var(--inkwell-accent);
+  background: var(--jottathing-accent);
   border-radius: 1px;
   transition: height 80ms ease;
   min-height: 3px;
@@ -235,20 +235,20 @@ onUnmounted(() => {
 
 .elapsed {
   font-size: 12px;
-  color: var(--inkwell-muted);
+  color: var(--jottathing-muted);
   min-width: 3ch;
 }
 
 /* Hint text */
 .recorder-hint {
   font-size: 11px;
-  color: var(--inkwell-muted);
+  color: var(--jottathing-muted);
   white-space: nowrap;
-  background: var(--inkwell-surface);
-  border: 1px solid var(--inkwell-border);
+  background: var(--jottathing-surface);
+  border: 1px solid var(--jottathing-border);
   border-radius: 20px;
   padding: 4px 10px;
-  box-shadow: var(--inkwell-shadow);
+  box-shadow: var(--jottathing-shadow);
 }
 
 /* Mic button */
@@ -256,9 +256,9 @@ onUnmounted(() => {
   width: 36px;
   height: 36px;
   border-radius: 50%;
-  border: 1px solid var(--inkwell-border);
-  background: var(--inkwell-surface);
-  color: var(--inkwell-muted);
+  border: 1px solid var(--jottathing-border);
+  background: var(--jottathing-surface);
+  color: var(--jottathing-muted);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -272,8 +272,8 @@ onUnmounted(() => {
 .mic-button:hover:not(:disabled) {
   box-shadow: 0 4px 14px rgb(17 17 19 / 14%);
   transform: translateY(-1px);
-  color: var(--inkwell-accent);
-  border-color: var(--inkwell-accent);
+  color: var(--jottathing-accent);
+  border-color: var(--jottathing-accent);
 }
 
 .mic-button.recording {

@@ -19,7 +19,7 @@ function updateAccepted(event: Event) {
 <template>
   <div class="legal-disclosure">
     <p>
-      Notion sync is optional. Inkwell can stay local to this device indefinitely. If you connect
+      Notion sync is optional. Jottathing can stay local to this device indefinitely. If you connect
       later, your complete local workspace is uploaded first, then future changes use normal online
       and offline syncing.
     </p>

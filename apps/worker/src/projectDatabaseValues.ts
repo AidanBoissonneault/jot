@@ -5,9 +5,9 @@
  */
 
 import type { DocumentContent, NotionParentPage, Project } from '../../../src/types/capture.js';
-import type { InkwellDatabase, JsonObject, NotionObject, NotionRichText } from './types.js';
+import type { JottathingDatabase, JsonObject, NotionObject, NotionRichText } from './types.js';
 
-export const INKWELL_DATABASE_TITLE = 'Inkwell';
+export const JOTTATHING_DATABASE_TITLE = 'Jottathing';
 export const PROJECT_STATE_BLOCK_KEY = 'project-state';
 export const PROJECT_PROPERTIES = {
   title: 'Name',
@@ -17,8 +17,8 @@ export const PROJECT_PROPERTIES = {
   updated: 'Updated',
   createdBy: 'Created by',
   lastEditedBy: 'Last edited by',
-  inkwellId: 'Inkwell ID',
-  managed: 'Managed by Inkwell',
+  jottathingId: 'Jottathing ID',
+  managed: 'Managed by Jottathing',
 } as const;
 
 /**
@@ -36,13 +36,13 @@ export function projectProperties(project: Project): JsonObject {
     [PROJECT_PROPERTIES.category]: { select: category ? { name: category } : null },
     [PROJECT_PROPERTIES.created]: { date: { start: createdAt } },
     [PROJECT_PROPERTIES.updated]: { date: { start: updatedAt } },
-    [PROJECT_PROPERTIES.inkwellId]: { rich_text: [{ text: { content: project.id } }] },
+    [PROJECT_PROPERTIES.jottathingId]: { rich_text: [{ text: { content: project.id } }] },
     [PROJECT_PROPERTIES.managed]: { checkbox: true },
   };
 }
 
 /**
- * Defines the complete managed schema for the Inkwell project database.
+ * Defines the complete managed schema for the Jottathing project database.
  * @returns Notion data-source property schema.
  */
 export function projectSchema(): JsonObject {
@@ -54,7 +54,7 @@ export function projectSchema(): JsonObject {
     [PROJECT_PROPERTIES.updated]: { date: {} },
     [PROJECT_PROPERTIES.createdBy]: { created_by: {} },
     [PROJECT_PROPERTIES.lastEditedBy]: { last_edited_by: {} },
-    [PROJECT_PROPERTIES.inkwellId]: { rich_text: {} },
+    [PROJECT_PROPERTIES.jottathingId]: { rich_text: {} },
     [PROJECT_PROPERTIES.managed]: { checkbox: {} },
   };
 }
@@ -166,13 +166,13 @@ export function databaseSummary(
   database: NotionObject,
   dataSourceId: string,
   parentPageId: string | undefined,
-): InkwellDatabase {
+): JottathingDatabase {
   return {
     databaseId: database.id,
     dataSourceId,
     parentPageId: parentPageId ?? parentPageIdFromObject(database),
     propertyIds: {},
-    title: titleFromDatabase(database) || INKWELL_DATABASE_TITLE,
+    title: titleFromDatabase(database) || JOTTATHING_DATABASE_TITLE,
     url: database.url,
     views: {},
   };
@@ -186,7 +186,7 @@ export function databaseSummary(
  */
 export function pageSummaryFromNotionPage(
   page: NotionObject,
-  database: InkwellDatabase,
+  database: JottathingDatabase,
 ): NotionParentPage {
   return { id: page.id, parentPageId: database.databaseId, title: titleFromPage(page), url: page.url };
 }

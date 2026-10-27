@@ -15,7 +15,7 @@ import {
   appendLog,
   importManagedBlocks,
   readProjectDatabaseStructure,
-  readInkwellSyncState,
+  readJottathingSyncState,
   reloadProjectDatabaseFromNotion,
   requireConnectedStore,
   retrieveNotionPageOrBlock,
@@ -263,7 +263,7 @@ export function registerSyncQueryRoutes(app: Hono<{ Bindings: WorkerEnv }>): voi
           syncState: 'stale',
         },
         status: 'stale',
-        message: 'Notion changed this page in a way Inkwell cannot safely import automatically.',
+        message: 'Notion changed this page in a way Jottathing cannot safely import automatically.',
       });
     }
   
@@ -305,7 +305,7 @@ export function registerSyncQueryRoutes(app: Hono<{ Bindings: WorkerEnv }>): voi
 /** Uses persisted queue payloads as the source of truth for active server work. */
 export async function hasPendingSyncQueuePayload(installationId: string | number): Promise<boolean> {
   const { data, error } = await supabase
-    .from('inkwell_sync_queue_payloads')
+    .from('jottathing_sync_queue_payloads')
     .select('id')
     .eq('installation_id', installationId)
     .eq('status', 'pending')

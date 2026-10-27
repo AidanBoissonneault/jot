@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { InkwellYoutube, youtubeEmbedUrl } from '@/src/extensions/media';
+import { JottathingYoutube, youtubeEmbedUrl } from '@/src/extensions/media';
 
 describe('media extensions', () => {
   it('does not treat hostnames that only end with youtu.be as YouTube links', () => {
@@ -19,16 +19,16 @@ describe('media extensions', () => {
   });
 
   it('renders YouTube nodes as privacy-enhanced embedded iframes', () => {
-    const renderHTML = InkwellYoutube.config.renderHTML;
+    const renderHTML = JottathingYoutube.config.renderHTML;
 
     if (!renderHTML) {
-      throw new Error('InkwellYoutube must render HTML');
+      throw new Error('JottathingYoutube must render HTML');
     }
 
     const html = renderHTML.call(
       {
-        name: InkwellYoutube.name,
-        options: InkwellYoutube.options,
+        name: JottathingYoutube.name,
+        options: JottathingYoutube.options,
         storage: {},
         parent: null,
       },

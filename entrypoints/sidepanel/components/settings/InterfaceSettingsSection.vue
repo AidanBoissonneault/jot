@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 /** Presents the InterfaceSettingsSection settings section; the parent owns the shared settings state. */
 import type { SettingsPageContext } from './settingsPageContext';
 import InterfaceScalePresets from '../lists/InterfaceScalePresets.vue';
@@ -21,7 +21,7 @@ const {
     <div class="settings-heading">
       <div>
         <h2>Interface</h2>
-        <p>Make Inkwell comfortable to read and use.</p>
+        <p>Make Jottathing comfortable to read and use.</p>
       </div>
       <span class="setting-value" aria-live="polite">
         {{ interfaceScaleLabel }} Â· {{ interfaceScale }}%
@@ -59,7 +59,7 @@ const {
 
       <div class="scale-preview" aria-hidden="true">
         <small>Preview</small>
-        <strong>Inkwell should feel easy to read.</strong>
+        <strong>Jottathing should feel easy to read.</strong>
         <span>Adjust the slider until this text is comfortable.</span>
       </div>
     </div>

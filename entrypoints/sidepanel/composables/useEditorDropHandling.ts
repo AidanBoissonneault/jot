@@ -11,8 +11,8 @@ import {
 } from '@/src/extensions/mediaDrop';
 import {
   isEditorInternalDrop,
-  readInkwellImageMovePayload,
-} from '@/src/extensions/inkwellImageMove';
+  readJottathingImageMovePayload,
+} from '@/src/extensions/jottathingImageMove';
 import type { CaptureSelectionPayload } from '@/src/types/messages';
 import {
   capturePayloadFromActiveTab,
@@ -20,7 +20,7 @@ import {
   consumeTextDragPayload,
   isLikelyHeadingDrop,
   isLikelyTextCaptureDrop,
-  readInkwellDropPayload,
+  readJottathingDropPayload,
 } from '../components/editor/captureDropPayload';
 import {
   moveEditorSelectionToDrop,
@@ -48,21 +48,21 @@ export function useEditorDropHandling({
 }: EditorDropHandlingDependencies) {
   /** Handles one drop event, returning whether Tiptap should handle it further. */
   function handleDrop(view: EditorView, event: DragEvent): boolean {
-    const inkwellPayload = readInkwellDropPayload(event);
+    const jottathingPayload = readJottathingDropPayload(event);
 
-    if (inkwellPayload?.highlightMeta.isHeading) {
+    if (jottathingPayload?.highlightMeta.isHeading) {
       event.preventDefault();
-      captureInsertion.insertLinkedHeadingAtDrop(view, event, inkwellPayload);
+      captureInsertion.insertLinkedHeadingAtDrop(view, event, jottathingPayload);
       return true;
     }
 
-    if (inkwellPayload) {
+    if (jottathingPayload) {
       event.preventDefault();
-      captureInsertion.insertCapturedTextAtDrop(view, event, inkwellPayload);
+      captureInsertion.insertCapturedTextAtDrop(view, event, jottathingPayload);
       return true;
     }
 
-    const imageMovePayload = readInkwellImageMovePayload(event.dataTransfer);
+    const imageMovePayload = readJottathingImageMovePayload(event.dataTransfer);
     if (imageMovePayload) {
       event.preventDefault();
       if (moveImageNodeAtDrop(view, event, imageMovePayload)) {

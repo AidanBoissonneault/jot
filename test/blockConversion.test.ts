@@ -117,7 +117,7 @@ describe('notionBlockToTiptapNode', () => {
     expect(doc.content[0].attrs.src).toContain('youtube.com');
   });
 
-  it('converts an Inkwell YouTube video to a normal linked Notion paragraph', () => {
+  it('converts an Jottathing YouTube video to a normal linked Notion paragraph', () => {
     const [block] = tiptapDocumentToNotionBlocks({
       type: 'doc',
       content: [{
@@ -138,7 +138,7 @@ describe('notionBlockToTiptapNode', () => {
     ]);
   });
 
-  it('restores an Inkwell YouTube video from its linked Notion paragraph', () => {
+  it('restores an Jottathing YouTube video from its linked Notion paragraph', () => {
     const url = 'https://www.youtube.com/watch?v=abc123&t=62';
     const doc = notionBlocksToTiptapDocument([{
       type: 'paragraph',
@@ -210,9 +210,9 @@ describe('richTextToTiptapInline', () => {
     );
   });
 
-  it('strips inkwell_capture_id from plain_text', () => {
+  it('strips jottathing_capture_id from plain_text', () => {
     const content = inlineContent([{
-      plain_text: 'Hello inkwell_capture_id:abc-123',
+      plain_text: 'Hello jottathing_capture_id:abc-123',
       annotations: {},
     }]);
     expect(content[0].text).toBe('Hello');

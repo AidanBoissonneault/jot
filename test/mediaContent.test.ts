@@ -135,7 +135,7 @@ describe('media content helpers', () => {
       paragraph('Local draft'),
       image({
         src: 'https://secure.notion-static.com/image.png',
-        inkwellBlockId: 'remote-image',
+        jottathingBlockId: 'remote-image',
       }),
     ]);
 
@@ -143,7 +143,7 @@ describe('media content helpers', () => {
       paragraph('Local draft'),
       image({
         src: 'https://secure.notion-static.com/image.png',
-        inkwellBlockId: 'remote-image',
+        jottathingBlockId: 'remote-image',
       }),
     ]);
   });

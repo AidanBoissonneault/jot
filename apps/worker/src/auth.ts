@@ -1,5 +1,5 @@
 /**
- * @file Manages Inkwell users, sessions, accounts, and active Notion installations in Supabase.
+ * @file Manages Jottathing users, sessions, accounts, and active Notion installations in Supabase.
  * @author Aidan Boissonneault
  * @lastModified September 2026
  */
@@ -7,7 +7,7 @@
 import type { Identifier, WorkerSupabaseClient } from './types.js';
 import { hash } from './workerUtils.js';
 
-/** Describes an authenticated Inkwell user. */
+/** Describes an authenticated Jottathing user. */
 export interface AuthUser {
   email: string;
   emailVerified: boolean;
@@ -42,7 +42,7 @@ export interface ConnectedNotionInstallation extends NotionInstallation {
   tokens: { access_token: string };
 }
 
-/** Notion credentials persisted for an Inkwell account. */
+/** Notion credentials persisted for an Jottathing account. */
 export interface NotionAccountTokens {
   accessToken: string | null;
   refreshToken: string | null;
@@ -99,7 +99,7 @@ export interface AuthService {
   prepareConnectionDeletionReceipt: (requestIdHash: string, userId: string) => Promise<ConnectionDeletionReceipt>;
   updateConnectionDeletionRevocation: (requestIdHash: string, notionTokenRevoked: boolean) => Promise<void>;
   completeConnectionDeletionReceipt: (requestIdHash: string) => Promise<void>;
-  hasInkwellUser: (userId: string) => Promise<boolean>;
+  hasJottathingUser: (userId: string) => Promise<boolean>;
 }
 
 /**
@@ -111,7 +111,7 @@ export function createAuth(supabase: WorkerSupabaseClient): AuthService {
   return {
     /** Returns the version that newly initiated OAuth flows must commit against. */
     getNotionOAuthGeneration: () => getNotionOAuthGeneration(supabase),
-    /** Creates or replaces an Inkwell session from a successful Notion OAuth exchange. */
+    /** Creates or replaces an Jottathing session from a successful Notion OAuth exchange. */
     createNotionSession: (options: CreateNotionSessionOptions) => createNotionSession(supabase, options),
     /** Returns public metadata for a user's active Notion installation. */
     getActiveInstallation: (userId: string) => getActiveInstallation(supabase, userId),
@@ -138,7 +138,7 @@ export function createAuth(supabase: WorkerSupabaseClient): AuthService {
     /** Atomically removes the user and completes the retry receipt. */
     completeConnectionDeletionReceipt: (requestIdHash: string) => completeConnectionDeletionReceipt(supabase, requestIdHash),
     /** Checks whether the user row still exists while recovering a pending deletion. */
-    hasInkwellUser: (userId: string) => hasInkwellUser(supabase, userId),
+    hasJottathingUser: (userId: string) => hasJottathingUser(supabase, userId),
   };
 }
 
@@ -271,7 +271,7 @@ async function createNotionSession(
 /** Reads the global OAuth generation used to invalidate in-flight callbacks during deletion. */
 async function getNotionOAuthGeneration(supabase: WorkerSupabaseClient): Promise<string> {
   const { data, error } = await supabase
-    .from('inkwell_oauth_generation')
+    .from('jottathing_oauth_generation')
     .select('generation')
     .eq('id', 1)
     .single();
@@ -304,7 +304,7 @@ async function beginNotionLogout(
   supabase: WorkerSupabaseClient,
   userId: string,
 ): Promise<void> {
-  const { data, error } = await supabase.rpc('begin_inkwell_notion_logout', {
+  const { data, error } = await supabase.rpc('begin_jottathing_notion_logout', {
     p_user_id: userId,
   });
   if (error || data !== true) throw new Error('Unable to securely begin the Notion logout.');
@@ -316,7 +316,7 @@ async function completeNotionLogout(
   userId: string,
   sessionToken: string,
 ): Promise<void> {
-  const { data, error } = await supabase.rpc('complete_inkwell_notion_logout', {
+  const { data, error } = await supabase.rpc('complete_jottathing_notion_logout', {
     p_user_id: userId,
     p_session_token_hash: hash(sessionToken),
   });
@@ -329,7 +329,7 @@ async function getConnectionDeletionReceipt(
   requestIdHash: string,
 ): Promise<ConnectionDeletionReceipt | null> {
   const { data, error } = await supabase
-    .from('inkwell_connection_deletion_receipts')
+    .from('jottathing_connection_deletion_receipts')
     .select('request_id_hash, user_id, status, notion_token_revoked')
     .eq('request_id_hash', requestIdHash)
     .maybeSingle();
@@ -349,7 +349,7 @@ async function prepareConnectionDeletionReceipt(
   requestIdHash: string,
   userId: string,
 ): Promise<ConnectionDeletionReceipt> {
-  const { data, error } = await supabase.rpc('prepare_inkwell_connection_deletion', {
+  const { data, error } = await supabase.rpc('prepare_jottathing_connection_deletion', {
     p_request_id_hash: requestIdHash,
     p_user_id: userId,
   });
@@ -380,7 +380,7 @@ async function updateConnectionDeletionRevocation(
   notionTokenRevoked: boolean,
 ): Promise<void> {
   const update = supabase
-    .from('inkwell_connection_deletion_receipts')
+    .from('jottathing_connection_deletion_receipts')
     .update({ notion_token_revoked: notionTokenRevoked, updated_at: new Date().toISOString() })
     .eq('request_id_hash', requestIdHash)
     .eq('status', 'pending');
@@ -395,14 +395,14 @@ async function completeConnectionDeletionReceipt(
   supabase: WorkerSupabaseClient,
   requestIdHash: string,
 ): Promise<void> {
-  const { data, error } = await supabase.rpc('complete_inkwell_connection_deletion', {
+  const { data, error } = await supabase.rpc('complete_jottathing_connection_deletion', {
     p_request_id_hash: requestIdHash,
   });
-  if (error || data !== true) throw new Error('Unable to complete the Inkwell connection deletion.');
+  if (error || data !== true) throw new Error('Unable to complete the Jottathing connection deletion.');
 }
 
 /** Checks whether a user row still exists while recovering a pending deletion. */
-async function hasInkwellUser(
+async function hasJottathingUser(
   supabase: WorkerSupabaseClient,
   userId: string,
 ): Promise<boolean> {
@@ -411,14 +411,14 @@ async function hasInkwellUser(
     .select('id')
     .eq('id', userId)
     .maybeSingle();
-  if (error) throw new Error('Unable to verify the Inkwell account.');
+  if (error) throw new Error('Unable to verify the Jottathing account.');
   return Boolean(data);
 }
 
 /**
  * Loads public metadata for the user's newest active installation.
  * @param supabase - Privileged database client.
- * @param userId - Inkwell user identifier.
+ * @param userId - Jottathing user identifier.
  * @returns Installation metadata, or null when disconnected.
  */
 async function getActiveInstallation(
@@ -440,7 +440,7 @@ async function getActiveInstallation(
 /**
  * Loads the user's active installation and matching Notion access token.
  * @param supabase - Privileged database client.
- * @param userId - Inkwell user identifier.
+ * @param userId - Jottathing user identifier.
  * @returns A connected installation, or undefined when incomplete or revoked.
  */
 async function getActiveInstallationWithTokens(

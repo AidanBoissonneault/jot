@@ -60,7 +60,7 @@ export interface BlockPosition {
 /** Checks whether a request origin is trusted. @param env - Worker bindings. @param origin - Request origin. @returns Trust decision. */
 export function isTrustedOrigin(env: WorkerEnv, origin: string | undefined): boolean {
   if (!origin) return false;
-  const trusted = [env.WORKER_URL, env.INKWELL_EXTENSION_ORIGIN, ...(env.TRUSTED_ORIGINS?.split(',') ?? [])]
+  const trusted = [env.WORKER_URL, env.JOTTATHING_EXTENSION_ORIGIN ?? env.INKWELL_EXTENSION_ORIGIN, ...(env.TRUSTED_ORIGINS?.split(',') ?? [])]
     .map((value: string | undefined): string | undefined => value?.trim())
     .filter((value: string | undefined): value is string => Boolean(value))
     .map(originKey)

@@ -26,7 +26,7 @@ interface PageSyncDependencies {
   appendLog: AppendLog;
   archiveThreadToggle: ((store: WorkerStore, page: ProjectPage) => Promise<void>) | undefined;
   createChildPage: (store: WorkerStore, parentPageId: string, title: string) => Promise<NotionObject>;
-  ensureInkwellRootPage: (
+  ensureJottathingRootPage: (
     store: WorkerStore,
     options: { selectedParentPageId: string | undefined },
   ) => Promise<NotionParentPage>;
@@ -100,7 +100,7 @@ export async function pushPageToNotionCore({
     archiveThreadToggle,
     appendLog,
     createChildPage,
-    ensureInkwellRootPage,
+    ensureJottathingRootPage,
     ensureProjectPage,
     ensureProjectRootPage,
     ensureThreadToggle,
@@ -130,12 +130,12 @@ export async function pushPageToNotionCore({
     });
   }
 
-  const inkwellRootPage = await ensureInkwellRootPage(store, { selectedParentPageId });
-  const projectRootPage = await ensureProjectRootPage(store, inkwellRootPage.id, project, {
+  const jottathingRootPage = await ensureJottathingRootPage(store, { selectedParentPageId });
+  const projectRootPage = await ensureProjectRootPage(store, jottathingRootPage.id, project, {
     candidateNotionPageId: page.notionParentPageId,
   });
   const notionPageId = page.notionPageId ?? store.notePages[page.id]?.notionPageId;
-  const isUserReviewedReplacement = page.content.attrs?.inkwellConflictResolution === true;
+  const isUserReviewedReplacement = page.content.attrs?.jottathingConflictResolution === true;
 
   let notePage = notionPageId
     ? await notionRequest(store, `/pages/${notionPageId}`)
@@ -201,7 +201,7 @@ export async function pushPageToNotionCore({
   await writeStore(store);
 
   return {
-    parentPage: inkwellRootPage,
+    parentPage: jottathingRootPage,
     page: syncedPage,
     status: 'saved',
     message: 'Synced to Notion.',
@@ -227,7 +227,7 @@ async function pushPageToProjectDatabase({
   updateThreadToggleTitle,
   writeStore,
 }: ProjectDatabasePushOptions) {
-  const isForcedMerge = page.content.attrs?.inkwellConflictResolution === true;
+  const isForcedMerge = page.content.attrs?.jottathingConflictResolution === true;
   // Page writes must not trigger the separate project-state conflict check.
   const projectPage = await ensureProjectPage(store, project, {
     isForcedMerge,
@@ -261,7 +261,7 @@ async function pushPageToProjectDatabase({
   }
 
   const toggle = await ensureThreadToggle(store, projectPage.id, page);
-  const isUserReviewedReplacement = page.content.attrs?.inkwellConflictResolution === true;
+  const isUserReviewedReplacement = page.content.attrs?.jottathingConflictResolution === true;
 
   if (
     !isUserReviewedReplacement &&

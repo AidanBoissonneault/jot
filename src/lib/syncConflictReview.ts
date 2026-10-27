@@ -1,8 +1,8 @@
 import type { DocumentContent } from '../types/capture.js';
 import type { SyncContentConflict } from '../types/sync.js';
-import { normalizeInkwellBlockIds } from '../extensions/inkwellBlockIds.js';
+import { normalizeJottathingBlockIds } from '../extensions/jottathingBlockIds.js';
 
-export const SYNC_CONFLICT_BLOCK_TYPE = 'inkwellSyncConflict';
+export const SYNC_CONFLICT_BLOCK_TYPE = 'jottathingSyncConflict';
 
 export type SyncConflictChoice = 'local' | 'notion' | 'both' | '';
 
@@ -186,15 +186,15 @@ export function buildSyncConflictMerge(
     else if (row.notion) chosen.push(row.notion);
   }
 
-  return normalizeInkwellBlockIds({
+  return normalizeJottathingBlockIds({
     type: conflict.localContent.type ?? 'doc',
     attrs: {
-      inkwellConflictResolution: true,
-      inkwellPreserveRemoteBlocks: Boolean(conflict.remoteContent),
+      jottathingConflictResolution: true,
+      jottathingPreserveRemoteBlocks: Boolean(conflict.remoteContent),
     },
     content: chosen.map((block) => ({
       ...block,
-      attrs: { ...block.attrs, inkwellConflictResolution: true },
+      attrs: { ...block.attrs, jottathingConflictResolution: true },
     })),
   });
 }
@@ -280,7 +280,7 @@ function textFrom(block: DocumentContent): string {
 }
 
 function stableBlockId(block: DocumentContent): string | undefined {
-  const value = block.attrs?.inkwellBlockId;
+  const value = block.attrs?.jottathingBlockId;
   return typeof value === 'string' && value ? value : undefined;
 }
 
@@ -294,8 +294,8 @@ function withoutIdentity(value: unknown): unknown {
   const record = value as Record<string, unknown>;
   const isFileUpload = Boolean(record.notionFileUploadId);
   return Object.fromEntries(Object.entries(record)
-    .filter(([key]) => key !== 'inkwellBlockId' && key !== 'notionBlockId' &&
-      key !== 'inkwellConflictResolution' && key !== 'inkwellPreserveRemoteBlocks' &&
+    .filter(([key]) => key !== 'jottathingBlockId' && key !== 'notionBlockId' &&
+      key !== 'jottathingConflictResolution' && key !== 'jottathingPreserveRemoteBlocks' &&
       key !== 'uploadState' && !(isFileUpload && key === 'src'))
     .sort(([first], [second]) => first.localeCompare(second))
     .map(([key, nested]) => [key, key === 'src' ? stableMediaUrl(nested) : withoutIdentity(nested)]));
@@ -325,7 +325,7 @@ function markBlock(block: DocumentContent, notionBlockId?: string): DocumentCont
     attrs: {
       ...block.attrs,
       ...(notionBlockId ? { notionBlockId } : {}),
-      inkwellConflictResolution: true,
+      jottathingConflictResolution: true,
     },
   };
 }

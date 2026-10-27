@@ -3,7 +3,7 @@ import { managedBlockSignature } from '@/apps/worker/src/managedBlockSignatures'
 
 describe('managed Notion block signatures', () => {
   it('ignores Notion defaults added to unformatted code rich text', () => {
-    const sourceText = 'inkwell_source_v1:{"blockId":"source-1"}';
+    const sourceText = 'jottathing_source_v1:{"blockId":"source-1"}';
     const outgoing = {
       object: 'block',
       type: 'code',

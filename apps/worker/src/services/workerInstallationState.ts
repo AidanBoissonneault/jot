@@ -1,6 +1,6 @@
 /** @file Resolves authenticated installations and serializes per-installation state updates. */
 import type { Context } from 'hono';
-import { getCookie } from 'hono/cookie';
+import { getCookie, setCookie } from 'hono/cookie';
 import { HTTPException } from 'hono/http-exception';
 import type { AuthService, AuthSessionResult } from '../auth.js';
 import type { ConnectedWorkerStore, Identifier, WorkerEnv, WorkerStore } from '../types.js';
@@ -11,7 +11,8 @@ type ApiContext = Context<{ Bindings: WorkerEnv }>;
 interface WorkerInstallationStateDependencies {
   auth: AuthService;
   cookieName: string;
-  readInkwellSyncState: (installationId: Identifier) => Promise<WorkerStore>;
+  legacyCookieName?: string;
+  readJottathingSyncState: (installationId: Identifier) => Promise<WorkerStore>;
   readStore: () => WorkerStore;
 }
 
@@ -22,21 +23,36 @@ const installationMutationLocks = new Map<string, Promise<unknown>>();
 export function createWorkerInstallationState({
   auth,
   cookieName,
-  readInkwellSyncState,
+  legacyCookieName,
+  readJottathingSyncState,
   readStore,
 }: WorkerInstallationStateDependencies) {
   /** Reads the application session cookie from an API request. */
-  async function getInkwellSession(context: ApiContext): Promise<AuthSessionResult | null> {
-    return auth.getCustomSession(getCookie(context, cookieName));
+  async function getJottathingSession(context: ApiContext): Promise<AuthSessionResult | null> {
+    const currentToken = getCookie(context, cookieName);
+    const token = currentToken ?? (legacyCookieName ? getCookie(context, legacyCookieName) : undefined);
+    const requestUrl = new URL(context.req.url);
+    const sharedDomain = requestUrl.hostname.endsWith('.byaidan.com') ? '.byaidan.com' : undefined;
+    if (token && !currentToken) {
+      setCookie(context, cookieName, token, {
+        httpOnly: true,
+        maxAge: 60 * 60 * 24 * 30,
+        path: '/',
+        sameSite: 'Lax',
+        secure: requestUrl.protocol === 'https:',
+        ...(sharedDomain ? { domain: sharedDomain } : {}),
+      });
+    }
+    return auth.getCustomSession(token);
   }
 
   /** Requires an application session or sets an unauthorized response. */
-  async function requireInkwellSession(context: ApiContext): Promise<AuthSessionResult | null> {
-    const session = await getInkwellSession(context);
+  async function requireJottathingSession(context: ApiContext): Promise<AuthSessionResult | null> {
+    const session = await getJottathingSession(context);
 
     if (!session) {
       context.res = context.json(
-        { error: 'Unauthorized', message: 'Log in to Inkwell first.' },
+        { error: 'Unauthorized', message: 'Log in to Jottathing first.' },
         401,
       );
       return null;
@@ -47,12 +63,12 @@ export function createWorkerInstallationState({
 
   /** Resolves active Notion credentials and normalized state for an API request. */
   async function requireConnectedStore(context: ApiContext): Promise<ConnectedWorkerStore> {
-    const session = await getInkwellSession(context);
+    const session = await getJottathingSession(context);
     if (!session) {
       throw new HTTPException(401, {
         res: context.json({
           error: 'Unauthorized',
-          message: 'Log in to Inkwell first.',
+          message: 'Log in to Jottathing first.',
         }, 401),
       });
     }
@@ -71,7 +87,7 @@ export function createWorkerInstallationState({
       });
     }
 
-    const syncState = await readInkwellSyncState(installation.id);
+    const syncState = await readJottathingSyncState(installation.id);
     return {
       ...store,
       ...syncState,
@@ -130,7 +146,7 @@ export function createWorkerInstallationState({
 
     const [localStore, syncState] = await Promise.all([
       readStore(),
-      readInkwellSyncState(store.installationId),
+      readJottathingSyncState(store.installationId),
     ]);
     return {
       ...localStore,
@@ -142,9 +158,9 @@ export function createWorkerInstallationState({
 
   return {
     freshConnectedStore,
-    getInkwellSession,
+    getJottathingSession,
     requireConnectedStore,
-    requireInkwellSession,
+    requireJottathingSession,
     withFreshInstallationStore,
   };
 }

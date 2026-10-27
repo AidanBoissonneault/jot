@@ -59,23 +59,23 @@ async function applyChoices() {
 </script>
 
 <template>
-  <NodeViewWrapper class="inkwell-sync-conflict" contenteditable="false">
-    <div class="inkwell-sync-conflict__title">
+  <NodeViewWrapper class="jottathing-sync-conflict" contenteditable="false">
+    <div class="jottathing-sync-conflict__title">
       <strong>Merge conflict</strong>
       <span>{{ conflict.targetTitle }}</span>
     </div>
-    <p v-if="conflict.remoteContent === null" class="inkwell-sync-conflict__warning">
-      Notion has blocks Inkwell cannot represent. Applying this review replaces those blocks with the local version.
+    <p v-if="conflict.remoteContent === null" class="jottathing-sync-conflict__warning">
+      Notion has blocks Jottathing cannot represent. Applying this review replaces those blocks with the local version.
       <label><input v-model="remoteAcknowledged" type="checkbox" /> I reviewed the local version.</label>
     </p>
 
-    <div v-for="row in rows.filter((entry) => entry.needsChoice || entry.duplicate)" :key="row.id" class="inkwell-sync-conflict__row">
-      <div v-if="row.localDeleted" class="inkwell-sync-conflict__candidate">
+    <div v-for="row in rows.filter((entry) => entry.needsChoice || entry.duplicate)" :key="row.id" class="jottathing-sync-conflict__row">
+      <div v-if="row.localDeleted" class="jottathing-sync-conflict__candidate">
         <header>
-          <strong>Inkwell</strong><span>Removed locally</span>
+          <strong>Jottathing</strong><span>Removed locally</span>
         </header>
         <pre><span class="removed">− {{ syncConflictBlockText() }}</span></pre>
-        <div class="inkwell-sync-conflict__actions">
+        <div class="jottathing-sync-conflict__actions">
           <button type="button" :class="{ chosen: isChosen(row.id, 'local') }" @click="choose(row.id, 'local')" aria-label="Keep the local deletion">
             <font-awesome-icon :icon="['fas', 'check']" fixed-width /> Keep deletion
           </button>
@@ -84,26 +84,26 @@ async function applyChoices() {
           </button>
         </div>
       </div>
-      <div v-if="row.local" class="inkwell-sync-conflict__candidate">
+      <div v-if="row.local" class="jottathing-sync-conflict__candidate">
         <header>
-          <strong>Inkwell</strong><span>Local edit</span>
+          <strong>Jottathing</strong><span>Local edit</span>
         </header>
         <pre><span class="removed">− {{ syncConflictBlockText(row.local) }}</span></pre>
-        <div class="inkwell-sync-conflict__actions">
-          <button type="button" :class="{ chosen: isChosen(row.id, 'local') }" @click="choose(row.id, 'local')" aria-label="Keep the Inkwell version">
+        <div class="jottathing-sync-conflict__actions">
+          <button type="button" :class="{ chosen: isChosen(row.id, 'local') }" @click="choose(row.id, 'local')" aria-label="Keep the Jottathing version">
             <font-awesome-icon :icon="['fas', 'check']" fixed-width /> Keep
           </button>
-          <button type="button" :class="{ chosen: isChosen(row.id, 'notion') }" @click="choose(row.id, 'notion')" aria-label="Discard the Inkwell version">
+          <button type="button" :class="{ chosen: isChosen(row.id, 'notion') }" @click="choose(row.id, 'notion')" aria-label="Discard the Jottathing version">
             <font-awesome-icon :icon="['fas', 'xmark']" fixed-width /> Discard
           </button>
         </div>
       </div>
-      <div v-if="row.notion" class="inkwell-sync-conflict__candidate">
+      <div v-if="row.notion" class="jottathing-sync-conflict__candidate">
         <header>
           <strong>Notion</strong><span>Remote edit</span>
         </header>
         <pre><span class="added">+ {{ syncConflictBlockText(row.notion) }}</span></pre>
-        <div class="inkwell-sync-conflict__actions">
+        <div class="jottathing-sync-conflict__actions">
           <button type="button" :class="{ chosen: isChosen(row.id, 'notion') }" @click="choose(row.id, 'notion')" aria-label="Keep the Notion version">
             <font-awesome-icon :icon="['fas', 'check']" fixed-width /> Keep
           </button>
@@ -111,14 +111,14 @@ async function applyChoices() {
             <font-awesome-icon :icon="['fas', 'xmark']" fixed-width /> Discard
           </button>
         </div>
-        <pre v-if="row.changed && row.local" class="inkwell-sync-conflict__inline-diff"><span v-for="(part, index) in syncConflictDiffParts(row.local, row.notion)" :key="index" :class="part.kind">{{ part.text }}</span></pre>
+        <pre v-if="row.changed && row.local" class="jottathing-sync-conflict__inline-diff"><span v-for="(part, index) in syncConflictDiffParts(row.local, row.notion)" :key="index" :class="part.kind">{{ part.text }}</span></pre>
       </div>
-      <div v-if="row.notionDeleted" class="inkwell-sync-conflict__candidate">
+      <div v-if="row.notionDeleted" class="jottathing-sync-conflict__candidate">
         <header>
           <strong>Notion</strong><span>Removed remotely</span>
         </header>
         <pre><span class="removed">− {{ syncConflictBlockText() }}</span></pre>
-        <div class="inkwell-sync-conflict__actions">
+        <div class="jottathing-sync-conflict__actions">
           <button type="button" :class="{ chosen: isChosen(row.id, 'notion') }" @click="choose(row.id, 'notion')" aria-label="Keep the Notion deletion">
             <font-awesome-icon :icon="['fas', 'check']" fixed-width /> Keep deletion
           </button>
@@ -127,10 +127,10 @@ async function applyChoices() {
           </button>
         </div>
       </div>
-      <p v-if="row.duplicate" class="inkwell-sync-conflict__duplicate">These added blocks match. Choose which copy to keep.</p>
+      <p v-if="row.duplicate" class="jottathing-sync-conflict__duplicate">These added blocks match. Choose which copy to keep.</p>
     </div>
 
-    <p v-if="error" class="inkwell-sync-conflict__error" role="alert">{{ error }}</p>
+    <p v-if="error" class="jottathing-sync-conflict__error" role="alert">{{ error }}</p>
     <footer>
       <span v-if="hasUnresolved">Choose a version for each changed block.</span>
       <span v-else>Choices are ready to apply.</span>

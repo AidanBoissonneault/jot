@@ -101,15 +101,15 @@ export function notionApiHttpFailure(error: unknown): NotionApiHttpFailure | und
     message = error.message;
   } else if (error.status === 401) {
     code = 'notion_auth_rejected';
-    message = 'Notion rejected Inkwell’s connection. Reconnect Notion, then retry sync.';
+    message = 'Notion rejected Jottathing’s connection. Reconnect Notion, then retry sync.';
   } else if (error.status === 403) {
     status = 403;
     code = 'notion_access_denied';
-    message = 'Notion denied access. Check that the page is shared with Inkwell and the connection can edit content, then retry sync.';
+    message = 'Notion denied access. Check that the page is shared with Jottathing and the connection can edit content, then retry sync.';
   } else if (error.status === 404) {
     status = 404;
     code = 'notion_object_not_found';
-    message = 'The Notion page or block was not found. Check that it still exists and is shared with Inkwell, then resync.';
+    message = 'The Notion page or block was not found. Check that it still exists and is shared with Jottathing, then resync.';
   } else if (error.status === 409) {
     status = 409;
     code = error.code ?? 'notion_conflict';

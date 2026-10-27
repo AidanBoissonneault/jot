@@ -1,11 +1,12 @@
 {
-  "name": "@inkwell/worker",
+  "name": "@jottathing/worker",
   "private": true,
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "wrangler dev",
+    "dev": "wrangler dev --config wrangler.core.toml",
     "deploy": "wrangler deploy",
+    "deploy:core": "wrangler deploy --config wrangler.core.toml",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {

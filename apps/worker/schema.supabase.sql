@@ -1,4 +1,4 @@
--- Inkwell sync server — Supabase schema
+-- Jottathing sync server — Supabase schema
 -- Run in Supabase SQL editor: project → SQL Editor → New query
 
 CREATE TABLE IF NOT EXISTS "user" (
@@ -52,12 +52,12 @@ CREATE TABLE IF NOT EXISTS notion_installations (
 CREATE INDEX IF NOT EXISTS idx_notion_installations_user_id ON notion_installations(user_id);
 CREATE INDEX IF NOT EXISTS idx_notion_installations_active ON notion_installations(active);
 
-CREATE TABLE IF NOT EXISTS inkwell_sync_state (
+CREATE TABLE IF NOT EXISTS jottathing_sync_state (
   installation_id BIGINT PRIMARY KEY REFERENCES notion_installations(id) ON DELETE CASCADE,
-  inkwell_database_id TEXT,
-  inkwell_data_source_id TEXT,
-  inkwell_parent_page_id TEXT,
-  inkwell_database_title TEXT,
+  jottathing_database_id TEXT,
+  jottathing_data_source_id TEXT,
+  jottathing_parent_page_id TEXT,
+  jottathing_database_title TEXT,
   note_pages_json JSONB NOT NULL DEFAULT '{}',
   block_mappings_json JSONB NOT NULL DEFAULT '{}',
   parent_pages_json JSONB NOT NULL DEFAULT '{}',
@@ -82,7 +82,7 @@ CREATE TABLE IF NOT EXISTS notion_block_sync (
 
 CREATE INDEX IF NOT EXISTS idx_notion_block_sync_status ON notion_block_sync(status);
 
-CREATE TABLE IF NOT EXISTS inkwell_sync_queue_payloads (
+CREATE TABLE IF NOT EXISTS jottathing_sync_queue_payloads (
   id UUID PRIMARY KEY,
   installation_id BIGINT NOT NULL REFERENCES notion_installations(id) ON DELETE CASCADE,
   payload JSONB NOT NULL CHECK (jsonb_typeof(payload) = 'object'),
@@ -91,11 +91,11 @@ CREATE TABLE IF NOT EXISTS inkwell_sync_queue_payloads (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX IF NOT EXISTS idx_inkwell_sync_queue_payloads_created_at
-  ON inkwell_sync_queue_payloads(created_at);
+CREATE INDEX IF NOT EXISTS idx_jottathing_sync_queue_payloads_created_at
+  ON jottathing_sync_queue_payloads(created_at);
 
-CREATE INDEX IF NOT EXISTS idx_inkwell_sync_queue_payloads_installation_id
-  ON inkwell_sync_queue_payloads(installation_id);
+CREATE INDEX IF NOT EXISTS idx_jottathing_sync_queue_payloads_installation_id
+  ON jottathing_sync_queue_payloads(installation_id);
 
 -- Atomically installs a Notion OAuth connection and its browser session.
 CREATE OR REPLACE FUNCTION public.commit_notion_oauth_session(
@@ -151,7 +151,7 @@ BEGIN
     RETURN v_installation_id;
   END IF;
 
-  INSERT INTO public."user" AS inkwell_user (id, name, email, "emailVerified", image, "updatedAt")
+  INSERT INTO public."user" AS jottathing_user (id, name, email, "emailVerified", image, "updatedAt")
   VALUES (p_user_id, p_name, p_email, 0, p_image, pg_catalog.now())
   ON CONFLICT (id) DO UPDATE
     SET name = EXCLUDED.name,
@@ -180,7 +180,7 @@ BEGIN
         updated_at = pg_catalog.now()
   RETURNING id INTO v_installation_id;
 
-  INSERT INTO public.inkwell_sync_state (installation_id)
+  INSERT INTO public.jottathing_sync_state (installation_id)
   VALUES (v_installation_id)
   ON CONFLICT (installation_id) DO NOTHING;
 
@@ -207,7 +207,7 @@ GRANT EXECUTE ON FUNCTION public.commit_notion_oauth_session(
 
 -- Keeps a retry capability after a successful server deletion whose response is lost.
 -- Completed rows contain only a one-way random request hash and revocation outcome.
-CREATE TABLE IF NOT EXISTS inkwell_connection_deletion_receipts (
+CREATE TABLE IF NOT EXISTS jottathing_connection_deletion_receipts (
   request_id_hash TEXT PRIMARY KEY CHECK (length(request_id_hash) = 64),
   user_id TEXT,
   status TEXT NOT NULL CHECK (status IN ('pending', 'completed')),
@@ -217,16 +217,16 @@ CREATE TABLE IF NOT EXISTS inkwell_connection_deletion_receipts (
   CHECK ((status = 'pending' AND user_id IS NOT NULL) OR (status = 'completed' AND user_id IS NULL))
 );
 
-ALTER TABLE inkwell_connection_deletion_receipts ENABLE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS "service_role_inkwell_connection_deletion_receipts"
-  ON inkwell_connection_deletion_receipts;
-CREATE POLICY "service_role_inkwell_connection_deletion_receipts"
-  ON inkwell_connection_deletion_receipts FOR ALL TO service_role
+ALTER TABLE jottathing_connection_deletion_receipts ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "service_role_jottathing_connection_deletion_receipts"
+  ON jottathing_connection_deletion_receipts;
+CREATE POLICY "service_role_jottathing_connection_deletion_receipts"
+  ON jottathing_connection_deletion_receipts FOR ALL TO service_role
   USING (true) WITH CHECK (true);
-REVOKE ALL ON TABLE inkwell_connection_deletion_receipts FROM PUBLIC, anon, authenticated;
-GRANT ALL ON TABLE inkwell_connection_deletion_receipts TO service_role;
+REVOKE ALL ON TABLE jottathing_connection_deletion_receipts FROM PUBLIC, anon, authenticated;
+GRANT ALL ON TABLE jottathing_connection_deletion_receipts TO service_role;
 
-CREATE OR REPLACE FUNCTION public.complete_inkwell_connection_deletion(p_request_id_hash TEXT)
+CREATE OR REPLACE FUNCTION public.complete_jottathing_connection_deletion(p_request_id_hash TEXT)
 RETURNS BOOLEAN
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -238,7 +238,7 @@ DECLARE
 BEGIN
   SELECT user_id, status
     INTO v_user_id, v_status
-    FROM public.inkwell_connection_deletion_receipts
+    FROM public.jottathing_connection_deletion_receipts
    WHERE request_id_hash = p_request_id_hash
    FOR UPDATE;
 
@@ -252,7 +252,7 @@ BEGIN
     RETURN FALSE;
   END IF;
 
-  UPDATE public.inkwell_connection_deletion_receipts
+  UPDATE public.jottathing_connection_deletion_receipts
      SET status = 'completed', user_id = NULL, updated_at = pg_catalog.now()
    WHERE request_id_hash = p_request_id_hash;
   DELETE FROM public."user" WHERE id = v_user_id;
@@ -260,8 +260,8 @@ BEGIN
 END;
 $$;
 
-REVOKE ALL ON FUNCTION public.complete_inkwell_connection_deletion(TEXT) FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.complete_inkwell_connection_deletion(TEXT) TO service_role;
+REVOKE ALL ON FUNCTION public.complete_jottathing_connection_deletion(TEXT) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.complete_jottathing_connection_deletion(TEXT) TO service_role;
 
 CREATE OR REPLACE FUNCTION public.increment_block_version(
   p_installation_id BIGINT,
@@ -290,21 +290,21 @@ ALTER TABLE "user" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE session ENABLE ROW LEVEL SECURITY;
 ALTER TABLE account ENABLE ROW LEVEL SECURITY;
 ALTER TABLE notion_installations ENABLE ROW LEVEL SECURITY;
-ALTER TABLE inkwell_sync_state ENABLE ROW LEVEL SECURITY;
-ALTER TABLE inkwell_sync_queue_payloads ENABLE ROW LEVEL SECURITY;
+ALTER TABLE jottathing_sync_state ENABLE ROW LEVEL SECURITY;
+ALTER TABLE jottathing_sync_queue_payloads ENABLE ROW LEVEL SECURITY;
 
 -- Service role gets full access (worker uses service_role key)
 CREATE POLICY "service_role_user"               ON "user"               FOR ALL TO service_role USING (true) WITH CHECK (true);
 CREATE POLICY "service_role_session"            ON session              FOR ALL TO service_role USING (true) WITH CHECK (true);
 CREATE POLICY "service_role_account"            ON account              FOR ALL TO service_role USING (true) WITH CHECK (true);
 CREATE POLICY "service_role_notion_installs"    ON notion_installations FOR ALL TO service_role USING (true) WITH CHECK (true);
-CREATE POLICY "service_role_inkwell_sync_state"     ON inkwell_sync_state      FOR ALL TO service_role USING (true) WITH CHECK (true);
+CREATE POLICY "service_role_jottathing_sync_state"     ON jottathing_sync_state      FOR ALL TO service_role USING (true) WITH CHECK (true);
 
 ALTER TABLE notion_block_sync ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "service_role_notion_block_sync" ON notion_block_sync FOR ALL TO service_role USING (true) WITH CHECK (true);
-CREATE POLICY "service_role_inkwell_sync_queue_payloads" ON inkwell_sync_queue_payloads FOR ALL TO service_role USING (true) WITH CHECK (true);
-REVOKE ALL ON TABLE inkwell_sync_queue_payloads FROM PUBLIC, anon, authenticated;
-GRANT ALL ON TABLE inkwell_sync_queue_payloads TO service_role;
+CREATE POLICY "service_role_jottathing_sync_queue_payloads" ON jottathing_sync_queue_payloads FOR ALL TO service_role USING (true) WITH CHECK (true);
+REVOKE ALL ON TABLE jottathing_sync_queue_payloads FROM PUBLIC, anon, authenticated;
+GRANT ALL ON TABLE jottathing_sync_queue_payloads TO service_role;
 -- Migration v2: Notion webhook staleness + cross-device version tracking
 -- Run in Supabase SQL editor: project → SQL Editor → New query
 
@@ -459,24 +459,24 @@ GRANT EXECUTE ON FUNCTION public.reset_notion_webhook_setup() TO service_role;
 
 -- OAuth state carries this signed version. Advancing it at completion invalidates
 -- callbacks that began before or during the wipe after pending receipts protected them.
-CREATE TABLE IF NOT EXISTS public.inkwell_oauth_generation (
+CREATE TABLE IF NOT EXISTS public.jottathing_oauth_generation (
   id SMALLINT PRIMARY KEY CHECK (id = 1),
   generation BIGINT NOT NULL DEFAULT 1 CHECK (generation > 0),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT pg_catalog.now()
 );
-INSERT INTO public.inkwell_oauth_generation (id) VALUES (1)
+INSERT INTO public.jottathing_oauth_generation (id) VALUES (1)
 ON CONFLICT (id) DO NOTHING;
 
-ALTER TABLE public.inkwell_oauth_generation ENABLE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS "service_role_inkwell_oauth_generation"
-  ON public.inkwell_oauth_generation;
-CREATE POLICY "service_role_inkwell_oauth_generation"
-  ON public.inkwell_oauth_generation FOR ALL TO service_role
+ALTER TABLE public.jottathing_oauth_generation ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "service_role_jottathing_oauth_generation"
+  ON public.jottathing_oauth_generation;
+CREATE POLICY "service_role_jottathing_oauth_generation"
+  ON public.jottathing_oauth_generation FOR ALL TO service_role
   USING (true) WITH CHECK (true);
-REVOKE ALL ON TABLE public.inkwell_oauth_generation FROM PUBLIC, anon, authenticated;
-GRANT SELECT, UPDATE ON TABLE public.inkwell_oauth_generation TO service_role;
+REVOKE ALL ON TABLE public.jottathing_oauth_generation FROM PUBLIC, anon, authenticated;
+GRANT SELECT, UPDATE ON TABLE public.jottathing_oauth_generation TO service_role;
 
-CREATE OR REPLACE FUNCTION public.prepare_inkwell_connection_deletion(
+CREATE OR REPLACE FUNCTION public.prepare_jottathing_connection_deletion(
   p_request_id_hash TEXT,
   p_user_id TEXT
 ) RETURNS JSONB
@@ -500,14 +500,14 @@ BEGIN
     pg_catalog.hashtextextended(p_user_id, 0)
   );
 
-  INSERT INTO public.inkwell_connection_deletion_receipts
+  INSERT INTO public.jottathing_connection_deletion_receipts
     (request_id_hash, user_id, status, notion_token_revoked)
   VALUES (p_request_id_hash, p_user_id, 'pending', FALSE)
   ON CONFLICT (request_id_hash) DO NOTHING;
 
   SELECT request_id_hash, user_id, status, notion_token_revoked
     INTO v_request_id_hash, v_user_id, v_status, v_notion_token_revoked
-    FROM public.inkwell_connection_deletion_receipts
+    FROM public.jottathing_connection_deletion_receipts
    WHERE request_id_hash = p_request_id_hash
    FOR UPDATE;
 
@@ -579,7 +579,7 @@ BEGIN
   );
   SELECT generation
     INTO v_current_generation
-    FROM public.inkwell_oauth_generation
+    FROM public.jottathing_oauth_generation
    WHERE id = 1
    FOR SHARE;
   IF NOT FOUND OR v_current_generation::TEXT IS DISTINCT FROM p_oauth_generation THEN
@@ -587,11 +587,11 @@ BEGIN
   END IF;
   IF EXISTS (
     SELECT 1
-      FROM public.inkwell_connection_deletion_receipts AS receipt
+      FROM public.jottathing_connection_deletion_receipts AS receipt
      WHERE receipt.user_id = p_user_id
        AND receipt.status = 'pending'
   ) THEN
-    RAISE EXCEPTION 'Inkwell connection deletion is in progress';
+    RAISE EXCEPTION 'Jottathing connection deletion is in progress';
   END IF;
 
   -- A retry after a lost PostgREST response must recognize the commit instead
@@ -615,7 +615,7 @@ BEGIN
     RETURN v_installation_id;
   END IF;
 
-  INSERT INTO public."user" AS inkwell_user (id, name, email, "emailVerified", image, "updatedAt")
+  INSERT INTO public."user" AS jottathing_user (id, name, email, "emailVerified", image, "updatedAt")
   VALUES (p_user_id, p_name, p_email, 0, p_image, pg_catalog.now())
   ON CONFLICT (id) DO UPDATE
     SET name = EXCLUDED.name,
@@ -644,7 +644,7 @@ BEGIN
         updated_at = pg_catalog.now()
   RETURNING id INTO v_installation_id;
 
-  INSERT INTO public.inkwell_sync_state (installation_id)
+  INSERT INTO public.jottathing_sync_state (installation_id)
   VALUES (v_installation_id)
   ON CONFLICT (installation_id) DO NOTHING;
 
@@ -666,7 +666,7 @@ DROP FUNCTION IF EXISTS public.commit_notion_oauth_session(
   TIMESTAMPTZ, TEXT, TEXT, TEXT, TEXT
 );
 
-CREATE OR REPLACE FUNCTION public.complete_inkwell_connection_deletion(p_request_id_hash TEXT)
+CREATE OR REPLACE FUNCTION public.complete_jottathing_connection_deletion(p_request_id_hash TEXT)
 RETURNS BOOLEAN
 LANGUAGE plpgsql
 VOLATILE
@@ -679,7 +679,7 @@ DECLARE
 BEGIN
   SELECT user_id, status
     INTO v_user_id, v_status
-    FROM public.inkwell_connection_deletion_receipts
+    FROM public.jottathing_connection_deletion_receipts
    WHERE request_id_hash = p_request_id_hash;
 
   IF NOT FOUND THEN
@@ -698,7 +698,7 @@ BEGIN
 
   SELECT user_id, status
     INTO v_user_id, v_status
-    FROM public.inkwell_connection_deletion_receipts
+    FROM public.jottathing_connection_deletion_receipts
    WHERE request_id_hash = p_request_id_hash
    FOR UPDATE;
 
@@ -712,7 +712,7 @@ BEGIN
     RETURN FALSE;
   END IF;
 
-  UPDATE public.inkwell_oauth_generation
+  UPDATE public.jottathing_oauth_generation
      SET generation = generation + 1,
          updated_at = pg_catalog.now()
    WHERE id = 1;
@@ -720,7 +720,7 @@ BEGIN
     RAISE EXCEPTION 'OAuth generation is unavailable';
   END IF;
 
-  UPDATE public.inkwell_connection_deletion_receipts
+  UPDATE public.jottathing_connection_deletion_receipts
      SET status = 'completed', user_id = NULL, updated_at = pg_catalog.now()
    WHERE request_id_hash = p_request_id_hash;
   DELETE FROM public."user" WHERE id = v_user_id;
@@ -728,19 +728,19 @@ BEGIN
 END;
 $$;
 
-REVOKE ALL ON FUNCTION public.prepare_inkwell_connection_deletion(TEXT, TEXT) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.prepare_jottathing_connection_deletion(TEXT, TEXT) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.commit_notion_oauth_session(
   TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT,
   TIMESTAMPTZ, TEXT, TEXT, TEXT, TEXT, TEXT
 ) FROM PUBLIC, anon, authenticated;
-REVOKE ALL ON FUNCTION public.complete_inkwell_connection_deletion(TEXT) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.complete_jottathing_connection_deletion(TEXT) FROM PUBLIC, anon, authenticated;
 
-GRANT EXECUTE ON FUNCTION public.prepare_inkwell_connection_deletion(TEXT, TEXT) TO service_role;
+GRANT EXECUTE ON FUNCTION public.prepare_jottathing_connection_deletion(TEXT, TEXT) TO service_role;
 GRANT EXECUTE ON FUNCTION public.commit_notion_oauth_session(
   TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT,
   TIMESTAMPTZ, TEXT, TEXT, TEXT, TEXT, TEXT
 ) TO service_role;
-GRANT EXECUTE ON FUNCTION public.complete_inkwell_connection_deletion(TEXT) TO service_role;
+GRANT EXECUTE ON FUNCTION public.complete_jottathing_connection_deletion(TEXT) TO service_role;
 
 NOTIFY pgrst, 'reload schema';
 
@@ -791,7 +791,7 @@ BEGIN
   );
   SELECT generation
     INTO v_current_generation
-    FROM public.inkwell_oauth_generation
+    FROM public.jottathing_oauth_generation
    WHERE id = 1
    FOR SHARE;
   IF NOT FOUND OR v_current_generation::TEXT IS DISTINCT FROM p_oauth_generation THEN
@@ -799,20 +799,20 @@ BEGIN
   END IF;
   IF EXISTS (
     SELECT 1
-      FROM public.inkwell_connection_deletion_receipts AS receipt
+      FROM public.jottathing_connection_deletion_receipts AS receipt
      WHERE receipt.user_id = p_user_id
        AND receipt.status = 'pending'
   ) THEN
-    RAISE EXCEPTION 'Inkwell connection deletion is in progress';
+    RAISE EXCEPTION 'Jottathing connection deletion is in progress';
   END IF;
 
   IF EXISTS (
     SELECT 1
-      FROM public."user" AS inkwell_user
-     WHERE inkwell_user.id = p_user_id
-       AND inkwell_user.logout_pending
+      FROM public."user" AS jottathing_user
+     WHERE jottathing_user.id = p_user_id
+       AND jottathing_user.logout_pending
   ) THEN
-    RAISE EXCEPTION 'Inkwell logout is in progress';
+    RAISE EXCEPTION 'Jottathing logout is in progress';
   END IF;
   -- A retry after a lost PostgREST response must recognize the commit instead
   -- of inserting a second session or revoking the session that just succeeded.
@@ -835,7 +835,7 @@ BEGIN
     RETURN v_installation_id;
   END IF;
 
-  INSERT INTO public."user" AS inkwell_user (id, name, email, "emailVerified", image, "updatedAt")
+  INSERT INTO public."user" AS jottathing_user (id, name, email, "emailVerified", image, "updatedAt")
   VALUES (p_user_id, p_name, p_email, 0, p_image, pg_catalog.now())
   ON CONFLICT (id) DO UPDATE
     SET name = EXCLUDED.name,
@@ -864,7 +864,7 @@ BEGIN
         updated_at = pg_catalog.now()
   RETURNING id INTO v_installation_id;
 
-  INSERT INTO public.inkwell_sync_state (installation_id)
+  INSERT INTO public.jottathing_sync_state (installation_id)
   VALUES (v_installation_id)
   ON CONFLICT (installation_id) DO NOTHING;
 
@@ -879,7 +879,7 @@ BEGIN
   RETURN v_installation_id;
 END;
 $$;
-CREATE OR REPLACE FUNCTION public.begin_inkwell_notion_logout(p_user_id TEXT)
+CREATE OR REPLACE FUNCTION public.begin_jottathing_notion_logout(p_user_id TEXT)
 RETURNS BOOLEAN
 LANGUAGE plpgsql
 VOLATILE
@@ -907,7 +907,7 @@ BEGIN
   END IF;
 
   IF NOT v_logout_pending THEN
-    UPDATE public.inkwell_oauth_generation
+    UPDATE public.jottathing_oauth_generation
        SET generation = generation + 1,
            updated_at = pg_catalog.now()
      WHERE id = 1;
@@ -930,7 +930,7 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION public.complete_inkwell_notion_logout(
+CREATE OR REPLACE FUNCTION public.complete_jottathing_notion_logout(
   p_user_id TEXT,
   p_session_token_hash TEXT
 ) RETURNS BOOLEAN
@@ -970,7 +970,7 @@ BEGIN
     );
   END IF;
 
-  UPDATE public.inkwell_oauth_generation
+  UPDATE public.jottathing_oauth_generation
      SET generation = generation + 1,
          updated_at = pg_catalog.now()
    WHERE id = 1;
@@ -1001,10 +1001,10 @@ BEGIN
 END;
 $$;
 
-REVOKE ALL ON FUNCTION public.begin_inkwell_notion_logout(TEXT) FROM PUBLIC, anon, authenticated;
-REVOKE ALL ON FUNCTION public.complete_inkwell_notion_logout(TEXT, TEXT) FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.begin_inkwell_notion_logout(TEXT) TO service_role;
-GRANT EXECUTE ON FUNCTION public.complete_inkwell_notion_logout(TEXT, TEXT) TO service_role;
+REVOKE ALL ON FUNCTION public.begin_jottathing_notion_logout(TEXT) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.complete_jottathing_notion_logout(TEXT, TEXT) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.begin_jottathing_notion_logout(TEXT) TO service_role;
+GRANT EXECUTE ON FUNCTION public.complete_jottathing_notion_logout(TEXT, TEXT) TO service_role;
 
 -- Keep direct API callers from invoking the helper without changing its active
 -- ensure_rls DDL event trigger. Older bootstrap targets may not have the helper.

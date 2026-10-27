@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { safeExternalUrl } from '@/src/extensions/inkwellLink';
+import { safeExternalUrl } from '@/src/extensions/jottathingLink';
 
 describe('safeExternalUrl', () => {
   it.each([

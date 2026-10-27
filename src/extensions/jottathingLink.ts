@@ -1,14 +1,15 @@
 import Link from '@tiptap/extension-link';
 import type { SourceOpenPayload } from '@/src/types/messages';
 
-export const INKWELL_SOURCE_ATTR = 'inkwellSource';
+export const JOTTATHING_SOURCE_ATTR = 'jottathingSource';
+const LEGACY_SOURCE_DATA_ATTR = 'data-inkwell-source';
 
 /**
  * Source data is persisted once on a captured block. Short keys and a relative
  * source-link hash keep the project JSON small without tying it to the text's
  * current formatting or inline-node boundaries.
  */
-export type StoredInkwellSource = {
+export type StoredJottathingSource = {
   u: string;
   t: string;
   l?: string;
@@ -18,9 +19,9 @@ export type StoredInkwellSource = {
   s?: string;
 };
 
-export function storeInkwellSource(
+export function storeJottathingSource(
   payload: SourceOpenPayload,
-): StoredInkwellSource {
+): StoredJottathingSource {
   const sourceLink = compactSourceLink(
     payload.sourceUrl,
     payload.highlightMeta.sourceLink,
@@ -38,11 +39,11 @@ export function storeInkwellSource(
   });
 }
 
-export function encodeInkwellSource(payload: SourceOpenPayload) {
-  return JSON.stringify(storeInkwellSource(payload));
+export function encodeJottathingSource(payload: SourceOpenPayload) {
+  return JSON.stringify(storeJottathingSource(payload));
 }
 
-export function decodeInkwellSource(value: unknown): SourceOpenPayload | null {
+export function decodeJottathingSource(value: unknown): SourceOpenPayload | null {
   if (!value) {
     return null;
   }
@@ -50,7 +51,7 @@ export function decodeInkwellSource(value: unknown): SourceOpenPayload | null {
   try {
     const parsed = typeof value === 'string' ? JSON.parse(value) : value;
 
-    if (isStoredInkwellSource(parsed)) {
+    if (isStoredJottathingSource(parsed)) {
       return {
         sourceUrl: parsed.u,
         highlightMeta: withoutUndefined({
@@ -76,15 +77,15 @@ export function decodeInkwellSource(value: unknown): SourceOpenPayload | null {
   }
 }
 
-export function isAccessibleInkwellSource(payload: SourceOpenPayload | null) {
+export function isAccessibleJottathingSource(payload: SourceOpenPayload | null) {
   if (!payload) {
     return false;
   }
 
-  return Boolean(safeInkwellSourceUrl(payload));
+  return Boolean(safeJottathingSourceUrl(payload));
 }
 
-export function safeInkwellSourceUrl(payload: SourceOpenPayload) {
+export function safeJottathingSourceUrl(payload: SourceOpenPayload) {
   return (
     safeHttpUrl(payload.highlightMeta.sourceLink ?? '') ??
     safeHttpUrl(payload.sourceUrl)
@@ -96,12 +97,12 @@ export function safeExternalUrl(value: string) {
   return safeHttpUrl(value);
 }
 
-function isStoredInkwellSource(value: unknown): value is StoredInkwellSource {
+function isStoredJottathingSource(value: unknown): value is StoredJottathingSource {
   if (!value || typeof value !== 'object') {
     return false;
   }
 
-  const candidate = value as Partial<StoredInkwellSource>;
+  const candidate = value as Partial<StoredJottathingSource>;
   return typeof candidate.u === 'string' && typeof candidate.t === 'string';
 }
 
@@ -180,18 +181,20 @@ function withoutUndefined<T extends object>(value: T): T {
   ) as T;
 }
 
-export const InkwellLink = Link.extend({
+export const JottathingLink = Link.extend({
   addAttributes() {
     return {
       ...this.parent?.(),
-      [INKWELL_SOURCE_ATTR]: {
+      [JOTTATHING_SOURCE_ATTR]: {
         default: null,
-        parseHTML: (element) => element.getAttribute('data-inkwell-source'),
+        parseHTML: (element) =>
+          element.getAttribute('data-jottathing-source') ??
+          element.getAttribute(LEGACY_SOURCE_DATA_ATTR),
         renderHTML: (attributes) => {
-          const value = attributes[INKWELL_SOURCE_ATTR];
+          const value = attributes[JOTTATHING_SOURCE_ATTR];
 
           return typeof value === 'string' && value
-            ? { 'data-inkwell-source': value }
+            ? { 'data-jottathing-source': value }
             : {};
         },
       },

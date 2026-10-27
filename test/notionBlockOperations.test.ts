@@ -65,7 +65,7 @@ describe('Notion block append confirmation', () => {
   });
 
   it('recovers a newly appended source block from Notion’s full child-list response', async () => {
-    const sourceText = 'inkwell_source_v1:{"blockId":"source-1"}';
+    const sourceText = 'jottathing_source_v1:{"blockId":"source-1"}';
     const sourceBlock: NotionBlockPayload = {
       object: 'block',
       type: 'code',
@@ -111,7 +111,7 @@ describe('Notion block append confirmation', () => {
   });
 
   it('prefers the new source at the start when older retries left duplicate source blocks', async () => {
-    const sourceText = 'inkwell_source_v1:{"blockId":"source-duplicate"}';
+    const sourceText = 'jottathing_source_v1:{"blockId":"source-duplicate"}';
     const sourceBlock: NotionBlockPayload = {
       object: 'block',
       type: 'code',
@@ -270,7 +270,7 @@ describe('Notion block append confirmation', () => {
   });
 
   it('reads the parent back when the response list does not contain the inserted window', async () => {
-    const sourceText = 'inkwell_source_v1:{"blockId":"source-2"}';
+    const sourceText = 'jottathing_source_v1:{"blockId":"source-2"}';
     const sourceBlock: NotionBlockPayload = {
       object: 'block',
       type: 'code',

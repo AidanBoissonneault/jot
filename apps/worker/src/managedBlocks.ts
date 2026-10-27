@@ -126,7 +126,7 @@ export async function replaceManagedBlocks({
     notionBlocks,
   });
   const existingMappings = store.blockMappings[localPageId] ?? [];
-  const isUserReviewedReplacement = content.attrs?.inkwellConflictResolution === true;
+  const isUserReviewedReplacement = content.attrs?.jottathingConflictResolution === true;
 
   // An empty document may be a partial queue envelope. Never interpret it as
   // permission to erase the remote note.
@@ -220,7 +220,7 @@ async function replaceAfterUserConflictResolution({
   store: WorkerStore;
   updateManagedBlock: UpdateManagedBlock;
 }) {
-  if (content.attrs?.inkwellPreserveRemoteBlocks === true) {
+  if (content.attrs?.jottathingPreserveRemoteBlocks === true) {
     return preserveRemoteBlocksAfterUserConflictResolution({
       appendManagedBlocks,
       content,
@@ -236,9 +236,9 @@ async function replaceAfterUserConflictResolution({
   }
 
   const remoteBlocks = await listAllBlockChildren(store, notionPageId);
-  const mappingByInkwellId = new Map(
+  const mappingByJottathingId = new Map(
     (store.blockMappings[localPageId] ?? []).map((mapping) => [
-      mapping.inkwellBlockId ?? mapping.localNodeId,
+      mapping.jottathingBlockId ?? mapping.localNodeId,
       mapping,
     ]),
   );
@@ -249,7 +249,7 @@ async function replaceAfterUserConflictResolution({
     const matches = suffix.every((remote, index) => {
       const desired = desiredBlocks[index];
       if (!desired) return false;
-      const mapping = mappingByInkwellId.get(desired.inkwellBlockId);
+      const mapping = mappingByJottathingId.get(desired.jottathingBlockId);
       return managedBlockSignature(remote) === managedBlockSignature(desired.notionBlock) ||
         Boolean(mapping && mappedMediaMatches(mapping, desired, remote));
     });
@@ -307,18 +307,18 @@ async function preserveRemoteBlocksAfterUserConflictResolution({
 }) {
   const remoteBlocks = await listAllBlockChildren(store, notionPageId);
   const remoteById = new Map(remoteBlocks.map((block) => [block.id, block]));
-  const isUserReviewedMerge = content.attrs?.inkwellConflictResolution === true;
+  const isUserReviewedMerge = content.attrs?.jottathingConflictResolution === true;
   const knownRemoteIds = new Set(remoteBlocks.map((block) => block.id));
-  const mappingByInkwellId = new Map(
+  const mappingByJottathingId = new Map(
     (store.blockMappings[localPageId] ?? []).map((mapping) => [
-      mapping.inkwellBlockId ?? mapping.localNodeId,
+      mapping.jottathingBlockId ?? mapping.localNodeId,
       mapping,
     ]),
   );
   const forcedRemoteIds = new Set<string>();
   for (const desired of desiredBlocks) {
     const node = content.content?.[desired.order];
-    const mapping = mappingByInkwellId.get(desired.inkwellBlockId);
+    const mapping = mappingByJottathingId.get(desired.jottathingBlockId);
     const explicitRemoteId = stringValue(node?.attrs?.notionBlockId);
     if (explicitRemoteId) forcedRemoteIds.add(explicitRemoteId);
     if (mapping?.notionBlockId) forcedRemoteIds.add(mapping.notionBlockId);
@@ -331,7 +331,7 @@ async function preserveRemoteBlocksAfterUserConflictResolution({
 
   for (const desired of desiredBlocks) {
     const node = content.content?.[desired.order];
-    const mapping = mappingByInkwellId.get(desired.inkwellBlockId);
+    const mapping = mappingByJottathingId.get(desired.jottathingBlockId);
     const explicitRemoteId = stringValue(node?.attrs?.notionBlockId);
     const mappedRemoteId = mapping?.notionBlockId;
     let remote = explicitRemoteId ? remoteById.get(explicitRemoteId) : undefined;
@@ -467,23 +467,23 @@ function repairMappingsByContent(
   content: DocumentContent,
 ): void {
   const remoteById = new Map(remoteBlocks.map((block) => [block.id, block]));
-  const desiredById = new Map(desiredBlocks.map((entry) => [entry.inkwellBlockId, entry]));
+  const desiredById = new Map(desiredBlocks.map((entry) => [entry.jottathingBlockId, entry]));
   const usedRemoteIds = new Set<string>();
   const orderedMappings = existingMappings.slice().sort((first, second) => first.order - second.order);
   const explicitLocalChoices = new Set(
     (content.content ?? [])
-      .filter((node) => node.attrs?.inkwellConflictResolution === true)
-      .map((node) => node.attrs?.inkwellBlockId)
+      .filter((node) => node.attrs?.jottathingConflictResolution === true)
+      .map((node) => node.attrs?.jottathingBlockId)
       .filter((id): id is string => typeof id === 'string'),
   );
 
   for (const mapping of orderedMappings) {
-    const desired = desiredById.get(mapping.inkwellBlockId ?? mapping.localNodeId);
+    const desired = desiredById.get(mapping.jottathingBlockId ?? mapping.localNodeId);
     const current = mapping.notionBlockId ? remoteById.get(mapping.notionBlockId) : undefined;
     const expectedSignature = mapping.newState ? managedBlockSignature(mapping.newState) : undefined;
     const desiredSignature = desired ? managedBlockSignature(desired.notionBlock) : undefined;
 
-    if (current && explicitLocalChoices.has(mapping.inkwellBlockId ?? mapping.localNodeId)) {
+    if (current && explicitLocalChoices.has(mapping.jottathingBlockId ?? mapping.localNodeId)) {
       mapping.newState = current as unknown as NotionBlockPayload;
       usedRemoteIds.add(current.id);
       continue;
@@ -517,7 +517,7 @@ function repairMappingsByContent(
 
   for (const desired of desiredBlocks) {
     if (existingMappings.some((entry) =>
-      (entry.inkwellBlockId ?? entry.localNodeId) === desired.inkwellBlockId,
+      (entry.jottathingBlockId ?? entry.localNodeId) === desired.jottathingBlockId,
     )) continue;
 
     const match = findUnclaimedRemoteBlock(
@@ -529,7 +529,7 @@ function repairMappingsByContent(
     if (!match) continue;
     existingMappings.push({
       localPageId: desired.localPageId,
-      inkwellBlockId: desired.inkwellBlockId,
+      jottathingBlockId: desired.jottathingBlockId,
       localNodeId: desired.localNodeId,
       notionBlockId: match.id,
       kind: desired.kind,
@@ -559,7 +559,7 @@ function hasUnresolvedRemoteChanges(
   desiredBlocks: DesiredManagedBlock[],
   remoteBlocks: NotionBlock[],
 ): boolean {
-  const desiredById = new Map(desiredBlocks.map((entry) => [entry.inkwellBlockId, entry]));
+  const desiredById = new Map(desiredBlocks.map((entry) => [entry.jottathingBlockId, entry]));
   const remoteById = new Map(remoteBlocks.map((block) => [block.id, block]));
   const mappedIds = new Set<string>();
   const desiredCapacity = new Map<string, number>();
@@ -574,7 +574,7 @@ function hasUnresolvedRemoteChanges(
     const remote = remoteById.get(mapping.notionBlockId);
     if (!remote) continue;
     mappedIds.add(remote.id);
-    const desired = desiredById.get(mapping.inkwellBlockId ?? mapping.localNodeId);
+    const desired = desiredById.get(mapping.jottathingBlockId ?? mapping.localNodeId);
     const baseSignature = mapping.newState ? managedBlockSignature(mapping.newState) : undefined;
     const remoteSignature = managedBlockSignature(remote);
     const desiredSignature = desired ? managedBlockSignature(desired.notionBlock) : undefined;
@@ -678,19 +678,19 @@ function createContentConflict(
   const remoteContent = notionBlocksToTiptapDocumentStrict(remoteBlocks);
   const localById = new Map(
     (localContent.content ?? [])
-      .map((node) => [stringValue(node.attrs?.inkwellBlockId), node] as const)
+      .map((node) => [stringValue(node.attrs?.jottathingBlockId), node] as const)
       .filter((entry): entry is readonly [string, DocumentContent] => Boolean(entry[0])),
   );
   const mappingByLocalId = new Map(
-    mappings.map((mapping) => [mapping.inkwellBlockId ?? mapping.localNodeId, mapping]),
+    mappings.map((mapping) => [mapping.jottathingBlockId ?? mapping.localNodeId, mapping]),
   );
-  const desiredByLocalId = new Map(desiredBlocks.map((desired) => [desired.inkwellBlockId, desired]));
+  const desiredByLocalId = new Map(desiredBlocks.map((desired) => [desired.jottathingBlockId, desired]));
   const remoteByNotionId = new Map(remoteBlocks.map((block) => [block.id, block]));
   const normalizedLocalContent: DocumentContent = {
     ...localContent,
     content: (localContent.content ?? []).map((node, index) => {
       if (node.type !== 'image' && node.type !== 'audio') return node;
-      const blockId = stringValue(node.attrs?.inkwellBlockId) ?? desiredBlocks[index]?.inkwellBlockId;
+      const blockId = stringValue(node.attrs?.jottathingBlockId) ?? desiredBlocks[index]?.jottathingBlockId;
       const mapping = blockId ? mappingByLocalId.get(blockId) : undefined;
       const desired = blockId ? desiredByLocalId.get(blockId) : undefined;
       const remote = mapping?.notionBlockId ? remoteByNotionId.get(mapping.notionBlockId) : undefined;
@@ -723,13 +723,13 @@ function createContentConflict(
       .sort((first, second) => first.order - second.order)
       .flatMap((mapping) => {
         if (!mapping.newState) return [];
-        const blockId = mapping.inkwellBlockId ?? mapping.localNodeId;
+        const blockId = mapping.jottathingBlockId ?? mapping.localNodeId;
         const baseNode = documentNodeFromNotionState(
           mapping.newState,
           localById.get(blockId),
         );
         return baseNode
-          ? [{ ...baseNode, attrs: { ...baseNode.attrs, inkwellBlockId: blockId } }]
+          ? [{ ...baseNode, attrs: { ...baseNode.attrs, jottathingBlockId: blockId } }]
           : [];
       }),
   };
@@ -737,7 +737,7 @@ function createContentConflict(
   const remoteChangedBlockIds: string[] = [];
   for (const mapping of mappings) {
     if (!mapping.newState) continue;
-    const blockId = mapping.inkwellBlockId ?? mapping.localNodeId;
+    const blockId = mapping.jottathingBlockId ?? mapping.localNodeId;
     const desired = desiredByLocalId.get(blockId);
     const remote = mapping.notionBlockId ? remoteByNotionId.get(mapping.notionBlockId) : undefined;
     const baseSignature = managedBlockSignature(mapping.newState);
@@ -758,14 +758,14 @@ function createContentConflict(
     const mappedIdByNotionId = new Map(
       mappings
         .filter((mapping) => mapping.notionBlockId)
-        .map((mapping) => [mapping.notionBlockId!, mapping.inkwellBlockId ?? mapping.localNodeId]),
+        .map((mapping) => [mapping.notionBlockId!, mapping.jottathingBlockId ?? mapping.localNodeId]),
     );
     const desiredBySignature = new Map<string, string[]>();
     for (const desired of desiredBlocks) {
       const signature = managedBlockSignature(desired.notionBlock);
       desiredBySignature.set(signature, [
         ...(desiredBySignature.get(signature) ?? []),
-        desired.inkwellBlockId,
+        desired.jottathingBlockId,
       ]);
     }
     remoteContent.content = remoteContent.content?.map((node, index) => {
@@ -790,7 +790,7 @@ function createContentConflict(
         attrs: {
           ...(isMedia ? localNode?.attrs : {}),
           ...node.attrs,
-          ...(nextId ? { inkwellBlockId: nextId } : {}),
+          ...(nextId ? { jottathingBlockId: nextId } : {}),
           ...(notionId ? { notionBlockId: notionId } : {}),
           ...(fileUploadId ? { notionFileUploadId: fileUploadId, uploadState: 'done' } : {}),
         },
@@ -820,7 +820,7 @@ function documentNodeFromNotionState(
     const value = objectValue(item);
     const text = objectValue(value?.text);
     const plainText = (stringValue(value?.plain_text) ?? stringValue(text?.content) ?? '')
-      .replace(/\s*inkwell_capture_id:[\w-]+/g, '');
+      .replace(/\s*jottathing_capture_id:[\w-]+/g, '');
     if (!plainText) return [];
     const annotations = objectValue(value?.annotations) ?? {};
     const link = stringValue(value?.href) ?? stringValue(objectValue(text?.link)?.url);

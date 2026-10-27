@@ -91,7 +91,7 @@ describe('content-free sync queue references', () => {
       retry: vi.fn(),
     };
     runtime.supabase.from.mockImplementation((table: string) =>
-      table === 'inkwell_sync_queue_payloads' ? makeQuery([]) : makeQuery(null),
+      table === 'jottathing_sync_queue_payloads' ? makeQuery([]) : makeQuery(null),
     );
     runtime.pushPageToNotionForInstallation.mockRejectedValueOnce(
       Object.assign(new Error('Installation is no longer active.'), { code: 'installation_revoked' }),
@@ -105,7 +105,7 @@ describe('content-free sync queue references', () => {
 
     expect(message.ack).toHaveBeenCalledOnce();
     expect(message.retry).not.toHaveBeenCalled();
-    expect(runtime.supabase.from).toHaveBeenCalledWith('inkwell_sync_queue_payloads');
+    expect(runtime.supabase.from).toHaveBeenCalledWith('jottathing_sync_queue_payloads');
     expect(notify).toHaveBeenCalledOnce();
   });
 });

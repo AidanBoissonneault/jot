@@ -15,7 +15,7 @@ import {
   isUpdateCompatible,
   mappingFromDesired,
   mappingKey,
-  mappingsByInkwellId,
+  mappingsByJottathingId,
   positionAfter,
   previousMappedBlockId,
 } from './managedBlockIdentity.js';
@@ -103,7 +103,7 @@ export async function applyManagedBlockOps({
       const knownMappings = store.blockMappings[localPageId] ?? [];
       const snapshotIds = new Set(
         (snapshot.content ?? [])
-          .map((node) => node.attrs?.inkwellBlockId)
+          .map((node) => node.attrs?.jottathingBlockId)
           .filter((id): id is string => typeof id === 'string' && Boolean(id)),
       );
 
@@ -146,28 +146,28 @@ export async function applyManagedBlockOps({
     localPageId,
     notionBlocks,
   });
-  const desiredById = new Map(desiredBlocks.map((entry) => [entry.inkwellBlockId, entry]));
+  const desiredById = new Map(desiredBlocks.map((entry) => [entry.jottathingBlockId, entry]));
   const existingMappings = store.blockMappings[localPageId] ?? [];
-  const existingById = mappingsByInkwellId(existingMappings);
+  const existingById = mappingsByJottathingId(existingMappings);
   const nextById = new Map(existingMappings.map((mapping) => [mappingKey(mapping), mapping]));
   const createdByOrder: Array<NotionBlock | undefined> = [];
 
   for (const op of ops) {
-    const inkwellBlockId = op.inkwellBlockId;
-    if (!inkwellBlockId) continue;
+    const jottathingBlockId = op.jottathingBlockId;
+    if (!jottathingBlockId) continue;
 
     if (op.type === 'block_delete') {
-      const existing = nextById.get(inkwellBlockId);
+      const existing = nextById.get(jottathingBlockId);
       if (existing?.notionBlockId) await deleteManagedBlock(store, existing.notionBlockId);
-      nextById.delete(inkwellBlockId);
+      nextById.delete(jottathingBlockId);
       continue;
     }
 
     if (op.type !== 'block_create' && op.type !== 'block_update') continue;
-    const desired = desiredById.get(inkwellBlockId);
+    const desired = desiredById.get(jottathingBlockId);
     if (!desired) continue;
 
-    const existing = nextById.get(inkwellBlockId) ?? existingById.get(inkwellBlockId);
+    const existing = nextById.get(jottathingBlockId) ?? existingById.get(jottathingBlockId);
     if (!existing?.notionBlockId) {
       const createdBlock = await appendAndTrackBlock(
         appendManagedBlocks,
@@ -178,18 +178,18 @@ export async function applyManagedBlockOps({
         createdByOrder,
         desired.order,
       );
-      nextById.set(inkwellBlockId, mappingFromDesired(desired, createdBlock?.id, {}, createdBlock));
+      nextById.set(jottathingBlockId, mappingFromDesired(desired, createdBlock?.id, {}, createdBlock));
       continue;
     }
 
     if (existing.lastSyncedHash === desired.lastSyncedHash) {
-      nextById.set(inkwellBlockId, mappingFromDesired(desired, existing.notionBlockId, existing));
+      nextById.set(jottathingBlockId, mappingFromDesired(desired, existing.notionBlockId, existing));
       continue;
     }
 
     if (isUpdateCompatible(existing, desired)) {
       await updateManagedBlock(store, existing.notionBlockId, desired.notionBlock);
-      nextById.set(inkwellBlockId, mappingFromDesired(desired, existing.notionBlockId, existing));
+      nextById.set(jottathingBlockId, mappingFromDesired(desired, existing.notionBlockId, existing));
       continue;
     }
 
@@ -203,11 +203,11 @@ export async function applyManagedBlockOps({
       createdByOrder,
       desired.order,
     );
-    nextById.set(inkwellBlockId, mappingFromDesired(desired, createdBlock?.id, existing, createdBlock));
+    nextById.set(jottathingBlockId, mappingFromDesired(desired, createdBlock?.id, existing, createdBlock));
   }
 
   store.blockMappings[localPageId] = desiredBlocks
-    .map((entry) => nextById.get(entry.inkwellBlockId))
+    .map((entry) => nextById.get(entry.jottathingBlockId))
     .filter((mapping: BlockMapping | undefined): mapping is BlockMapping =>
       Boolean(mapping?.notionBlockId),
     );
@@ -242,7 +242,7 @@ async function applySingleManagedBlockOp({
   | 'updateManagedBlock'
 > & { op: ManagedBlockOperation }) {
   const mappings = [...(store.blockMappings[localPageId] ?? [])];
-  const existingIndex = mappings.findIndex((mapping) => mappingKey(mapping) === op.inkwellBlockId);
+  const existingIndex = mappings.findIndex((mapping) => mappingKey(mapping) === op.jottathingBlockId);
   const existing = existingIndex >= 0 ? mappings[existingIndex] : undefined;
 
   if (op.type === 'block_delete') {
@@ -252,7 +252,7 @@ async function applySingleManagedBlockOp({
     return { createdBlocks: [] };
   }
 
-  if (!op.inkwellBlockId || !op.payload?.block) return { createdBlocks: [] };
+  if (!op.jottathingBlockId || !op.payload?.block) return { createdBlocks: [] };
   const [notionBlock] = tiptapDocumentToNotionBlocks({
     type: 'doc',
     content: [op.payload.block],
@@ -260,8 +260,8 @@ async function applySingleManagedBlockOp({
   if (!notionBlock) return { createdBlocks: [] };
 
   const desired: DesiredManagedBlock = {
-    inkwellBlockId: op.inkwellBlockId,
-    localNodeId: op.inkwellBlockId,
+    jottathingBlockId: op.jottathingBlockId,
+    localNodeId: op.jottathingBlockId,
     localPageId,
     notionBlock,
     kind: kindFromNotionBlock(notionBlock),
@@ -277,7 +277,7 @@ async function applySingleManagedBlockOp({
   if (existing?.notionBlockId) {
     const remoteBlocks = await listAllBlockChildren(store, notionPageId);
     const current = remoteBlocks.find((block) => block.id === existing.notionBlockId);
-    if (current && op.payload.block.attrs?.inkwellConflictResolution === true) {
+    if (current && op.payload.block.attrs?.jottathingConflictResolution === true) {
       existing.newState = current as unknown as NotionBlockPayload;
     }
     const baseSignature = existing.newState ? managedBlockSignature(existing.newState) : undefined;
@@ -303,7 +303,7 @@ async function applySingleManagedBlockOp({
 
   if (!existing?.notionBlockId) {
     const previous = mappings.find(
-      (mapping) => mappingKey(mapping) === op.payload.afterInkwellBlockId && mapping.notionBlockId,
+      (mapping) => mappingKey(mapping) === op.payload.afterJottathingBlockId && mapping.notionBlockId,
     );
     createdBlock = await findRetryCreatedBlock({
       listAllBlockChildren,
@@ -335,7 +335,7 @@ async function applySingleManagedBlockOp({
     nextMapping = mappingFromDesired(desired, existing.notionBlockId, existing);
   } else {
     const previous = mappings.find(
-      (mapping) => mappingKey(mapping) === op.payload.afterInkwellBlockId && mapping.notionBlockId,
+      (mapping) => mappingKey(mapping) === op.payload.afterJottathingBlockId && mapping.notionBlockId,
     );
     createdBlock = await findRetryCreatedBlock({
       listAllBlockChildren,
@@ -367,7 +367,7 @@ async function applySingleManagedBlockOp({
 
   if (existingIndex >= 0) mappings.splice(existingIndex, 1);
   const previousIndex = mappings.findIndex(
-    (mapping) => mappingKey(mapping) === op.payload.afterInkwellBlockId,
+    (mapping) => mappingKey(mapping) === op.payload.afterJottathingBlockId,
   );
   const insertionIndex =
     existingIndex >= 0

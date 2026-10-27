@@ -4,7 +4,7 @@
  * @lastModified September 2026
  */
 
-import type { Hono } from 'hono';
+import type { Context, Hono } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import { randomUUID } from 'node:crypto';
 import { closePage, legalPage, privacyBody, termsBody } from '../htmlPages.js';
@@ -24,17 +24,40 @@ import {
   serverBaseUrl,
 } from '../workerUtils.js';
 import {
-  INKWELL_SESSION_COOKIE,
+  JOTTATHING_SESSION_COOKIE,
+  LEGACY_SESSION_COOKIE,
   auth,
-  getInkwellSession,
-  readInkwellSyncState,
-  requireInkwellSession,
+  getJottathingSession,
+  readJottathingSyncState,
+  requireJottathingSession,
   supabase,
 } from '../services/workerRuntime.js';
 import type { WorkerEnv } from '../types.js';
 
-const INKWELL_OAUTH_STATE_COOKIE = 'inkwell_notion_oauth_state';
+const JOTTATHING_OAUTH_STATE_COOKIE = 'jottathing_notion_oauth_state';
+const LEGACY_OAUTH_STATE_COOKIE = 'inkwell_notion_oauth_state';
 const SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 30;
+type AuthContext = Context<{ Bindings: WorkerEnv }>;
+
+function sharedCookieDomain(requestUrl: string): string | undefined {
+  return new URL(requestUrl).hostname.endsWith('.byaidan.com') ? '.byaidan.com' : undefined;
+}
+
+function clearSessionCookies(c: AuthContext): void {
+  for (const name of [JOTTATHING_SESSION_COOKIE, LEGACY_SESSION_COOKIE]) {
+    deleteCookie(c, name, { path: '/' });
+    const domain = sharedCookieDomain(c.req.url);
+    if (domain) deleteCookie(c, name, { path: '/', domain });
+  }
+}
+
+function clearOAuthStateCookies(c: AuthContext): void {
+  for (const name of [JOTTATHING_OAUTH_STATE_COOKIE, LEGACY_OAUTH_STATE_COOKIE]) {
+    deleteCookie(c, name, { path: '/auth/notion' });
+    const domain = sharedCookieDomain(c.req.url);
+    if (domain) deleteCookie(c, name, { path: '/auth/notion', domain });
+  }
+}
 
 /**
  * Registers middleware, legal documents, OAuth, session, logout, and diagnostic routes.
@@ -66,7 +89,10 @@ export function registerAuthRoutes(app: Hono<{ Bindings: WorkerEnv }>): void {
     if (trusted && origin) {
       c.header('Access-Control-Allow-Origin', origin);
       c.header('Access-Control-Allow-Methods', 'GET,POST,DELETE,OPTIONS');
-      c.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, X-Inkwell-Account');
+      c.header(
+        'Access-Control-Allow-Headers',
+        'Content-Type, Authorization, X-Requested-With, X-Jottathing-Account, X-Inkwell-Account',
+      );
       c.header('Access-Control-Allow-Credentials', 'true');
       c.header('Vary', 'Origin');
     }
@@ -83,14 +109,15 @@ export function registerAuthRoutes(app: Hono<{ Bindings: WorkerEnv }>): void {
       (c.req.path.startsWith('/sync/') && c.req.path !== '/sync/events') ||
       c.req.path.startsWith('/media/');
     if (requiresAccountBinding && c.req.method !== 'OPTIONS') {
-      const session = await getInkwellSession(c);
+      const session = await getJottathingSession(c);
       if (!session) return c.json({ error: 'Unauthorized' }, 401);
-      const expectedAccountId = c.req.header('x-inkwell-account');
+      const expectedAccountId =
+        c.req.header('x-jottathing-account') ?? c.req.header('x-inkwell-account');
       if (!expectedAccountId) {
-        return c.json({ error: 'Refresh the Inkwell session before syncing.' }, 428);
+        return c.json({ error: 'Refresh the Jottathing session before syncing.' }, 428);
       }
       if (expectedAccountId !== session.user.id) {
-        return c.json({ error: 'The active Notion account changed. Refresh the Inkwell session before syncing.' }, 409);
+        return c.json({ error: 'The active Notion account changed. Refresh the Jottathing session before syncing.' }, 409);
       }
     }
 
@@ -105,13 +132,13 @@ export function registerAuthRoutes(app: Hono<{ Bindings: WorkerEnv }>): void {
   // ─── Auth routes ──────────────────────────────────────────────────────────────
   
   /** Serves the successful authentication close page. @param c - Hono context. @returns HTML response. */
-  app.get('/auth/inkwell/complete', (c) =>
-    c.html(closePage('You are logged in to Inkwell. You can return to the side panel.')),
+  app.get('/auth/jottathing/complete', (c) =>
+    c.html(closePage('You are logged in to Jottathing. You can return to the side panel.')),
   );
   
   /** Serves the failed authentication close page. @param c - Hono context. @returns HTML response. */
-  app.get('/auth/inkwell/error', (c) =>
-    c.html(closePage('Inkwell login did not complete. You can close this tab and try again.'), 400),
+  app.get('/auth/jottathing/error', (c) =>
+    c.html(closePage('Jottathing login did not complete. You can close this tab and try again.'), 400),
   );
   
   /** Starts the Notion OAuth flow. @param c - Hono context. @returns Redirect response. */
@@ -138,12 +165,13 @@ export function registerAuthRoutes(app: Hono<{ Bindings: WorkerEnv }>): void {
     url.searchParams.set('redirect_uri', redirectUri);
     url.searchParams.set('state', state);
   
-    setCookie(c, INKWELL_OAUTH_STATE_COOKIE, state, {
+    setCookie(c, JOTTATHING_OAUTH_STATE_COOKIE, state, {
       httpOnly: true,
       maxAge: 600,
       path: '/auth/notion',
       sameSite: 'Lax',
       secure: workerUrl.startsWith('https://'),
+      ...(sharedCookieDomain(c.req.url) ? { domain: sharedCookieDomain(c.req.url) } : {}),
     });
   
     return c.redirect(url.toString());
@@ -155,12 +183,13 @@ export function registerAuthRoutes(app: Hono<{ Bindings: WorkerEnv }>): void {
     if (!env.NOTION_OAUTH_CLIENT_SECRET) {
       return c.html(closePage('Notion login is not configured on the sync server yet.'), 503);
     }
-    const expectedState = getCookie(c, INKWELL_OAUTH_STATE_COOKIE);
+    const expectedState =
+      getCookie(c, JOTTATHING_OAUTH_STATE_COOKIE) ?? getCookie(c, LEGACY_OAUTH_STATE_COOKIE);
     const state = c.req.query('state') ?? '';
     const code = c.req.query('code') ?? '';
     const error = c.req.query('error') ?? '';
   
-    deleteCookie(c, INKWELL_OAUTH_STATE_COOKIE, { path: '/auth/notion' });
+    clearOAuthStateCookies(c);
   
     if (error) {
       return c.html(closePage('Notion login did not complete. You can close this tab and try again.'), 400);
@@ -200,15 +229,16 @@ export function registerAuthRoutes(app: Hono<{ Bindings: WorkerEnv }>): void {
       });
       sessionCommitted = true;
   
-      setCookie(c, INKWELL_SESSION_COOKIE, sessionToken, {
+      setCookie(c, JOTTATHING_SESSION_COOKIE, sessionToken, {
         httpOnly: true,
         maxAge: SESSION_MAX_AGE_SECONDS,
         path: '/',
         sameSite: 'Lax',
         secure: serverBaseUrl(env).startsWith('https://'),
+        ...(sharedCookieDomain(c.req.url) ? { domain: sharedCookieDomain(c.req.url) } : {}),
       });
   
-      return c.html(closePage('You are logged in to Inkwell. You can return to the side panel.'));
+      return c.html(closePage('You are logged in to Jottathing. You can return to the side panel.'));
     } catch {
       if (exchangedAccessToken && !sessionCommitted) {
         await revokeNotionToken(env, exchangedAccessToken);
@@ -220,7 +250,7 @@ export function registerAuthRoutes(app: Hono<{ Bindings: WorkerEnv }>): void {
   
   /** Returns the active application and Notion session. @param c - Hono context. @returns JSON response. */
   app.get('/session', async (c) => {
-    const session = await getInkwellSession(c);
+    const session = await getJottathingSession(c);
     const installation = session
       ? await auth.getActiveInstallation(session.user.id).catch(() => undefined)
       : undefined;
@@ -238,15 +268,15 @@ export function registerAuthRoutes(app: Hono<{ Bindings: WorkerEnv }>): void {
   
   /** Revokes the active installation and clears its session. @param c - Hono context. @returns JSON response. */
   app.post('/auth/notion/logout', async (c) => {
-    const session = await requireInkwellSession(c);
+    const session = await requireJottathingSession(c);
     if (!session) {
-      deleteCookie(c, INKWELL_SESSION_COOKIE, { path: '/' });
+      clearSessionCookies(c);
       return c.json({ connected: false, loggedOut: false, notionTokenRevoked: false, retryable: false }, 401);
     }
 
-    const token = getCookie(c, INKWELL_SESSION_COOKIE);
+    const token = getCookie(c, JOTTATHING_SESSION_COOKIE) ?? getCookie(c, LEGACY_SESSION_COOKIE);
     if (!token) {
-      deleteCookie(c, INKWELL_SESSION_COOKIE, { path: '/' });
+      clearSessionCookies(c);
       return c.json({ connected: false, loggedOut: false, notionTokenRevoked: false, retryable: false }, 401);
     }
 
@@ -296,7 +326,7 @@ export function registerAuthRoutes(app: Hono<{ Bindings: WorkerEnv }>): void {
       }, 503);
     }
 
-    deleteCookie(c, INKWELL_SESSION_COOKIE, { path: '/' });
+    clearSessionCookies(c);
     return c.json({
       connected: false,
       loggedOut: true,
@@ -306,7 +336,7 @@ export function registerAuthRoutes(app: Hono<{ Bindings: WorkerEnv }>): void {
     });
   });
 
-  /** Deletes Inkwell's account data and Notion connection while preserving Notion pages. */
+  /** Deletes Jottathing's account data and Notion connection while preserving Notion pages. */
   app.post('/auth/notion/delete-connection', async (c) => {
     const parsed = await readLimitedJsonBody<{ requestId?: unknown }>(c.req.raw, MAX_CONTROL_JSON_REQUEST_BYTES);
     if (parsed.tooLarge) return c.json({ deleted: false, error: 'Deletion request is too large.' }, 413);
@@ -324,24 +354,24 @@ export function registerAuthRoutes(app: Hono<{ Bindings: WorkerEnv }>): void {
     }
 
     if (receipt?.status === 'completed') {
-      deleteCookie(c, INKWELL_SESSION_COOKIE, { path: '/' });
+      clearSessionCookies(c);
       return c.json({ deleted: true, notionTokenRevoked: receipt.notionTokenRevoked });
     }
 
-    const session = await requireInkwellSession(c);
+    const session = await requireJottathingSession(c);
     if (!session) {
       if (receipt?.status === 'pending' && receipt.userId) {
         try {
-          if (!(await auth.hasInkwellUser(receipt.userId))) {
+          if (!(await auth.hasJottathingUser(receipt.userId))) {
             await auth.completeConnectionDeletionReceipt(requestIdHash);
-            deleteCookie(c, INKWELL_SESSION_COOKIE, { path: '/' });
+            clearSessionCookies(c);
             return c.json({ deleted: true, notionTokenRevoked: receipt.notionTokenRevoked });
           }
         } catch {
           return c.json({ deleted: false, error: 'Unable to finish the deletion request.' }, 503);
         }
       }
-      deleteCookie(c, INKWELL_SESSION_COOKIE, { path: '/' });
+      clearSessionCookies(c);
       return c.json({ deleted: false, notionTokenRevoked: false }, 401);
     }
 
@@ -360,7 +390,7 @@ export function registerAuthRoutes(app: Hono<{ Bindings: WorkerEnv }>): void {
       return c.json({ deleted: false, error: 'Deletion request does not match this account.' }, 403);
     }
     if (receipt.status === 'completed') {
-      deleteCookie(c, INKWELL_SESSION_COOKIE, { path: '/' });
+      clearSessionCookies(c);
       return c.json({ deleted: true, notionTokenRevoked: receipt.notionTokenRevoked });
     }
 
@@ -384,17 +414,17 @@ export function registerAuthRoutes(app: Hono<{ Bindings: WorkerEnv }>): void {
       return c.json({ deleted: false, notionTokenRevoked }, 500);
     }
 
-    deleteCookie(c, INKWELL_SESSION_COOKIE, { path: '/' });
+    clearSessionCookies(c);
     return c.json({ deleted: true, notionTokenRevoked });
   });
   
   /** Returns recent installation diagnostics. @param c - Hono context. @returns JSON response. */
   app.get('/logs', async (c) => {
-    const session = await requireInkwellSession(c);
+    const session = await requireJottathingSession(c);
     if (!session) return c.json({ error: 'Unauthorized' }, 401);
     const installation = await auth.getActiveInstallation(session.user.id).catch(() => null);
     if (!installation) return c.json({ logs: [] });
-    const store = await readInkwellSyncState(installation.id);
+    const store = await readJottathingSyncState(installation.id);
     return c.json({ logs: store.logs.slice(-100) });
   });
 }

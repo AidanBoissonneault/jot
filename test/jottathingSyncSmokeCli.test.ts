@@ -2,17 +2,24 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { runSmokeCli } from '../scripts/inkwell-sync-smoke.js';
+import { runSmokeCli } from '../scripts/jottathing-sync-smoke.js';
 
-const SESSION_COOKIE = 'inkwell_session=smoke-test-cookie-value';
+const SESSION_COOKIE = 'jottathing_session=smoke-test-cookie-value';
 
-describe('Inkwell sync smoke CLI', () => {
+describe('Jottathing sync smoke CLI', () => {
   let cwd = '';
-  let requests: Array<{ method: string; route: string; cookie: string | null; body: Record<string, any> }>;
+  let requests: Array<{
+    method: string;
+    route: string;
+    cookie: string | null;
+    origin: string | null;
+    accountId: string | null;
+    body: Record<string, any>;
+  }>;
   let versions: Map<string, number>;
 
   beforeEach(async () => {
-    cwd = await mkdtemp(join(tmpdir(), 'inkwell-smoke-cli-'));
+    cwd = await mkdtemp(join(tmpdir(), 'jottathing-smoke-cli-'));
     requests = [];
     versions = new Map();
   });
@@ -26,10 +33,16 @@ describe('Inkwell sync smoke CLI', () => {
       const url = new URL(String(input));
       const method = init?.method ?? 'GET';
       const body = init?.body ? JSON.parse(String(init.body)) as Record<string, any> : {};
-      const cookie = new Headers(init?.headers).get('cookie');
-      requests.push({ method, route: `${url.pathname}${url.search}`, cookie, body });
+      const headers = new Headers(init?.headers);
+      const cookie = headers.get('cookie');
+      const origin = headers.get('origin');
+      const accountId = headers.get('x-jottathing-account');
+      requests.push({ method, route: `${url.pathname}${url.search}`, cookie, origin, accountId, body });
 
       if (method === 'GET') {
+        if (url.pathname === '/session') {
+          return new Response(JSON.stringify({ authenticated: true, connected: true, userId: 'smoke-test-account' }));
+        }
         const pageId = url.searchParams.get('pageId') ?? '';
         const version = versions.get(pageId) ?? 0;
         return new Response(JSON.stringify({ status: version ? 'synced' : 'pending', localVersion: version, syncedVersion: version }));
@@ -45,7 +58,7 @@ describe('Inkwell sync smoke CLI', () => {
 
   const dependencies = (fetchImpl: typeof fetch, output: string[] = []) => ({
     cwd,
-    env: { INKWELL_SESSION_COOKIE: SESSION_COOKIE },
+    env: { JOTTATHING_SESSION_COOKIE: SESSION_COOKIE },
     fetchImpl,
     output: (message: string) => output.push(message),
   });
@@ -56,8 +69,8 @@ describe('Inkwell sync smoke CLI', () => {
     const deps = dependencies(fetchImpl, output);
 
     await runSmokeCli(['create'], deps);
-    const runId = (await readFile(join(cwd, '.tmp/inkwell-sync-smoke/latest.txt'), 'utf8')).trim();
-    const statePath = join(cwd, '.tmp/inkwell-sync-smoke', `${runId}.json`);
+    const runId = (await readFile(join(cwd, '.tmp/jottathing-sync-smoke/latest.txt'), 'utf8')).trim();
+    const statePath = join(cwd, '.tmp/jottathing-sync-smoke', `${runId}.json`);
     const initial = JSON.parse(await readFile(statePath, 'utf8'));
     expect(initial.project.category).toBe('Test');
     expect(initial.project.tags).toContain('Test');
@@ -82,6 +95,9 @@ describe('Inkwell sync smoke CLI', () => {
     expect(requests.filter(({ method, route }) => method === 'POST' && route === '/sync/project').map(({ body }) => body.project.status))
       .toEqual(['active', 'archived']);
     expect(requests.every(({ cookie }) => cookie === SESSION_COOKIE)).toBe(true);
+    expect(requests.filter(({ route }) => route !== '/session').every(({ origin, accountId }) =>
+      origin === 'http://localhost:8787' && accountId === 'smoke-test-account',
+    )).toBe(true);
     expect(output.join('\n')).toContain('synced, local v3, synced v3; expected v3.');
     expect(output.join('\n')).toContain('Archived page');
     expect(output.join('\n')).not.toContain('smoke-test-cookie-value');
@@ -102,8 +118,30 @@ describe('Inkwell sync smoke CLI', () => {
       env: {},
       fetchImpl: fetchMock(),
       output: (message) => output.push(message),
-    })).rejects.toThrow('INKWELL_SESSION_COOKIE');
+    })).rejects.toThrow('JOTTATHING_SESSION_COOKIE');
     expect(requests).toHaveLength(0);
     expect(output.join('\n')).not.toContain('smoke-test-cookie-value');
+  });
+
+  it('stops before creating a run when the authenticated session has no connected workspace', async () => {
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const url = new URL(String(input));
+      const headers = new Headers(init?.headers);
+      requests.push({
+        method: init?.method ?? 'GET',
+        route: `${url.pathname}${url.search}`,
+        cookie: headers.get('cookie'),
+        origin: headers.get('origin'),
+        accountId: headers.get('x-jottathing-account'),
+        body: {},
+      });
+      return new Response(JSON.stringify({ authenticated: true, connected: false, userId: 'smoke-test-account' }));
+    };
+
+    await expect(runSmokeCli(['smoke'], dependencies(fetchImpl)))
+      .rejects.toThrow('no connected Notion workspace');
+    expect(requests.map(({ route }) => route)).toEqual(['/session']);
+    expect(await readFile(join(cwd, '.tmp/jottathing-sync-smoke/latest.txt'), 'utf8').catch(() => ''))
+      .toBe('');
   });
 });

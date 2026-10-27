@@ -72,7 +72,7 @@ export async function createNotionOAuthState(secret: string, generation: string)
     throw new Error('Invalid OAuth generation.');
   }
   const payload = `v1.${generation}.${randomToken(24)}`;
-  return `${payload}.${await computeHmacSignature(secret, `inkwell-oauth-state:${payload}`)}`;
+  return `${payload}.${await computeHmacSignature(secret, `jottathing-oauth-state:${payload}`)}`;
 }
 
 /** Verifies signed OAuth state and returns its generation, or null for invalid state. */
@@ -82,7 +82,7 @@ export async function notionOAuthGenerationFromState(secret: string, state: stri
   if (!match || BigInt(match[1]) > 9_223_372_036_854_775_807n) return null;
 
   const expected = Buffer.from(
-    await computeHmacSignature(secret, `inkwell-oauth-state:v1.${match[1]}.${match[2]}`),
+    await computeHmacSignature(secret, `jottathing-oauth-state:v1.${match[1]}.${match[2]}`),
     'hex',
   );
   const supplied = Buffer.from(match[3], 'hex');
@@ -149,7 +149,7 @@ export async function exchangeNotionCode(
 }
 
 /**
- * Normalizes the OAuth owner or bot identity to an Inkwell user.
+ * Normalizes the OAuth owner or bot identity to an Jottathing user.
  * @param tokens - Validated Notion OAuth tokens.
  * @returns Stable user identity.
  */

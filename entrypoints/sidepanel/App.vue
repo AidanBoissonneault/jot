@@ -39,8 +39,8 @@ import { useEditorDropHandling } from './composables/useEditorDropHandling';
 import { useSettingsActions } from './composables/useSettingsActions';
 import { useProjectSettings } from './composables/useProjectSettings';
 import { useTopBarStatus } from './composables/useTopBarStatus';
-import { useInkwellEditor } from './composables/useInkwellEditor';
-import type { InkwellEditorHandlers } from './composables/useInkwellEditor';
+import { useJottathingEditor } from './composables/useJottathingEditor';
+import type { JottathingEditorHandlers } from './composables/useJottathingEditor';
 import { useSidepanelLifecycle } from './composables/useSidepanelLifecycle';
 import { useEditorToolbar } from './composables/useEditorToolbar';
 import type { EditorToolbarHandlers } from './composables/useEditorToolbar';
@@ -51,18 +51,18 @@ import {
   highlightColors,
   textColors,
 } from './components/editor/editorOptions';
-import { useInkwellStore } from '@/src/stores/inkwell';
+import { useJottathingStore } from '@/src/stores/jottathing';
 import type { DocumentContent } from '@/src/types/capture';
 import type { SyncContentConflict } from '@/src/types/sync';
-import type { CaptureSelectionPayload, InkwellRuntimeMessage } from '@/src/types/messages';
+import type { CaptureSelectionPayload, JottathingRuntimeMessage } from '@/src/types/messages';
 import { autoMergeUniquePageAdditions } from '@/src/lib/syncConflictAutoMerge';
 
-const store = useInkwellStore();
+const store = useJottathingStore();
 
-function handleConnectionDeletionMessage(message: InkwellRuntimeMessage) {
-  if (message.type === 'inkwell.abortConnectionDeletion') {
+function handleConnectionDeletionMessage(message: JottathingRuntimeMessage) {
+  if (message.type === 'jottathing.abortConnectionDeletion') {
     void notionClient.abortConnectionDeletion().catch(() => undefined);
-  } else if (message.type === 'inkwell.completeConnectionDeletion') {
+  } else if (message.type === 'jottathing.completeConnectionDeletion') {
     void notionClient.completeConnectionDeletion()
       .catch(() => undefined)
       .finally(() => window.location.reload());
@@ -184,7 +184,7 @@ const isProjectNameEditing = ref(false);
 const projectNameInputRef = ref<HTMLInputElement | null>(null);
 const editorStateVersion = ref(0);
 const isApplyingStoredContent = ref(false);
-const editorHandlers: InkwellEditorHandlers = {
+const editorHandlers: JottathingEditorHandlers = {
   handleDrop: () => false,
   showContextMenu: () => undefined,
 };
@@ -212,7 +212,7 @@ const {
   saveEditorContentInBackground,
 });
 
-const { editor, skipNextEditorUpdate, clearEditorUpdateSkip } = useInkwellEditor({
+const { editor, skipNextEditorUpdate, clearEditorUpdateSkip } = useJottathingEditor({
   editorStateVersion,
   handlers: editorHandlers,
   isApplyingStoredContent,

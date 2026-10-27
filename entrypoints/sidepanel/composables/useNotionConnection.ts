@@ -1,13 +1,13 @@
 /** @file Notion legal consent, sign-in polling, and connection controls. */
 import { computed, ref, type Ref } from 'vue';
 import { hasAcceptedCurrentLegalTerms, storeCurrentLegalAcceptance } from '@/src/services/legal';
-import type { useInkwellStore } from '@/src/stores/inkwell';
+import type { useJottathingStore } from '@/src/stores/jottathing';
 
-type InkwellStore = ReturnType<typeof useInkwellStore>;
+type JottathingStore = ReturnType<typeof useJottathingStore>;
 
 /** Owns Notion consent state and sign-in/session lifecycle for the sidepanel. */
 export function useNotionConnection(
-  store: InkwellStore,
+  store: JottathingStore,
   activeTab: Ref<'editor' | 'settings'>,
   uiMessage: Ref<string>,
   prepareForDeletion?: () => Promise<void>,
@@ -76,7 +76,7 @@ export function useNotionConnection(
   async function deleteConnection() {
     if (isDeletingConnection.value) return;
     if (!store.syncConfig.authenticated || !store.syncConfig.userId) {
-      uiMessage.value = 'Sign in to the Notion account that owns this Inkwell data before deleting cloud data. Your local documents are unchanged.';
+      uiMessage.value = 'Sign in to the Notion account that owns this Jottathing data before deleting cloud data. Your local documents are unchanged.';
       return;
     }
     if (
@@ -88,7 +88,7 @@ export function useNotionConnection(
       return;
     }
     const confirmed = window.confirm(
-      'Delete the Inkwell connection and all Inkwell data? This removes local documents and queued changes in this browser, plus Inkwell account and sync data from the server. Pages already stored in Notion will remain. This cannot be undone.',
+      'Delete the Jottathing connection and all Jottathing data? This removes local documents and queued changes in this browser, plus Jottathing account and sync data from the server. Pages already stored in Notion will remain. This cannot be undone.',
     );
     if (!confirmed) return;
 
@@ -101,10 +101,10 @@ export function useNotionConnection(
       resetAfterDeletion?.();
       activeTab.value = 'settings';
       uiMessage.value = result.notionTokenRevoked
-        ? 'Inkwell data and connection deleted. Your Notion pages remain.'
-        : 'Inkwell data was deleted, but Notion did not confirm token revocation. Remove the Inkwell connection in Notion settings if it remains listed.';
+        ? 'Jottathing data and connection deleted. Your Notion pages remain.'
+        : 'Jottathing data was deleted, but Notion did not confirm token revocation. Remove the Jottathing connection in Notion settings if it remains listed.';
     } catch {
-      uiMessage.value = store.errorMessage || 'Unable to delete the Inkwell connection.';
+      uiMessage.value = store.errorMessage || 'Unable to delete the Jottathing connection.';
     } finally {
       isDeletingConnection.value = false;
     }

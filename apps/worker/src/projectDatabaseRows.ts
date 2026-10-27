@@ -1,5 +1,5 @@
 /**
- * @file Queries managed project rows and maps Notion rows to Inkwell state.
+ * @file Queries managed project rows and maps Notion rows to Jottathing state.
  * @author Aidan Boissonneault
  * @lastModified September 2026
  */
@@ -16,7 +16,7 @@ import {
   titleFromPage,
 } from './projectDatabaseValues.js';
 import type {
-  InkwellDatabase,
+  JottathingDatabase,
   JsonObject,
   NotionObject,
   NotionRequester,
@@ -37,16 +37,18 @@ export function clearSyncMappings(
 
 /** Marks an unusable database and clears its derived local mappings. */
 export function invalidateProjectDatabase(store: WorkerStore, databaseId: string): void {
-  store.ignoredInkwellDatabaseIds ??= new Set();
-  if (databaseId) store.ignoredInkwellDatabaseIds.add(databaseId);
-  store.inkwellDatabase = undefined;
+  store.ignoredJottathingDatabaseIds ??= new Set();
+  if (databaseId) store.ignoredJottathingDatabaseIds.add(databaseId);
+  store.jottathingDatabase = undefined;
   clearSyncMappings(store);
 }
 
-/** Converts a managed Notion database row into an Inkwell project. */
+/** Converts a managed Notion database row into an Jottathing project. */
 export function projectFromNotionPage(page: NotionObject): Project | undefined {
   const properties = page.properties ?? {};
-  const id = richTextProperty(properties[PROJECT_PROPERTIES.inkwellId]).trim();
+  const id = richTextProperty(
+    properties[PROJECT_PROPERTIES.jottathingId] ?? properties['Inkwell ID'] ?? properties['Jot ID'],
+  ).trim();
   if (!id) return undefined;
 
   const createdAt =
@@ -77,7 +79,7 @@ export function projectFromNotionPage(page: NotionObject): Project | undefined {
 /** Stores the current Notion row identity for a synchronized project. */
 export function storeProjectPage(
   store: WorkerStore,
-  database: InkwellDatabase,
+  database: JottathingDatabase,
   project: Project,
   page: NotionObject,
 ): void {
@@ -135,7 +137,7 @@ export function createProjectDatabaseRows(notionRequest: NotionRequester) {
     return results;
   }
 
-  async function findProjectPageByInkwellId(
+  async function findProjectPageByJottathingId(
     store: WorkerStore,
     dataSourceId: string,
     projectId: string,
@@ -145,7 +147,7 @@ export function createProjectDatabaseRows(notionRequest: NotionRequester) {
       body: {
         page_size: 1,
         filter: {
-          property: PROJECT_PROPERTIES.inkwellId,
+          property: PROJECT_PROPERTIES.jottathingId,
           rich_text: { equals: projectId },
         },
       },
@@ -182,7 +184,7 @@ export function createProjectDatabaseRows(notionRequest: NotionRequester) {
 
   return {
     queryManagedProjectRows,
-    findProjectPageByInkwellId,
+    findProjectPageByJottathingId,
     createProjectDatabasePage,
     updateProjectDatabasePage,
   };

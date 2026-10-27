@@ -1,4 +1,4 @@
-/** @file Creates the Tiptap editor with Inkwell extensions and event hooks. */
+/** @file Creates the Tiptap editor with Jottathing extensions and event hooks. */
 import { useEditor } from '@tiptap/vue-3';
 import StarterKit from '@tiptap/starter-kit';
 import { ref } from 'vue';
@@ -7,31 +7,31 @@ import type { Ref } from 'vue';
 import type { EditorView } from '@tiptap/pm/view';
 import { NodeSelection } from '@tiptap/pm/state';
 import { CodeNotebook } from '@/src/extensions/codeNotebook';
-import { InkwellBlockIds } from '@/src/extensions/inkwellBlockIds';
+import { JottathingBlockIds } from '@/src/extensions/jottathingBlockIds';
 import { notionClient } from '@/src/services/notionClient';
 import {
-  decodeInkwellSource,
-  INKWELL_SOURCE_ATTR,
-  InkwellLink,
+  decodeJottathingSource,
+  JOTTATHING_SOURCE_ATTR,
+  JottathingLink,
   safeExternalUrl,
-} from '@/src/extensions/inkwellLink';
+} from '@/src/extensions/jottathingLink';
 import { MediaKit } from '@/src/extensions/media';
-import { InkwellSyncConflict } from '@/src/extensions/syncConflictBlock';
+import { JottathingSyncConflict } from '@/src/extensions/syncConflictBlock';
 import { PortableTextEditingKit } from '@/src/extensions/textFormatting';
 import type { DocumentContent } from '@/src/types/capture';
 import type { OpenSourceRequestMessage } from '@/src/types/messages';
 import type { SyncContentConflict } from '@/src/types/sync';
 
 /** Stable callbacks connected after their editor-dependent composables initialize. */
-export interface InkwellEditorHandlers {
+export interface JottathingEditorHandlers {
   handleDrop: (view: EditorView, event: DragEvent) => boolean;
   showContextMenu: (view: EditorView, event: MouseEvent) => void;
 }
 
 /** Reactive state required by the editor lifecycle and block-boundary saves. */
-interface InkwellEditorOptions {
+interface JottathingEditorOptions {
   editorStateVersion: Ref<number>;
-  handlers: InkwellEditorHandlers;
+  handlers: JottathingEditorHandlers;
   isApplyingStoredContent: Ref<boolean>;
   saveEditorContent: () => Promise<void>;
   resolveSyncConflict: (
@@ -41,13 +41,13 @@ interface InkwellEditorOptions {
 }
 
 /** Builds the primary editor with supported content extensions and interaction hooks. */
-export function useInkwellEditor({
+export function useJottathingEditor({
   editorStateVersion,
   handlers,
   isApplyingStoredContent,
   saveEditorContent,
   resolveSyncConflict,
-}: InkwellEditorOptions) {
+}: JottathingEditorOptions) {
   const shouldSkipNextUpdateSave = ref(false);
   let focusedBlockKey: string | undefined;
 
@@ -67,11 +67,11 @@ export function useInkwellEditor({
         codeBlock: false,
       }),
       CodeNotebook,
-      InkwellLink,
-      InkwellBlockIds,
+      JottathingLink,
+      JottathingBlockIds,
       PortableTextEditingKit,
       MediaKit,
-      InkwellSyncConflict.configure({ onResolve: resolveSyncConflict }),
+      JottathingSyncConflict.configure({ onResolve: resolveSyncConflict }),
     ],
     content: {
       type: 'doc',
@@ -121,13 +121,13 @@ export function useInkwellEditor({
         }
 
         event.preventDefault();
-        const sourcePayload = decodeInkwellSource(
-          anchor.getAttribute(`data-${kebabCase(INKWELL_SOURCE_ATTR)}`),
+        const sourcePayload = decodeJottathingSource(
+          anchor.getAttribute(`data-${kebabCase(JOTTATHING_SOURCE_ATTR)}`),
         );
 
         if (sourcePayload) {
           void browser.runtime.sendMessage({
-            type: 'inkwell.openSourceRequest',
+            type: 'jottathing.openSourceRequest',
             payload: sourcePayload,
           } satisfies OpenSourceRequestMessage);
           return true;

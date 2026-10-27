@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 /** Presents the SyncSettingsSection settings section; the parent owns the shared settings state. */
 import { computed } from 'vue';
 import type { SettingsPageContext } from './settingsPageContext';
@@ -135,7 +135,7 @@ async function assignUnknownQueueToCurrentAccount() {
       class="icon-label-button danger-button"
       :disabled="isDeletingConnection || queueAccountMismatch"
       :aria-busy="isDeletingConnection"
-      :title="queueAccountMismatch ? 'Reconnect the account that owns this local data first' : isDeletingConnection ? 'Deleting connection' : 'Delete connection and Inkwell data'"
+      :title="queueAccountMismatch ? 'Reconnect the account that owns this local data first' : isDeletingConnection ? 'Deleting connection' : 'Delete connection and Jottathing data'"
       @click="deleteConnection"
     >
       <font-awesome-icon :icon="['fas', 'trash-can']" fixed-width />

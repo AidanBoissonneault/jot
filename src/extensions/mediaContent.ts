@@ -165,7 +165,7 @@ function mediaIdentities(node: DocumentContent): string[] {
   };
   add('upload', attrs.notionFileUploadId);
   add('block', attrs.notionBlockId);
-  add('inkwell', attrs.inkwellBlockId);
+  add('jottathing', attrs.jottathingBlockId);
   return identities;
 }
 
@@ -180,9 +180,9 @@ function mediaNodesShareIdentity(localNode: DocumentContent, syncedNode: Documen
   const syncedBlockId = nonEmptyString(syncedAttrs.notionBlockId);
   if (localBlockId && syncedBlockId) return localBlockId === syncedBlockId;
 
-  const localInkwellId = nonEmptyString(localAttrs.inkwellBlockId);
-  const syncedInkwellId = nonEmptyString(syncedAttrs.inkwellBlockId);
-  if (localInkwellId && syncedInkwellId) return localInkwellId === syncedInkwellId;
+  const localJottathingId = nonEmptyString(localAttrs.jottathingBlockId);
+  const syncedJottathingId = nonEmptyString(syncedAttrs.jottathingBlockId);
+  if (localJottathingId && syncedJottathingId) return localJottathingId === syncedJottathingId;
 
   return !mediaIdentities(localNode).length || !mediaIdentities(syncedNode).length;
 }
@@ -192,7 +192,7 @@ function mediaIdentityAttributes(
   syncedAttrs: Record<string, unknown>,
 ): Record<string, string> {
   const identityAttrs: Record<string, string> = {};
-  for (const key of ['notionFileUploadId', 'notionBlockId', 'inkwellBlockId']) {
+  for (const key of ['notionFileUploadId', 'notionBlockId', 'jottathingBlockId']) {
     const localValue = localAttrs[key];
     const syncedValue = syncedAttrs[key];
     const value = typeof syncedValue === 'string' && syncedValue.trim()
@@ -214,9 +214,9 @@ function localMediaForSyncedNode(
   const notionBlockId = nonEmptyString(attrs.notionBlockId);
   if (notionBlockId) return localMediaByIdentity.get(`block:${notionBlockId}`);
 
-  const inkwellBlockId = nonEmptyString(attrs.inkwellBlockId);
-  return inkwellBlockId
-    ? localMediaByIdentity.get(`inkwell:${inkwellBlockId}`)
+  const jottathingBlockId = nonEmptyString(attrs.jottathingBlockId);
+  return jottathingBlockId
+    ? localMediaByIdentity.get(`jottathing:${jottathingBlockId}`)
     : undefined;
 }
 
@@ -338,7 +338,7 @@ function hasMatchingMediaNode(
 }
 
 function nodeId(node: DocumentContent) {
-  const value = node.attrs?.inkwellBlockId;
+  const value = node.attrs?.jottathingBlockId;
   return typeof value === 'string' && value ? value : undefined;
 }
 

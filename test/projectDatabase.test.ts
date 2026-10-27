@@ -9,8 +9,8 @@ const expectedProperties = {
   Updated: {},
   'Created by': {},
   'Last edited by': {},
-  'Inkwell ID': {},
-  'Managed by Inkwell': {},
+  'Jottathing ID': {},
+  'Managed by Jottathing': {},
 };
 
 function database(id: string, dataSourceId: string, lastEditedTime: string) {
@@ -19,7 +19,7 @@ function database(id: string, dataSourceId: string, lastEditedTime: string) {
     data_sources: [{ id: dataSourceId }],
     last_edited_time: lastEditedTime,
     parent: { type: 'workspace', workspace: true },
-    title: [{ plain_text: 'Inkwell' }],
+    title: [{ plain_text: 'Jottathing' }],
   };
 }
 
@@ -39,7 +39,7 @@ function helpers(notionRequest: ReturnType<typeof vi.fn>) {
   });
 }
 
-describe('Inkwell project database selection', () => {
+describe('Jottathing project database selection', () => {
   test('follows an explicit parent selection instead of a cached database under another parent', async () => {
     const selectedDatabase = {
       ...database('db-new-parent', 'ds-new-parent', '2026-10-07T12:00:00.000Z'),
@@ -70,11 +70,11 @@ describe('Inkwell project database selection', () => {
       throw new Error(`Unexpected request: ${endpoint}`);
     });
     const store = {
-      inkwellDatabase: {
+      jottathingDatabase: {
         databaseId: 'db-old-parent',
         dataSourceId: 'ds-old-parent',
         parentPageId: 'old-parent',
-        title: 'Inkwell',
+        title: 'Jottathing',
         views: {},
       },
       logs: [],
@@ -87,7 +87,7 @@ describe('Inkwell project database selection', () => {
 
     expect(selected.databaseId).toBe('db-new-parent');
     expect(selected.parentPageId).toBe('new-parent');
-    expect(store.inkwellDatabase?.databaseId).toBe('db-new-parent');
+    expect(store.jottathingDatabase?.databaseId).toBe('db-new-parent');
     expect(notionRequest).not.toHaveBeenCalledWith(store, '/databases/db-old-parent');
   });
 
@@ -98,13 +98,78 @@ describe('Inkwell project database selection', () => {
       throw new Error(`Unexpected request: ${endpoint}`);
     });
     const store = {
-      inkwellDatabase: { databaseId: 'db-saved', dataSourceId: 'ds-saved' },
+      jottathingDatabase: { databaseId: 'db-saved', dataSourceId: 'ds-saved' },
       logs: [],
     };
 
     await expect(helpers(notionRequest).ensureProjectDatabase(store)).rejects.toBe(transientError);
     expect(notionRequest).toHaveBeenCalledTimes(1);
-    expect(store.inkwellDatabase.databaseId).toBe('db-saved');
+    expect(store.jottathingDatabase.databaseId).toBe('db-saved');
+  });
+
+  test('copies a Jot-only project ID into the Jottathing property when loading the saved database', async () => {
+    const legacyProperties = {
+      'Jot ID': { type: 'rich_text' },
+      'Managed by Jot': { type: 'checkbox' },
+    };
+    const legacyProject = {
+      id: 'legacy-project-row',
+      properties: {
+        'Jot ID': { rich_text: [{ plain_text: 'project-legacy' }] },
+        'Managed by Jot': { checkbox: true },
+        'Jottathing ID': { rich_text: [] },
+        'Managed by Jottathing': { checkbox: false },
+      },
+    };
+    const notionRequest = vi.fn(async (_store, endpoint, init = {}) => {
+      if (endpoint === '/databases/db-legacy') {
+        return database('db-legacy', 'ds-legacy', '2026-10-10T12:00:00.000Z');
+      }
+      if (endpoint === '/data_sources/ds-legacy') {
+        return {
+          properties: init.method === 'PATCH'
+            ? { ...legacyProperties, ...init.body?.properties }
+            : legacyProperties,
+        };
+      }
+      if (endpoint === '/data_sources/ds-legacy/query') {
+        return { results: [legacyProject], has_more: false };
+      }
+      if (endpoint === '/views?database_id=db-legacy') {
+        return { results: [
+          { name: 'Active Projects' },
+          { name: 'By Category' },
+          { name: 'All Projects' },
+        ] };
+      }
+      if (endpoint === '/pages/legacy-project-row') return {};
+      throw new Error(`Unexpected request: ${endpoint}`);
+    });
+    const store = {
+      jottathingDatabase: {
+        databaseId: 'db-legacy',
+        dataSourceId: 'ds-legacy',
+        title: 'Jottathing',
+        views: {},
+      },
+      logs: [],
+    };
+
+    await helpers(notionRequest).ensureProjectDatabase(store as never);
+
+    expect(notionRequest).toHaveBeenCalledWith(
+      store,
+      '/pages/legacy-project-row',
+      {
+        method: 'PATCH',
+        body: {
+          properties: {
+            'Jottathing ID': { rich_text: [{ type: 'text', text: { content: 'project-legacy' } }] },
+            'Managed by Jottathing': { checkbox: true },
+          },
+        },
+      },
+    );
   });
 
   test('searches every result page and adopts the database with the most managed projects', async () => {
@@ -119,6 +184,9 @@ describe('Inkwell project database selection', () => {
       }
       if (endpoint === '/data_sources/ds-empty/query') {
         return { results: [], has_more: false };
+      }
+      if (endpoint === '/data_sources/ds-empty') {
+        return { properties: expectedProperties };
       }
       if (endpoint === '/data_sources/ds-main/query') {
         return { results: [{ id: 'one' }, { id: 'two' }, { id: 'three' }], has_more: false };
@@ -137,19 +205,24 @@ describe('Inkwell project database selection', () => {
       }
       throw new Error(`Unexpected request: ${endpoint}`);
     });
-    const store: { logs: unknown[]; inkwellDatabase?: { databaseId: string } } = { logs: [] };
+    const store: { logs: unknown[]; jottathingDatabase?: { databaseId: string } } = { logs: [] };
 
     const selected = await helpers(notionRequest).ensureProjectDatabase(store);
 
     expect(selected.databaseId).toBe('db-main');
-    expect(store.inkwellDatabase?.databaseId).toBe('db-main');
+    expect(store.jottathingDatabase?.databaseId).toBe('db-main');
     const searchCalls = notionRequest.mock.calls.filter(([, endpoint]) => endpoint === '/search');
-    expect(searchCalls).toHaveLength(2);
+    expect(searchCalls).toHaveLength(6);
+    expect(searchCalls.map(([, , init]) => init.body.query)).toEqual([
+      'Jottathing', 'Jottathing',
+      'Inkwell', 'Inkwell',
+      'Jot', 'Jot',
+    ]);
     expect(searchCalls[1][2].body.start_cursor).toBe('next');
   });
 });
 
-describe('Inkwell project database reload', () => {
+describe('Jottathing project database reload', () => {
   test('imports Ravens Heart and LinkedIn Demo from their remote projects and omits trashed records', async () => {
     const remoteContent = {
       type: 'doc',
@@ -160,7 +233,7 @@ describe('Inkwell project database reload', () => {
       archived: false,
       in_trash: false,
       properties: {
-        'Inkwell ID': { rich_text: [{ plain_text: 'project-plants' }] },
+        'Jottathing ID': { rich_text: [{ plain_text: 'project-plants' }] },
         Name: { type: 'title', title: [{ plain_text: 'Plants!' }] },
         Status: { select: { name: 'Active' } },
         Created: { date: { start: '2026-10-06T10:00:00.000Z' } },
@@ -174,7 +247,7 @@ describe('Inkwell project database reload', () => {
       in_trash: true,
       properties: {
         ...externalProjectRow.properties,
-        'Inkwell ID': { rich_text: [{ plain_text: 'project-trashed' }] },
+        'Jottathing ID': { rich_text: [{ plain_text: 'project-trashed' }] },
         Name: { type: 'title', title: [{ plain_text: 'Trashed Project' }] },
       },
     };
@@ -183,7 +256,7 @@ describe('Inkwell project database reload', () => {
       id: 'project-row-career-prep',
       properties: {
         ...externalProjectRow.properties,
-        'Inkwell ID': { rich_text: [{ plain_text: 'project-career-prep' }] },
+        'Jottathing ID': { rich_text: [{ plain_text: 'project-career-prep' }] },
         Name: { type: 'title', title: [{ plain_text: 'Career Prep' }] },
       },
     };
@@ -248,11 +321,11 @@ describe('Inkwell project database reload', () => {
     });
     const store = {
       blockMappings: {},
-      inkwellDatabase: {
+      jottathingDatabase: {
         databaseId: 'db-main',
         dataSourceId: 'ds-main',
         parentPageId: undefined,
-        title: 'Inkwell',
+        title: 'Jottathing',
         views: {},
       },
       notePages: {},

@@ -1,5 +1,5 @@
 import { notionClient } from '@/src/services/notionClient';
-import { safeInkwellSourceUrl } from '@/src/extensions/inkwellLink';
+import { safeJottathingSourceUrl } from '@/src/extensions/jottathingLink';
 import { parseCaptureSelectionPayload } from '@/src/lib/capturePayload';
 import type {
   CaptureSelectionMessage,
@@ -8,7 +8,7 @@ import type {
   ConsumeTextDragMessage,
   HeadingDragStartedMessage,
   InsertCaptureRequestMessage,
-  InkwellRuntimeMessage,
+  JottathingRuntimeMessage,
   OpenSourceRequestMessage,
   ProjectPageUpdatedMessage,
   RestoreHighlightMessage,
@@ -35,40 +35,40 @@ export default defineBackground(() => {
     void browser.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
   }
 
-  browser.runtime.onMessage.addListener((message: InkwellRuntimeMessage) => {
-    if (message?.type === 'inkwell.prepareConnectionDeletion') {
+  browser.runtime.onMessage.addListener((message: JottathingRuntimeMessage) => {
+    if (message?.type === 'jottathing.prepareConnectionDeletion') {
       return notionClient.prepareConnectionDeletion();
     }
 
-    if (message?.type === 'inkwell.abortConnectionDeletion') {
+    if (message?.type === 'jottathing.abortConnectionDeletion') {
       return notionClient.abortConnectionDeletion().then(() => true);
     }
 
-    if (message?.type === 'inkwell.completeConnectionDeletion') {
+    if (message?.type === 'jottathing.completeConnectionDeletion') {
       return notionClient.completeConnectionDeletion().then(() => true);
     }
 
-    if (message?.type === 'inkwell.captureSelection') {
+    if (message?.type === 'jottathing.captureSelection') {
       return handleCaptureSelection(message);
     }
 
-    if (message?.type === 'inkwell.headingDragStarted') {
+    if (message?.type === 'jottathing.headingDragStarted') {
       return handleHeadingDragStarted(message);
     }
 
-    if (message?.type === 'inkwell.consumeHeadingDrag') {
+    if (message?.type === 'jottathing.consumeHeadingDrag') {
       return handleConsumeHeadingDrag(message);
     }
 
-    if (message?.type === 'inkwell.textDragStarted') {
+    if (message?.type === 'jottathing.textDragStarted') {
       return handleTextDragStarted(message);
     }
 
-    if (message?.type === 'inkwell.consumeTextDrag') {
+    if (message?.type === 'jottathing.consumeTextDrag') {
       return handleConsumeTextDrag(message);
     }
 
-    if (message?.type === 'inkwell.openSourceRequest') {
+    if (message?.type === 'jottathing.openSourceRequest') {
       return handleOpenSourceRequest(message);
     }
 
@@ -77,9 +77,9 @@ export default defineBackground(() => {
 
   // A background restart (including a browser reload) is an opportunity to
   // resume durable work, unless the user has an unfinished connection wipe.
-  void browser.storage.local.get('inkwellPendingConnectionDeletion').then(
+  void browser.storage.local.get('jottathingPendingConnectionDeletion').then(
     async (stored: Record<string, unknown>) => {
-      if (stored.inkwellPendingConnectionDeletion) {
+      if (stored.jottathingPendingConnectionDeletion) {
         notionClient.markConnectionDeletionPending();
       } else {
         await notionClient.flushPendingSyncOps({ force: true });
@@ -166,7 +166,7 @@ async function handleCaptureSelection(message: CaptureSelectionMessage) {
 
   const wasInsertedBySidePanel = await browser.runtime
     .sendMessage({
-      type: 'inkwell.insertCaptureRequest',
+      type: 'jottathing.insertCaptureRequest',
       payload,
     } satisfies InsertCaptureRequestMessage)
     .then((response: unknown) => response === true)
@@ -180,7 +180,7 @@ async function handleCaptureSelection(message: CaptureSelectionMessage) {
 
   void browser.runtime
     .sendMessage({
-      type: 'inkwell.projectPageUpdated',
+      type: 'jottathing.projectPageUpdated',
       payload: {
         page,
       },
@@ -191,7 +191,7 @@ async function handleCaptureSelection(message: CaptureSelectionMessage) {
 }
 
 async function handleOpenSourceRequest(message: OpenSourceRequestMessage) {
-  const url = safeInkwellSourceUrl(message.payload);
+  const url = safeJottathingSourceUrl(message.payload);
 
   if (!url) {
     return false;
@@ -207,7 +207,7 @@ async function handleOpenSourceRequest(message: OpenSourceRequestMessage) {
 
   await browser.tabs
     .sendMessage(tab.id, {
-      type: 'inkwell.restoreHighlight',
+      type: 'jottathing.restoreHighlight',
       payload: message.payload,
     } satisfies RestoreHighlightMessage)
     .catch(() => undefined);

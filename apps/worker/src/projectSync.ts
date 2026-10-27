@@ -18,7 +18,7 @@ interface ProjectPageResult {
 /** Describes the sync project folder options contract used by this API feature. */
 interface SyncProjectFolderOptions {
   archiveProjectRootPage: (store: WorkerStore, pageId: string) => Promise<unknown>;
-  ensureInkwellRootPage: (
+  ensureJottathingRootPage: (
     store: WorkerStore,
     options: { selectedParentPageId: string | undefined },
   ) => Promise<NotionParentPage>;
@@ -47,7 +47,7 @@ export async function syncProjectFolder({
   store,
   project,
   selectedParentPageId,
-  ensureInkwellRootPage,
+  ensureJottathingRootPage,
   ensureProjectPage,
   ensureProjectRootPage,
   archiveProjectRootPage,
@@ -99,11 +99,11 @@ export async function syncProjectFolder({
     };
   }
 
-  const inkwellRootPage = await ensureInkwellRootPage(store, { selectedParentPageId });
-  const projectPage = await ensureProjectRootPage(store, inkwellRootPage.id, project);
+  const jottathingRootPage = await ensureJottathingRootPage(store, { selectedParentPageId });
+  const projectPage = await ensureProjectRootPage(store, jottathingRootPage.id, project);
 
   return {
-    parentPage: inkwellRootPage,
+    parentPage: jottathingRootPage,
     projectPage,
     status: 'saved',
     message: 'Synced project to Notion.',

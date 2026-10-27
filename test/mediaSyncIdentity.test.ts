@@ -8,7 +8,7 @@ describe('media sync identity', () => {
       blockMappings: {
         'page-1': [{
           localPageId: 'page-1',
-          inkwellBlockId: 'image-1',
+          jottathingBlockId: 'image-1',
           localNodeId: 'image-1',
           notionBlockId: 'notion-image-1',
           kind: 'media',
@@ -40,7 +40,7 @@ describe('media sync identity', () => {
 
     expect(content?.content?.[0].attrs).toMatchObject({
       src: 'https://secure.notion-static.com/fresh-image.png?expires=2',
-      inkwellBlockId: 'image-1',
+      jottathingBlockId: 'image-1',
       notionBlockId: 'notion-image-1',
       notionFileUploadId: 'upload-1',
       uploadState: 'done',

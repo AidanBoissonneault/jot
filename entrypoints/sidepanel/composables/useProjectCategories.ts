@@ -1,8 +1,10 @@
-﻿/** @file Project category labels and persisted category color choices. */
+/** @file Project category labels and persisted category color choices. */
 import { computed, ref, type Ref } from 'vue';
-import { useInkwellStore } from '@/src/stores/inkwell';
+import { useJottathingStore } from '@/src/stores/jottathing';
+import { getBrandedStorageValue } from '@/src/services/brandedStorage';
 
-const CATEGORY_COLORS_KEY = 'inkwellCategoryColors';
+const CATEGORY_COLORS_KEY = 'jottathingCategoryColors';
+const LEGACY_CATEGORY_COLORS_KEY = 'inkwellCategoryColors';
 
 export const categoryColorOptions = [
   '#2563eb',
@@ -20,7 +22,7 @@ export function useProjectCategories(
   activeTitleMenu: Ref<'project' | 'page' | 'category' | null>,
   saveProjectMetadata: () => Promise<void>,
 ) {
-  const store = useInkwellStore();
+  const store = useJottathingStore();
   const projectCategoryDraft = ref('');
   const isProjectCategoryDraftDirty = ref(false);
   const projectCategoryDraftRevision = ref(0);
@@ -69,8 +71,7 @@ export function useProjectCategories(
   }));
 
   async function loadCategoryColors() {
-    const stored = await browser.storage.local.get(CATEGORY_COLORS_KEY);
-    const value = stored[CATEGORY_COLORS_KEY];
+    const value = await getBrandedStorageValue<unknown>(CATEGORY_COLORS_KEY, LEGACY_CATEGORY_COLORS_KEY);
     if (value && typeof value === 'object' && !Array.isArray(value)) {
       categoryColors.value = Object.fromEntries(
         Object.entries(value as Record<string, unknown>).filter(

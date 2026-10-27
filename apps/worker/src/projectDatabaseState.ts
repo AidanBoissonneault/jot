@@ -159,7 +159,7 @@ export function createProjectDatabaseStateHelpers({
   ) {
     const key = projectStateKey(project.id);
     const previous = store.projectBlocks?.[key];
-    const isUserReviewedReplacement = project.stateContent?.attrs?.inkwellConflictResolution === true;
+    const isUserReviewedReplacement = project.stateContent?.attrs?.jottathingConflictResolution === true;
     const container = await ensureToggleBlock(store, notionPageId, 'Project State', {
       isForcedMerge: isForcedMerge || isUserReviewedReplacement,
       key,
@@ -169,14 +169,14 @@ export function createProjectDatabaseStateHelpers({
       previous?.lastEditedTime &&
       container.last_edited_time &&
       container.last_edited_time !== previous.lastEditedTime;
-    const existingInkwellBlockIds = isUserReviewedReplacement
+    const existingJottathingBlockIds = isUserReviewedReplacement
       ? new Set<string>()
-      : inkwellBlockIdsForProjectState(store, key);
+      : jottathingBlockIdsForProjectState(store, key);
     const stateContent = isUserReviewedReplacement
       ? project.stateContent ?? emptyDocument()
       : pruneOrphanedProjectStateSources(
           project.stateContent ?? emptyDocument(),
-          existingInkwellBlockIds,
+          existingJottathingBlockIds,
         );
     let remoteBlocks: NotionBlock[] = [];
 
@@ -191,12 +191,12 @@ export function createProjectDatabaseStateHelpers({
       for (const block of remoteBlocks) {
         const node = notionBlocksToTiptapDocument([block]).content?.[0];
         if (!node || !projectStateSourceBlockIds(node).some((blockId) =>
-          !existingInkwellBlockIds.has(blockId),
+          !existingJottathingBlockIds.has(blockId),
         )) continue;
 
         const cleaned = pruneOrphanedProjectStateSources(
           { type: 'doc', content: [node] },
-          existingInkwellBlockIds,
+          existingJottathingBlockIds,
         );
         const replacementNode = cleaned.content?.[0];
         if (!replacementNode) {
@@ -237,7 +237,7 @@ export function createProjectDatabaseStateHelpers({
       const content = remoteBlocks.length
         ? pruneOrphanedProjectStateSources(
             notionBlocksToTiptapDocument(remoteBlocks),
-            existingInkwellBlockIds,
+            existingJottathingBlockIds,
           )
         : emptyDocument();
       const refreshed = await notionRequest(store, `/blocks/${container.id}`).catch(() => container);
@@ -288,7 +288,7 @@ export function createProjectDatabaseStateHelpers({
     page: ProjectPage,
   ): Promise<NotionObject> {
     return ensureToggleBlock(store, projectPageId, page.title || 'Untitled Page', {
-      isForcedMerge: page.content.attrs?.inkwellConflictResolution === true,
+      isForcedMerge: page.content.attrs?.jottathingConflictResolution === true,
       key: threadKey(page.id),
       mappings: store.threadBlocks,
     });
@@ -435,7 +435,7 @@ function isNotionObjectNotFoundError(error: unknown): boolean {
   return detail.status === 404 || detail.code === 'object_not_found';
 }
 
-function inkwellBlockIdsForProjectState(
+function jottathingBlockIdsForProjectState(
   store: WorkerStore,
   projectStateMappingKey: string,
 ): Set<string> {
@@ -448,7 +448,7 @@ function inkwellBlockIdsForProjectState(
     ) continue;
 
     for (const mapping of mappings) {
-      const id = mapping.inkwellBlockId ?? mapping.localNodeId;
+      const id = mapping.jottathingBlockId ?? mapping.localNodeId;
       if (id && !id.startsWith(SOURCE_BLOCK_ID_PREFIX)) ids.add(id);
     }
   }

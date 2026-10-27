@@ -179,7 +179,7 @@ function richTextToTiptapInline(richText: NotionRichText[] = []): DocumentConten
   const content: DocumentContent[] = [];
 
   for (const item of richText) {
-    const plainText = String(item.plain_text ?? '').replace(/\s*inkwell_capture_id:[\w-]+/g, '');
+    const plainText = String(item.plain_text ?? '').replace(/\s*jottathing_capture_id:[\w-]+/g, '');
 
     if (!plainText) {
       continue;
@@ -244,7 +244,7 @@ function plainTiptapText(text: string): DocumentContent[] | undefined {
 /**
  * Classifies a Notion block for mapping compatibility decisions.
  * @param block - Notion block or outbound block payload.
- * @returns Stable Inkwell block category.
+ * @returns Stable Jottathing block category.
  */
 export function kindFromNotionBlock(block: Pick<NotionBlockPayload, 'type'>): string {
   if (['heading_1', 'heading_2', 'heading_3', 'heading_4'].includes(block.type)) {

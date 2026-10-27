@@ -1,13 +1,13 @@
-﻿/* Page title, sync notices, and editor header controls. */
+/* Page title, sync notices, and editor header controls. */
 .editor-shell {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   min-height: 0;
   margin-top: 12px;
-  border: 1px solid var(--inkwell-border);
-  border-radius: var(--inkwell-radius);
-  background: var(--inkwell-surface);
-  box-shadow: var(--inkwell-shadow);
+  border: 1px solid var(--jottathing-border);
+  border-radius: var(--jottathing-radius);
+  background: var(--jottathing-surface);
+  box-shadow: var(--jottathing-shadow);
 }
 
 .record-panel {
@@ -29,7 +29,7 @@
   display: grid;
   gap: 8px;
   padding: 8px;
-  border-bottom: 1px solid var(--inkwell-border);
+  border-bottom: 1px solid var(--jottathing-border);
 }
 
 .editor-title-row,
@@ -78,7 +78,7 @@
   border-color: transparent;
   border-radius: 4px 0 0 4px;
   background: transparent;
-  color: var(--inkwell-text);
+  color: var(--jottathing-text);
   font-size: 1.05rem;
   font-weight: 800;
   text-align: left;
@@ -88,7 +88,7 @@
 }
 
 .page-title-selector input {
-  color: var(--inkwell-text);
+  color: var(--jottathing-text);
   font-size: 1.05rem;
   font-weight: 800;
 }
@@ -106,9 +106,9 @@
 
 .inline-title-input:focus {
   border-color: transparent;
-  background: color-mix(in srgb, var(--inkwell-surface-muted) 58%, transparent);
+  background: color-mix(in srgb, var(--jottathing-surface-muted) 58%, transparent);
   outline: none;
-  box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--inkwell-accent) 44%, transparent);
+  box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--jottathing-accent) 44%, transparent);
 }
 
 @keyframes inline-title-appear {
@@ -148,14 +148,14 @@
   padding: 0;
   border-color: transparent;
   background: transparent;
-  color: var(--inkwell-muted);
+  color: var(--jottathing-muted);
 }
 
 .title-menu-trigger:hover,
 .title-menu-trigger.active {
-  border-color: var(--inkwell-border);
-  background: var(--inkwell-surface-muted);
-  color: var(--inkwell-text);
+  border-color: var(--jottathing-border);
+  background: var(--jottathing-surface-muted);
+  color: var(--jottathing-text);
 }
 
 .title-dropdown {
@@ -167,10 +167,10 @@
   max-height: min(340px, calc(100vh - 180px));
   overflow: auto;
   padding: 6px;
-  border: 1px solid var(--inkwell-border);
-  border-radius: var(--inkwell-radius);
-  background: var(--inkwell-surface);
-  box-shadow: var(--inkwell-shadow);
+  border: 1px solid var(--jottathing-border);
+  border-radius: var(--jottathing-radius);
+  background: var(--jottathing-surface);
+  box-shadow: var(--jottathing-shadow);
 }
 
 .project-dropdown {
@@ -192,7 +192,7 @@
   overflow: hidden;
   border-color: transparent;
   background: transparent;
-  color: var(--inkwell-text);
+  color: var(--jottathing-text);
   font-weight: 650;
   text-align: left;
   text-overflow: ellipsis;
@@ -218,11 +218,11 @@
 
 .title-dropdown-item:hover,
 .title-dropdown-item.active {
-  background: var(--inkwell-surface-muted);
+  background: var(--jottathing-surface-muted);
 }
 
 .title-dropdown-item.active {
-  color: var(--inkwell-accent-strong);
+  color: var(--jottathing-accent-strong);
   font-weight: 800;
 }
 
@@ -232,16 +232,16 @@
   gap: 4px;
   margin-top: 5px;
   padding-top: 6px;
-  border-top: 1px solid var(--inkwell-border);
+  border-top: 1px solid var(--jottathing-border);
 }
 
 .title-dropdown-actions button {
   min-width: 0;
   min-height: 34px;
   padding: 0 7px;
-  border-color: var(--inkwell-border);
-  background: var(--inkwell-surface-muted);
-  color: var(--inkwell-text);
+  border-color: var(--jottathing-border);
+  background: var(--jottathing-surface-muted);
+  color: var(--jottathing-text);
   font-size: 0.76rem;
   font-weight: 750;
 }
@@ -294,7 +294,7 @@
   min-width: 0;
   border: 0;
   background: transparent;
-  color: var(--inkwell-text);
+  color: var(--jottathing-text);
 }
 
 .page-title input {

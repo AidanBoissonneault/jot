@@ -1,6 +1,6 @@
 import type { DocumentContent, Project, ProjectPage } from '@/src/types/capture';
 import { idbGet, idbSet } from '@/src/services/idbStore';
-import { normalizeInkwellBlockIds } from '@/src/extensions/inkwellBlockIds';
+import { normalizeJottathingBlockIds } from '@/src/extensions/jottathingBlockIds';
 import type {
   SyncBlockOperation as BlockSyncOp,
   SyncBlockDeliveryConflict,
@@ -13,7 +13,7 @@ const PENDING_PROJECT_SYNC_EVENTS_KEY = 'pending_project_sync_events';
 const PROJECT_SYNC_CONFLICT_BACKUPS_KEY = 'project_sync_conflict_backups';
 const SYNC_SEQUENCE_KEY = 'pending_sync_sequence';
 const LOCAL_SYNC_VERSIONS_KEY = 'local_sync_versions';
-const INKWELL_BLOCK_ID_ATTR = 'inkwellBlockId';
+const JOTTATHING_BLOCK_ID_ATTR = 'jottathingBlockId';
 const queueChangeListeners = new Set<() => void>();
 let queueMutation = Promise.resolve();
 
@@ -235,7 +235,7 @@ export async function resolveBlockedProjectSyncEvent(
     const hasBlockedConflict = events.some((event) => event.deliveryBlocked);
     const hasPendingReviewedMerge = events.some((event) =>
       event.type !== 'project_source_upsert' &&
-      event.payload.project.stateContent?.attrs?.inkwellConflictResolution === true,
+      event.payload.project.stateContent?.attrs?.jottathingConflictResolution === true,
     );
     if (!hasBlockedConflict && !hasPendingReviewedMerge) return false;
 
@@ -428,7 +428,7 @@ function mergeReloadedProject(
     ...remoteProject,
     ...localMetadata,
     stateRemoteRevision: hasRemoteProject ? remoteProject.stateRemoteRevision : undefined,
-    stateContent: normalizeInkwellBlockIds({
+    stateContent: normalizeJottathingBlockIds({
       type: remoteProject.stateContent?.type ?? localProject?.stateContent?.type ?? 'doc',
       content: mergedBlocks,
     }),
@@ -447,17 +447,17 @@ function countProjectStateBlocks(blocks: DocumentContent[]): Map<string, number>
 }
 
 function projectStateBlockSignature(block: DocumentContent): string {
-  return JSON.stringify(withoutInkwellBlockIds(block));
+  return JSON.stringify(withoutJottathingBlockIds(block));
 }
 
-function withoutInkwellBlockIds(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(withoutInkwellBlockIds);
+function withoutJottathingBlockIds(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(withoutJottathingBlockIds);
   if (!value || typeof value !== 'object') return value;
   return Object.fromEntries(
     Object.entries(value)
-      .filter(([key]) => key !== INKWELL_BLOCK_ID_ATTR)
+      .filter(([key]) => key !== JOTTATHING_BLOCK_ID_ATTR)
       .sort(([first], [second]) => first.localeCompare(second))
-      .map(([key, nested]) => [key, withoutInkwellBlockIds(nested)]),
+      .map(([key, nested]) => [key, withoutJottathingBlockIds(nested)]),
   );
 }
 
@@ -539,43 +539,43 @@ export function buildPageSyncOps({
     ops.push({ ...base, type: 'page_upsert' });
   }
 
-  for (const [inkwellBlockId, block] of nextBlocks) {
-    const index = nextOrder.indexOf(inkwellBlockId);
-    const previousBlock = previousBlocks.get(inkwellBlockId);
+  for (const [jottathingBlockId, block] of nextBlocks) {
+    const index = nextOrder.indexOf(jottathingBlockId);
+    const previousBlock = previousBlocks.get(jottathingBlockId);
     if (!previousBlock) {
       ops.push({
         ...base,
         type: 'block_create',
-        inkwellBlockId,
+        jottathingBlockId,
         payload: {
           ...base.payload,
           block,
           index,
-          afterInkwellBlockId: nextOrder[index - 1],
+          afterJottathingBlockId: nextOrder[index - 1],
         },
       });
     } else if (stableJson(previousBlock) !== stableJson(block)) {
       ops.push({
         ...base,
         type: 'block_update',
-        inkwellBlockId,
+        jottathingBlockId,
         payload: {
           ...base.payload,
           block,
           previousBlock,
           index,
-          afterInkwellBlockId: nextOrder[index - 1],
+          afterJottathingBlockId: nextOrder[index - 1],
         },
       });
     }
   }
 
-  for (const [inkwellBlockId, previousBlock] of previousBlocks) {
-    if (!nextBlocks.has(inkwellBlockId)) {
+  for (const [jottathingBlockId, previousBlock] of previousBlocks) {
+    if (!nextBlocks.has(jottathingBlockId)) {
       ops.push({
         ...base,
         type: 'block_delete',
-        inkwellBlockId,
+        jottathingBlockId,
         payload: { ...base.payload, previousBlock },
       });
     }
@@ -635,15 +635,15 @@ function fullPageReplacementOps(
 ): Omit<BlockSyncOp, 'opId' | 'sequence' | 'createdAt' | 'localVersion'>[] {
   return [
     { ...base, type: 'blocks_reset' },
-    ...order.map((inkwellBlockId, index) => ({
+    ...order.map((jottathingBlockId, index) => ({
       ...base,
       type: 'block_create' as const,
-      inkwellBlockId,
+      jottathingBlockId,
       payload: {
         ...base.payload,
-        block: blocks.get(inkwellBlockId),
+        block: blocks.get(jottathingBlockId),
         index,
-        afterInkwellBlockId: order[index - 1],
+        afterJottathingBlockId: order[index - 1],
       },
     })),
   ];
@@ -734,19 +734,19 @@ function expandLegacyFullPageSnapshots(ops: BlockSyncOp[]): BlockSyncOp[] {
       type: 'blocks_reset',
       payload: { ...op.payload, order: undefined, replaceAll: undefined },
     };
-    const creates = order.map((inkwellBlockId, index): BlockSyncOp => ({
+    const creates = order.map((jottathingBlockId, index): BlockSyncOp => ({
       ...op,
-      opId: `${op.opId}:block:${inkwellBlockId}`,
+      opId: `${op.opId}:block:${jottathingBlockId}`,
       type: 'block_create',
-      inkwellBlockId,
+      jottathingBlockId,
       sequence: op.sequence + ((index + 1) / (order.length + 1)),
       payload: {
         ...op.payload,
-        block: blocks.get(inkwellBlockId),
+        block: blocks.get(jottathingBlockId),
         order: undefined,
         replaceAll: undefined,
         index,
-        afterInkwellBlockId: order[index - 1],
+        afterJottathingBlockId: order[index - 1],
       },
     }));
     return [reset, ...creates];
@@ -794,11 +794,11 @@ function collapseLegacyFullPageSnapshots(ops: BlockSyncOp[]): BlockSyncOp[] {
 
   for (const batch of batches.values()) {
     const pageUpsert = batch.find((op) => op.type === 'page_upsert');
-    const creates = batch.filter((op) => op.type === 'block_create' && op.inkwellBlockId);
+    const creates = batch.filter((op) => op.type === 'block_create' && op.jottathingBlockId);
     if (!pageUpsert || !creates.length) continue;
 
     const order = Array.from(blocksById(pageUpsert.payload.page.content).keys());
-    const createdIds = new Set(creates.map((op) => op.inkwellBlockId));
+    const createdIds = new Set(creates.map((op) => op.jottathingBlockId));
     if (!order.length || order.some((id) => !createdIds.has(id))) continue;
 
     const snapshotOps = [pageUpsert, ...creates];
@@ -835,12 +835,12 @@ function blocksById(content: DocumentContent | undefined): Map<string, DocumentC
 }
 
 function blockId(block: DocumentContent): string {
-  const value = block.attrs?.[INKWELL_BLOCK_ID_ATTR];
+  const value = block.attrs?.[JOTTATHING_BLOCK_ID_ATTR];
   return typeof value === 'string' ? value : '';
 }
 
 function opBlockKey(op: BlockSyncOp): string {
-  return op.inkwellBlockId ? `${op.pageId}:${op.inkwellBlockId}` : '';
+  return op.jottathingBlockId ? `${op.pageId}:${op.jottathingBlockId}` : '';
 }
 
 function pageMetadataChanged(previousPage: ProjectPage, page: ProjectPage): boolean {

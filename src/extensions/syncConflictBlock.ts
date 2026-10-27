@@ -11,8 +11,8 @@ export type SyncConflictBlockOptions = {
   ) => Promise<DocumentContent | null | void>;
 };
 
-export const InkwellSyncConflict = Node.create<SyncConflictBlockOptions>({
-  name: 'inkwellSyncConflict',
+export const JottathingSyncConflict = Node.create<SyncConflictBlockOptions>({
+  name: 'jottathingSyncConflict',
   group: 'block',
   atom: true,
   selectable: false,
@@ -26,10 +26,10 @@ export const InkwellSyncConflict = Node.create<SyncConflictBlockOptions>({
     };
   },
   parseHTML() {
-    return [{ tag: 'div[data-inkwell-sync-conflict]' }];
+    return [{ tag: 'div[data-jottathing-sync-conflict]' }];
   },
   renderHTML({ HTMLAttributes }) {
-    return ['div', mergeAttributes(HTMLAttributes, { 'data-inkwell-sync-conflict': '' }), 'Merge conflict'];
+    return ['div', mergeAttributes(HTMLAttributes, { 'data-jottathing-sync-conflict': '' }), 'Merge conflict'];
   },
   addNodeView() {
     return VueNodeViewRenderer(SyncConflictNodeView);

@@ -1,5 +1,5 @@
 import type { CaptureSelectionPayload } from '@/src/types/messages';
-import { safeExternalUrl } from '@/src/extensions/inkwellLink';
+import { safeExternalUrl } from '@/src/extensions/jottathingLink';
 
 const MAX_CAPTURE_TEXT_LENGTH = 256 * 1024;
 const MAX_CAPTURE_URL_LENGTH = 8192;

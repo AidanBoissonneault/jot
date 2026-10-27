@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeInkwellBlockIds } from '@/src/extensions/inkwellBlockIds';
+import { normalizeJottathingBlockIds } from '@/src/extensions/jottathingBlockIds';
 import {
-  decodeInkwellSource,
-  encodeInkwellSource,
-  isAccessibleInkwellSource,
-  storeInkwellSource,
-} from '@/src/extensions/inkwellLink';
+  decodeJottathingSource,
+  encodeJottathingSource,
+  isAccessibleJottathingSource,
+  storeJottathingSource,
+} from '@/src/extensions/jottathingLink';
 import {
   addSourceToProjectState,
   capturedBlockId,
@@ -46,7 +46,7 @@ describe('captured source provenance', () => {
   });
 
   it('stores a compact source record and expands its relative locator', () => {
-    expect(storeInkwellSource(source)).toEqual({
+    expect(storeJottathingSource(source)).toEqual({
       u: source.sourceUrl,
       t: 'selected text',
       l: '#:~:text=selected%20text',
@@ -56,15 +56,15 @@ describe('captured source provenance', () => {
       s: ' after',
     });
 
-    expect(decodeInkwellSource(encodeInkwellSource(source))).toMatchObject({
+    expect(decodeJottathingSource(encodeJottathingSource(source))).toMatchObject({
       sourceUrl: source.sourceUrl,
       highlightMeta: source.highlightMeta,
     });
   });
 
   it('only exposes web URLs as accessible sources', () => {
-    expect(isAccessibleInkwellSource(source)).toBe(true);
-    expect(isAccessibleInkwellSource({
+    expect(isAccessibleJottathingSource(source)).toBe(true);
+    expect(isAccessibleJottathingSource({
       sourceUrl: 'javascript:alert(1)',
       highlightMeta: { text: 'unsafe' },
     })).toBe(false);
@@ -80,7 +80,7 @@ describe('captured source provenance', () => {
     const blockId = capturedBlockId(content);
     expect(blockId).toEqual(expect.any(String));
     expect(content).toHaveLength(2);
-    expect(content[0].attrs?.inkwellSource).toEqual(storeInkwellSource(source));
+    expect(content[0].attrs?.jottathingSource).toEqual(storeJottathingSource(source));
     expect(content[1]).toEqual({ type: 'paragraph' });
 
     const state = addSourceToProjectState(undefined, blockId!, source);
@@ -130,10 +130,10 @@ describe('captured source provenance', () => {
     });
 
     const sourceBlocks = withSecond.content?.filter((node) =>
-      String(node.content?.[0]?.text).startsWith('inkwell_source_v1:'),
+      String(node.content?.[0]?.text).startsWith('jottathing_source_v1:'),
     );
     expect(sourceBlocks).toHaveLength(2);
-    expect(sourceBlocks?.map((node) => node.attrs?.inkwellBlockId)).toEqual([
+    expect(sourceBlocks?.map((node) => node.attrs?.jottathingBlockId)).toEqual([
       'source:block-1',
       'source:block-2',
     ]);
@@ -168,49 +168,49 @@ describe('captured source provenance', () => {
 
   it('migrates legacy source-link metadata to its preceding capture block', () => {
     const legacySource = JSON.stringify(source);
-    const normalized = normalizeInkwellBlockIds({
+    const normalized = normalizeJottathingBlockIds({
       type: 'doc',
       content: [
         {
           type: 'blockquote',
-          attrs: { inkwellBlockId: 'quote-1', inkwellSource: null },
+          attrs: { jottathingBlockId: 'quote-1', jottathingSource: null },
           content: [{ type: 'paragraph', content: [{ type: 'text', text: 'selected text' }] }],
         },
         {
           type: 'paragraph',
-          attrs: { inkwellBlockId: 'source-1', inkwellSource: null },
+          attrs: { jottathingBlockId: 'source-1', jottathingSource: null },
           content: [{
             type: 'text',
             text: `Source: Example documentation - ${source.sourceUrl}`,
-            marks: [{ type: 'link', attrs: { href: source.sourceUrl, inkwellSource: legacySource } }],
+            marks: [{ type: 'link', attrs: { href: source.sourceUrl, jottathingSource: legacySource } }],
           }],
         },
       ],
     });
 
-    expect(normalized.content?.[0].attrs?.inkwellSource).toEqual(storeInkwellSource(source));
-    expect(normalized.content?.[1].attrs).toEqual({ inkwellBlockId: 'source-1' });
+    expect(normalized.content?.[0].attrs?.jottathingSource).toEqual(storeJottathingSource(source));
+    expect(normalized.content?.[1].attrs).toEqual({ jottathingBlockId: 'source-1' });
 
     const migrated = migratePageSourcesToProjectState(normalized, undefined);
     expect(migrated.content.content).toHaveLength(1);
-    expect(migrated.content.content?.[0].attrs?.inkwellSource).toEqual(
-      storeInkwellSource(source),
+    expect(migrated.content.content?.[0].attrs?.jottathingSource).toEqual(
+      storeJottathingSource(source),
     );
     expect(sourceFromProjectState(migrated.stateContent, 'quote-1')).not.toBeNull();
   });
 
   it('recovers source navigation from a Notion-preserved source link', () => {
-    const normalized = normalizeInkwellBlockIds({
+    const normalized = normalizeJottathingBlockIds({
       type: 'doc',
       content: [
         {
           type: 'codeBlock',
-          attrs: { inkwellBlockId: 'code-1' },
+          attrs: { jottathingBlockId: 'code-1' },
           content: [{ type: 'text', text: 'selected text' }],
         },
         {
           type: 'paragraph',
-          attrs: { inkwellBlockId: 'source-1' },
+          attrs: { jottathingBlockId: 'source-1' },
           content: [{
             type: 'text',
             text: 'Source: Example documentation',
@@ -223,7 +223,7 @@ describe('captured source provenance', () => {
       ],
     });
 
-    expect(normalized.content?.[0].attrs?.inkwellSource).toEqual({
+    expect(normalized.content?.[0].attrs?.jottathingSource).toEqual({
       u: 'https://example.com/docs?version=2',
       t: 'selected text',
     });

@@ -1,5 +1,5 @@
 /**
- * @file Defines normalized domain contracts shared by the Inkwell API worker.
+ * @file Defines normalized domain contracts shared by the Jottathing API worker.
  * @author Aidan Boissonneault
  * @lastModified September 2026
  */
@@ -108,7 +108,7 @@ export interface NotionRequester {
 
 /** Describes the durable identity and synchronization state for one managed block. */
 export interface BlockMapping {
-  inkwellBlockId: string;
+  jottathingBlockId: string;
   kind: string;
   lastSyncedHash: string;
   localNodeId: string;
@@ -138,8 +138,8 @@ export interface StoredBlock {
   title: string;
 }
 
-/** Describes the discovered or created Inkwell project database. */
-export interface InkwellDatabase {
+/** Describes the discovered or created Jottathing project database. */
+export interface JottathingDatabase {
   dataSourceId: string;
   databaseId: string;
   parentPageId: string | undefined;
@@ -159,9 +159,9 @@ export interface WorkerLog {
 /** Describes the fully normalized persisted state for an installation. */
 export interface WorkerStore {
   blockMappings: Record<string, BlockMapping[]>;
-  ignoredInkwellDatabaseIds: Set<string>;
-  inkwellDatabase: InkwellDatabase | undefined;
-  inkwellRootPage: NotionParentPage | undefined;
+  ignoredJottathingDatabaseIds: Set<string>;
+  jottathingDatabase: JottathingDatabase | undefined;
+  jottathingRootPage: NotionParentPage | undefined;
   installationId: Identifier | undefined;
   logs: WorkerLog[];
   notePages: Record<string, StoredPage>;
@@ -180,7 +180,7 @@ export interface ConnectedWorkerStore extends WorkerStore {
 
 /** Describes the normalized subset of a local block operation consumed by the worker. */
 export interface ManagedBlockOperation {
-  inkwellBlockId: string | undefined;
+  jottathingBlockId: string | undefined;
   payload: Partial<SyncBlockOperation['payload']>;
   type: SyncBlockOperation['type'];
 }
@@ -249,8 +249,9 @@ export interface SyncQueueReference {
 
 /** Describes Cloudflare bindings and configuration required by the API worker. */
 export interface WorkerEnv {
-  INKWELL_EXTENSION_ORIGIN: string | undefined;
-  INKWELL_ROOT_PAGE_TITLE: string | undefined;
+  JOTTATHING_EXTENSION_ORIGIN: string | undefined;
+  JOTTATHING_ROOT_PAGE_TITLE: string | undefined;
+  INKWELL_EXTENSION_ORIGIN?: string | undefined;
   NOTION_OAUTH_CLIENT_ID: string | undefined;
   NOTION_OAUTH_CLIENT_SECRET: string | undefined;
   NOTION_VERSION: string | undefined;

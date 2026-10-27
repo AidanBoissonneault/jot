@@ -1,20 +1,24 @@
 import type { DocumentContent } from '@/src/types/capture';
 import type { SourceOpenPayload } from '@/src/types/messages';
 import {
-  decodeInkwellSource,
-  INKWELL_SOURCE_ATTR,
-  storeInkwellSource,
-  type StoredInkwellSource,
-} from '@/src/extensions/inkwellLink';
+  decodeJottathingSource,
+  JOTTATHING_SOURCE_ATTR,
+  storeJottathingSource,
+  type StoredJottathingSource,
+} from '@/src/extensions/jottathingLink';
 import {
   SOURCE_BLOCK_ID_PREFIX,
   SOURCE_ENTRY_PREFIX,
+  LEGACY_SOURCE_ENTRY_PREFIX,
   SOURCE_V2_PREFIX,
+  LEGACY_SOURCE_V2_PREFIX,
   LINKS_V1_PREFIX,
+  LEGACY_LINKS_V1_PREFIX,
   SOURCE_REGISTRY_PREFIX,
+  LEGACY_SOURCE_REGISTRY_PREFIX,
 } from '@/src/lib/projectStateSources';
 
-type SourceRegistry = Record<string, StoredInkwellSource>;
+type SourceRegistry = Record<string, StoredJottathingSource>;
 
 export function sourceFromProjectState(
   stateContent: DocumentContent | undefined,
@@ -24,7 +28,7 @@ export function sourceFromProjectState(
     return null;
   }
 
-  return decodeInkwellSource(readSourceRegistry(stateContent)[blockId]);
+  return decodeJottathingSource(readSourceRegistry(stateContent)[blockId]);
 }
 
 export function addSourceToProjectState(
@@ -36,7 +40,7 @@ export function addSourceToProjectState(
   const visibleContent = visibleProjectStateContent(stateContent);
   const nextRegistry = {
     ...registry,
-    [blockId]: storeInkwellSource(source),
+    [blockId]: storeJottathingSource(source),
   };
 
   return {
@@ -52,7 +56,7 @@ export function sourceEntryForProjectState(
   blockId: string,
   source: SourceOpenPayload,
 ): DocumentContent {
-  return sourceEntryNode(blockId, storeInkwellSource(source));
+  return sourceEntryNode(blockId, storeJottathingSource(source));
 }
 
 export function mergeVisibleProjectState(
@@ -94,7 +98,7 @@ export function visibleProjectStateContent(
 }
 
 export function capturedBlockId(content: DocumentContent[]) {
-  const value = content[0]?.attrs?.inkwellBlockId;
+  const value = content[0]?.attrs?.jottathingBlockId ?? content[0]?.attrs?.inkwellBlockId;
   return typeof value === 'string' && value ? value : null;
 }
 
@@ -108,14 +112,14 @@ export function migratePageSourcesToProjectState(
   const content: DocumentContent[] = [];
 
   for (const node of pageContent.content ?? []) {
-    const source = decodeInkwellSource(node.attrs?.[INKWELL_SOURCE_ATTR]);
-    const blockId = node.attrs?.inkwellBlockId;
+    const source = decodeJottathingSource(node.attrs?.[JOTTATHING_SOURCE_ATTR] ?? node.attrs?.inkwellSource);
+    const blockId = node.attrs?.jottathingBlockId ?? node.attrs?.inkwellBlockId;
 
     if (source && typeof blockId === 'string' && blockId) {
       const storedSource = sourceFromProjectState(nextState, blockId);
       if (
-        JSON.stringify(storeInkwellSource(storedSource ?? source)) !==
-        JSON.stringify(storeInkwellSource(source)) ||
+        JSON.stringify(storeJottathingSource(storedSource ?? source)) !==
+        JSON.stringify(storeJottathingSource(source)) ||
         !storedSource
       ) {
         nextState = addSourceToProjectState(nextState, blockId, source);
@@ -185,13 +189,13 @@ function sourceEntryNodes(registry: SourceRegistry) {
 
 function sourceEntryNode(
   blockId: string,
-  source: StoredInkwellSource,
+  source: StoredJottathingSource,
 ): DocumentContent {
   return {
     type: 'codeBlock',
     attrs: {
       language: 'json',
-      inkwellBlockId: `${SOURCE_BLOCK_ID_PREFIX}${encodeURIComponent(blockId)}`,
+      jottathingBlockId: `${SOURCE_BLOCK_ID_PREFIX}${encodeURIComponent(blockId)}`,
     },
     content: [{
       type: 'text',
@@ -230,21 +234,23 @@ function stateNodesForStorage(content: DocumentContent) {
 export function isProjectStateMetadataNode(node: DocumentContent) {
   const text = codeBlockText(node);
   return sourceRegistryText(node) !== null || sourceEntryText(node) !== null ||
-    Boolean(text?.startsWith(SOURCE_V2_PREFIX) || text?.startsWith(LINKS_V1_PREFIX));
+    Boolean(text?.startsWith(SOURCE_V2_PREFIX) || text?.startsWith(LEGACY_SOURCE_V2_PREFIX) ||
+      text?.startsWith(LINKS_V1_PREFIX) || text?.startsWith(LEGACY_LINKS_V1_PREFIX));
 }
 
 function sourceEntry(node: DocumentContent): {
   blockId: string;
-  source: StoredInkwellSource;
+  source: StoredJottathingSource;
 } | null {
   const raw = sourceEntryText(node);
   if (!raw) return null;
 
   try {
-    const parsed = JSON.parse(raw) as { blockId?: unknown; source?: unknown };
-    const source = decodeInkwellSource(parsed.source);
-    return typeof parsed.blockId === 'string' && parsed.blockId && source
-      ? { blockId: parsed.blockId, source: storeInkwellSource(source) }
+    const parsed = JSON.parse(raw) as { blockId?: unknown; inkwellBlockId?: unknown; source?: unknown };
+    const source = decodeJottathingSource(parsed.source);
+    const blockId = parsed.blockId ?? parsed.inkwellBlockId;
+    return typeof blockId === 'string' && blockId && source
+      ? { blockId, source: storeJottathingSource(source) }
       : null;
   } catch {
     return null;
@@ -253,15 +259,17 @@ function sourceEntry(node: DocumentContent): {
 
 function sourceEntryText(node: DocumentContent) {
   const text = codeBlockText(node);
-  return text?.startsWith(SOURCE_ENTRY_PREFIX)
-    ? text.slice(SOURCE_ENTRY_PREFIX.length)
+  if (text?.startsWith(SOURCE_ENTRY_PREFIX)) return text.slice(SOURCE_ENTRY_PREFIX.length);
+  return text?.startsWith(LEGACY_SOURCE_ENTRY_PREFIX)
+    ? text.slice(LEGACY_SOURCE_ENTRY_PREFIX.length)
     : null;
 }
 
 function sourceRegistryText(node: DocumentContent) {
   const text = codeBlockText(node);
-  return text?.startsWith(SOURCE_REGISTRY_PREFIX)
-    ? text.slice(SOURCE_REGISTRY_PREFIX.length)
+  if (text?.startsWith(SOURCE_REGISTRY_PREFIX)) return text.slice(SOURCE_REGISTRY_PREFIX.length);
+  return text?.startsWith(LEGACY_SOURCE_REGISTRY_PREFIX)
+    ? text.slice(LEGACY_SOURCE_REGISTRY_PREFIX.length)
     : null;
 }
 

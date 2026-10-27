@@ -1,6 +1,6 @@
-# Inkwell
+# Jottathing
 
-Inkwell is a Chrome MV3 side panel extension for turning web context into editable
+Jottathing is a Chrome MV3 side panel extension for turning web context into editable
 project pages without breaking flow.
 
 ## Stack
@@ -22,16 +22,16 @@ corepack pnpm dev:server
 corepack pnpm compile
 corepack pnpm typecheck
 corepack pnpm test
-node --import tsx scripts/inkwell-sync-smoke.ts --help
+node --import tsx scripts/jottathing-sync-smoke.ts --help
 corepack pnpm build
 corepack pnpm zip
 ```
 
 ## Notion sync worker
 
-Inkwell syncs through a Cloudflare Worker. The production extension build reads
+Jottathing syncs through a Cloudflare Worker. The production extension build reads
 `VITE_API_URL` from `.env.local`; this repository currently points at
-`https://sync.inkwell.byaidan.com`.
+`https://sync.jottathing.byaidan.com`.
 
 For local development, start the worker:
 
@@ -39,17 +39,20 @@ For local development, start the worker:
 corepack pnpm dev:server
 ```
 
-Create a public Notion integration and set its redirect URI to
-`https://sync.inkwell.byaidan.com/auth/notion/callback` for production, or
-`http://localhost:8787/auth/notion/callback` for local development.
+The public API and production OAuth callback use
+`https://sync.jottathing.byaidan.com` and
+`https://sync.jottathing.byaidan.com/auth/notion/callback` respectively. The old
+`sync.inkwell.byaidan.com` hostname remains available as a compatibility alias.
 
 The worker uses Supabase for session, token, and sync metadata. Apply
-`apps/worker/schema.supabase.sql`, then set the Worker secrets listed in
-`apps/worker/wrangler.toml` with `wrangler secret put <NAME>`.
+`apps/worker/schema.supabase.sql`. `apps/worker/wrangler.toml` deploys the public
+`jottathing-sync` entry point; `apps/worker/wrangler.core.toml` configures the existing
+secret-bearing backend. Store secrets on the Cloudflare Worker with `wrangler secret put NAME`
+rather than in either config file.
 
 For Notion webhook verification, apply the webhook setup migration in
 `apps/worker/migrations/003_notion_webhook_setup.sql` and set a random 32-byte-or-longer
-`NOTION_WEBHOOK_SETUP_TOKEN` Worker secret. Call `POST /webhooks/notion/setup/arm` with
+`NOTION_WEBHOOK_SETUP_TOKEN` secret on the backend Worker. Call `POST /webhooks/notion/setup/arm` with
 `Authorization: Bearer <setup-token>`; the response contains a one-time callback URL. Create the
 Notion webhook subscription using that URL within ten minutes. The random URL segment prevents
 unauthenticated callers from racing the initial verification request. Retrieve Notion's
@@ -65,7 +68,7 @@ the extension can finish local cleanup safely when a successful server deletion 
 Before deploying the content-free queue changes, apply
 `apps/worker/migrations/005_sync_queue_payloads.sql`. Queue messages then carry only random job
 references; queued document payloads live in an installation-owned table and are removed by the
-account deletion cascade. Create both `inkwell-sync-queue` and `inkwell-sync-dlq` Queues before
+account deletion cascade. Create both `jottathing-sync-queue` and `jottathing-sync-dlq` Queues before
 deploying the Worker consumers.
 
 Apply `apps/worker/migrations/006_restrict_block_version_rpc.sql` to existing databases before
@@ -93,20 +96,26 @@ After reconciling the connected database's migration history, apply
 direct API execution grants from the RLS auto-enable helper without changing its DDL event trigger,
 and indexes queued payloads by installation.
 
+For an existing database that still uses the previous persistence names, apply
+`apps/worker/migrations/20261027150302_rename_jottathing_database_objects.sql` after that migration
+and before deploying the renamed Worker. It renames the live tables, columns, indexes, and policies
+in place and preserves their data. Fresh databases initialized from `schema.supabase.sql` already
+use the Jottathing names and do not need this migration.
+
 ### Local sync smoke driver
 
 The CLI exercises the authenticated project and page routes against a loopback Worker only. Start
-the Worker on port 8787, then set `INKWELL_SESSION_COOKIE` in your shell to the `inkwell_session`
+the Worker on port 8787, then set `JOTTATHING_SESSION_COOKIE` in your shell to the `jottathing_session`
 cookie pair from your local authenticated session. The CLI does not print or persist this value.
 
 ```sh
-node --import tsx scripts/inkwell-sync-smoke.ts create
-node --import tsx scripts/inkwell-sync-smoke.ts edit --text "Updated paragraph one.\n\nUpdated paragraph two — café 東京 🧪."
-node --import tsx scripts/inkwell-sync-smoke.ts status --wait
-node --import tsx scripts/inkwell-sync-smoke.ts archive
+node --import tsx scripts/jottathing-sync-smoke.ts create
+node --import tsx scripts/jottathing-sync-smoke.ts edit --text "Updated paragraph one.\n\nUpdated paragraph two — café 東京 🧪."
+node --import tsx scripts/jottathing-sync-smoke.ts status --wait
+node --import tsx scripts/jottathing-sync-smoke.ts archive
 ```
 
 To run create, rapid edits, sync polling, and archival in one pass, use
-`node --import tsx scripts/inkwell-sync-smoke.ts smoke`. Run `node --import tsx scripts/inkwell-sync-smoke.ts help` for options. State is
-stored under the ignored `.tmp/inkwell-sync-smoke/` directory so an interrupted run can be archived
+`node --import tsx scripts/jottathing-sync-smoke.ts smoke`. Run `node --import tsx scripts/jottathing-sync-smoke.ts help` for options. State is
+stored under the ignored `.tmp/jottathing-sync-smoke/` directory so an interrupted run can be archived
 later with the `archive` command.

@@ -108,7 +108,7 @@ export function registerSyncMutationRoutes(app: Hono<{ Bindings: WorkerEnv }>): 
           );
           return c.json({
             status: 'error',
-            message: `A single block is too large to queue (${oversized?.inkwellBlockId ?? oversized?.type ?? 'unknown block'}).`,
+            message: `A single block is too large to queue (${oversized?.jottathingBlockId ?? oversized?.type ?? 'unknown block'}).`,
           }, 413);
         }
         const jobs = chunks.map((chunk, batchIndex) => ({
@@ -265,7 +265,7 @@ export function registerSyncMutationRoutes(app: Hono<{ Bindings: WorkerEnv }>): 
           container.id,
           [{
             type: 'block_update',
-            inkwellBlockId: stringValue(block.attrs?.inkwellBlockId)
+            jottathingBlockId: stringValue(block.attrs?.jottathingBlockId)
               ?? `source:${encodeURIComponent(blockId)}`,
             payload: { block },
           }],

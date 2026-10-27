@@ -6,7 +6,7 @@ describe('published privacy policy', () => {
     const policy = privacyBody();
 
     expect(policy).toContain('Local documents and queued edits remain in this browser');
-    expect(policy).toContain('Delete connection in Settings removes the Inkwell account');
+    expect(policy).toContain('Delete connection in Settings removes the Jottathing account');
     expect(policy).toContain('Pages already stored in Notion remain');
     expect(policy).toContain('Local copies on other browsers or devices are not remotely erased');
     expect(policy).toContain('one-way request hash');

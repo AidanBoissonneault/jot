@@ -1,10 +1,10 @@
 /** @file Owns sync server and Notion parent-page settings actions and drafts. */
 import { computed, ref, watch, type Ref } from 'vue';
-import type { useInkwellStore } from '@/src/stores/inkwell';
+import type { useJottathingStore } from '@/src/stores/jottathing';
 
 /** Groups the editable fields and actions shown in settings sections. */
 export function useSettingsActions(
-  store: ReturnType<typeof useInkwellStore>,
+  store: ReturnType<typeof useJottathingStore>,
   uiMessage: Ref<string>,
 ) {
   const serverUrlDraft = ref('');
@@ -24,7 +24,7 @@ export function useSettingsActions(
       store.syncConfig.selectedParentPageTitle ||
       (store.syncConfig.selectedParentPageId
         ? 'Selected Notion page'
-        : 'Default Inkwell root page'),
+        : 'Default Jottathing root page'),
   );
 
   /** Validates and saves a custom synchronization server URL. */
@@ -49,9 +49,9 @@ export function useSettingsActions(
     await store.loadNotionParentPages(parentPageSearchDraft.value);
   }
 
-  /** Creates and selects an Inkwell parent page in the connected workspace. */
+  /** Creates and selects an Jottathing parent page in the connected workspace. */
   async function createParentPage(): Promise<void> {
-    const title = parentPageTitleDraft.value.trim() || 'Inkwell';
+    const title = parentPageTitleDraft.value.trim() || 'Jottathing';
     await store.createNotionParentPage(title);
     parentPageTitleDraft.value = '';
   }

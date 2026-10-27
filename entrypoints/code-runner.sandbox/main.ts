@@ -192,7 +192,7 @@ function cleanupWorker() {
 
 function announceSize(token = activeToken) {
   window.parent.postMessage({
-    type: 'inkwell.codeRunner.resize',
+    type: 'jottathing.codeRunner.resize',
     token,
     height: Math.ceil(document.documentElement.scrollHeight),
   }, '*');
@@ -200,7 +200,7 @@ function announceSize(token = activeToken) {
 
 function complete(token = activeToken) {
   window.parent.postMessage({
-    type: 'inkwell.codeRunner.complete',
+    type: 'jottathing.codeRunner.complete',
     token,
   }, '*');
 }

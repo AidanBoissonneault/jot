@@ -50,8 +50,8 @@ describe('legal acceptance', () => {
 
 describe('legal pages', () => {
   it('serves public terms and privacy pages', async () => {
-    const terms = await app.request('https://inkwell.byaidan.com/terms', {}, {});
-    const privacy = await app.request('https://inkwell.byaidan.com/privacy', {}, {});
+    const terms = await app.request('https://jottathing.byaidan.com/terms', {}, {});
+    const privacy = await app.request('https://jottathing.byaidan.com/privacy', {}, {});
 
     await expect(terms.text()).resolves.toContain('Terms of Service');
     expect(terms.status).toBe(200);

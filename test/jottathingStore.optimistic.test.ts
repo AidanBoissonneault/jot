@@ -7,7 +7,7 @@ import {
   listPendingProjectSyncEvents,
   listPendingSyncOps,
 } from '@/src/services/syncQueue';
-import { useInkwellStore } from '@/src/stores/inkwell';
+import { useJottathingStore } from '@/src/stores/jottathing';
 import type { DocumentContent, Project, ProjectPage, SyncConfig } from '@/src/types/capture';
 import type { SyncBlockOperation } from '@/src/types/sync';
 import { readBrowserStorage, resetBrowserStorage } from './setup';
@@ -42,19 +42,19 @@ class FakeSyncEventSource {
 const testSyncEventSources: FakeSyncEventSource[] = [];
 
 const baseProject: Project = {
-  id: 'project-inkwell',
-  name: 'Inkwell',
+  id: 'project-jottathing',
+  name: 'Jottathing',
   status: 'active',
   category: 'General',
   createdAt: '2026-01-01T00:00:00.000Z',
   updatedAt: '2026-01-01T00:00:00.000Z',
   stateContent: emptyDocument(),
-  tags: ['inkwell'],
+  tags: ['jottathing'],
   syncState: 'saved',
 };
 const basePage: ProjectPage = {
-  id: 'page-inkwell',
-  projectId: 'project-inkwell',
+  id: 'page-jottathing',
+  projectId: 'project-jottathing',
   kind: 'page',
   title: 'Untitled Page',
   status: 'active',
@@ -83,8 +83,8 @@ beforeEach(() => {
     }
   } as unknown as typeof EventSource);
   resetBrowserStorage({
-    activePageIdsByProject: { 'project-inkwell': 'page-inkwell' },
-    currentProjectId: 'project-inkwell',
+    activePageIdsByProject: { 'project-jottathing': 'page-jottathing' },
+    currentProjectId: 'project-jottathing',
     hasMigratedCapturesToPages: true,
     pages: [basePage],
     projects: [baseProject],
@@ -103,7 +103,7 @@ describe('optimistic project creation', () => {
     const projectSync = deferred<Response>();
     const fetchMock = vi.fn(() => projectSync.promise);
     vi.stubGlobal('fetch', fetchMock);
-    const store = useInkwellStore();
+    const store = useJottathingStore();
 
     await seedStore(store);
     await store.createProject('Roadmap');
@@ -112,7 +112,7 @@ describe('optimistic project creation', () => {
     expect(requestBody.project.category).toBe('');
     expect(requestBody.project.createdAt).toEqual(expect.any(String));
     expect(requestBody.project.updatedAt).toEqual(expect.any(String));
-    expect(stripInkwellBlockIds(requestBody.project.stateContent)).toEqual(emptyDocument());
+    expect(stripJottathingBlockIds(requestBody.project.stateContent)).toEqual(emptyDocument());
   });
 
   test('appears and is selected before project sync settles', async () => {
@@ -127,15 +127,15 @@ describe('optimistic project creation', () => {
   test('reconciles temp ids and preserves a project switch during sync', async () => {
     const { projectSync, store } = await setupProjectSyncTest('Roadmap');
     const tempProjectId = store.currentProjectId;
-    await store.selectProject('project-inkwell');
+    await store.selectProject('project-jottathing');
 
     projectSync.resolve(jsonResponse({ status: 'saved' }));
     await waitFor(() =>
       expect(store.projects.some((project) => project.id === tempProjectId)).toBe(false),
     );
 
-    expect(store.currentProjectId).toBe('project-inkwell');
-    expect(readBrowserStorage().currentProjectId).toBe('project-inkwell');
+    expect(store.currentProjectId).toBe('project-jottathing');
+    expect(readBrowserStorage().currentProjectId).toBe('project-jottathing');
     expect((readBrowserStorage().projects as Project[]).some((project) =>
       project.id.startsWith('temp-project-'),
     )).toBe(false);
@@ -159,7 +159,7 @@ describe('optimistic project creation', () => {
 
 describe('logout credential cleanup', () => {
   test('scrubs live account tokens even if durable local cleanup fails', async () => {
-    const store = useInkwellStore();
+    const store = useJottathingStore();
     store.syncConfig = {
       ...connectedConfig,
       accessToken: 'legacy-live-access-token',
@@ -178,7 +178,7 @@ describe('logout credential cleanup', () => {
   });
 
   test('exposes a retry path after local logout when server cleanup is pending', async () => {
-    const store = useInkwellStore();
+    const store = useJottathingStore();
     store.syncConfig = { ...connectedConfig };
     const logout = vi.spyOn(notionClient, 'logoutSyncSession')
       .mockResolvedValueOnce({
@@ -218,7 +218,7 @@ describe('project metadata', () => {
     vi.spyOn(notionClient, 'listNotionParentPages')
       .mockReturnValueOnce(firstSearch.promise)
       .mockReturnValueOnce(secondSearch.promise);
-    const store = useInkwellStore();
+    const store = useJottathingStore();
 
     const firstRequest = store.loadNotionParentPages('first');
     expect(store.isLoadingNotionParentPages).toBe(true);
@@ -237,7 +237,7 @@ describe('project metadata', () => {
   test('makes a captured origin available before its network sync finishes', async () => {
     const sourceSync = deferred<Response>();
     vi.stubGlobal('fetch', vi.fn(() => sourceSync.promise));
-    const store = useInkwellStore();
+    const store = useJottathingStore();
     await seedStore(store);
 
     const registration = store.registerCurrentProjectSource('capture-block', {
@@ -263,14 +263,14 @@ describe('project metadata', () => {
     const fetchMock = vi.fn(async () =>
       jsonResponse({
         clearSelectedParentPage: true,
-        uncachedProjectIds: ['project-inkwell'],
-        uncachedPageIds: ['page-inkwell'],
+        uncachedProjectIds: ['project-jottathing'],
+        uncachedPageIds: ['page-jottathing'],
       }),
     );
     vi.stubGlobal('fetch', fetchMock);
     resetBrowserStorage({
-      activePageIdsByProject: { 'project-inkwell': 'page-inkwell' },
-      currentProjectId: 'project-inkwell',
+      activePageIdsByProject: { 'project-jottathing': 'page-jottathing' },
+      currentProjectId: 'project-jottathing',
       hasMigratedCapturesToPages: true,
       pages: [
         {
@@ -347,14 +347,14 @@ describe('project metadata', () => {
       }));
     vi.stubGlobal('fetch', fetchMock);
     resetBrowserStorage({
-      activePageIdsByProject: { 'project-inkwell': 'page-inkwell' },
-      currentProjectId: 'project-inkwell',
+      activePageIdsByProject: { 'project-jottathing': 'page-jottathing' },
+      currentProjectId: 'project-jottathing',
       hasMigratedCapturesToPages: true,
       pages: [basePage, { ...basePage, id: 'page-deleted' }],
       projects: [baseProject],
       syncConfig,
     });
-    const store = useInkwellStore();
+    const store = useJottathingStore();
 
     await seedStore(store);
     store.syncConfig = syncConfig;
@@ -438,7 +438,7 @@ describe('project metadata', () => {
       projectId: secondProject.id,
       title: 'First page',
     };
-    const store = useInkwellStore();
+    const store = useJottathingStore();
     await seedStore(store, [basePage, selectedPage]);
     store.projects = [baseProject, secondProject];
     store.pages = [selectedPage, firstPage];
@@ -522,8 +522,8 @@ describe('project metadata', () => {
         status: 'saved',
       })));
     resetBrowserStorage({
-      activePageIdsByProject: { 'project-inkwell': 'page-inkwell' },
-      currentProjectId: 'project-inkwell',
+      activePageIdsByProject: { 'project-jottathing': 'page-jottathing' },
+      currentProjectId: 'project-jottathing',
       hasMigratedCapturesToPages: true,
       pages: [basePage],
       projects: [baseProject],
@@ -555,8 +555,8 @@ describe('project metadata', () => {
       }));
     vi.stubGlobal('fetch', fetchMock);
     resetBrowserStorage({
-      activePageIdsByProject: { 'project-inkwell': 'page-inkwell' },
-      currentProjectId: 'project-inkwell',
+      activePageIdsByProject: { 'project-jottathing': 'page-jottathing' },
+      currentProjectId: 'project-jottathing',
       hasMigratedCapturesToPages: true,
       pages: [basePage],
       projects: [baseProject],
@@ -590,8 +590,8 @@ describe('project metadata', () => {
       }));
     vi.stubGlobal('fetch', fetchMock);
     resetBrowserStorage({
-      activePageIdsByProject: { 'project-inkwell': 'page-inkwell' },
-      currentProjectId: 'project-inkwell',
+      activePageIdsByProject: { 'project-jottathing': 'page-jottathing' },
+      currentProjectId: 'project-jottathing',
       hasMigratedCapturesToPages: true,
       pages: [basePage],
       projects: [baseProject],
@@ -632,8 +632,8 @@ describe('project metadata', () => {
       .mockImplementationOnce(() => reloadResponse.promise);
     vi.stubGlobal('fetch', fetchMock);
     resetBrowserStorage({
-      activePageIdsByProject: { 'project-inkwell': versionedPage.id },
-      currentProjectId: 'project-inkwell',
+      activePageIdsByProject: { 'project-jottathing': versionedPage.id },
+      currentProjectId: 'project-jottathing',
       hasMigratedCapturesToPages: true,
       pages: [versionedPage],
       projects: [baseProject],
@@ -655,8 +655,8 @@ describe('project metadata', () => {
       version: 3,
     });
     reloadResponse.resolve(jsonResponse({
-        activePageIdsByProject: { 'project-inkwell': versionedPage.id },
-        currentProjectId: 'project-inkwell',
+        activePageIdsByProject: { 'project-jottathing': versionedPage.id },
+        currentProjectId: 'project-jottathing',
         pages: [versionedPage, remoteOnlyPage],
         projects: [baseProject],
         status: 'saved',
@@ -675,8 +675,8 @@ describe('project metadata', () => {
       serverSyncVersion: 3,
     };
     resetBrowserStorage({
-      activePageIdsByProject: { 'project-inkwell': versionedPage.id },
-      currentProjectId: 'project-inkwell',
+      activePageIdsByProject: { 'project-jottathing': versionedPage.id },
+      currentProjectId: 'project-jottathing',
       hasMigratedCapturesToPages: true,
       pages: [versionedPage],
       projects: [baseProject],
@@ -700,8 +700,8 @@ describe('project metadata', () => {
       notionPageId: 'notion-page-local',
     };
     resetBrowserStorage({
-      activePageIdsByProject: { 'project-inkwell': linkedPage.id },
-      currentProjectId: 'project-inkwell',
+      activePageIdsByProject: { 'project-jottathing': linkedPage.id },
+      currentProjectId: 'project-jottathing',
       hasMigratedCapturesToPages: true,
       pages: [linkedPage],
       projects: [baseProject],
@@ -737,9 +737,9 @@ describe('project metadata', () => {
       if (String(url).endsWith('/sync/reload')) {
         return jsonResponse({
           activePageIdsByProject: {
-            'project-inkwell': linkedPage.id,
+            'project-jottathing': linkedPage.id,
           },
-          currentProjectId: 'project-inkwell',
+          currentProjectId: 'project-jottathing',
           pages: [linkedPage, remoteOnlyPage],
           projects: [baseProject],
           status: 'saved',
@@ -797,7 +797,7 @@ describe('project metadata', () => {
   });
 
   test('manual resync refreshes the session without running a second sync validation', async () => {
-    const store = useInkwellStore();
+    const store = useJottathingStore();
     await seedStore(store);
     const refreshSession = vi.spyOn(notionClient, 'refreshSyncSession').mockResolvedValue(connectedConfig);
     const prepareWorkspace = vi.spyOn(notionClient, 'prepareLocalWorkspaceForFirstSync').mockResolvedValue(false);
@@ -822,8 +822,8 @@ describe('project metadata', () => {
       notionPageId: 'thread-created-on-second-device',
     };
     resetBrowserStorage({
-      activePageIdsByProject: { 'project-inkwell': localPage.id },
-      currentProjectId: 'project-inkwell',
+      activePageIdsByProject: { 'project-jottathing': localPage.id },
+      currentProjectId: 'project-jottathing',
       hasMigratedCapturesToPages: true,
       pages: [localPage],
       projects: [baseProject],
@@ -842,8 +842,8 @@ describe('project metadata', () => {
       if (String(url).endsWith('/sync/status')) return jsonResponse({ hasPending: false });
       if (String(url).endsWith('/sync/reload')) {
         return jsonResponse({
-          activePageIdsByProject: { 'project-inkwell': localPage.id },
-          currentProjectId: 'project-inkwell',
+          activePageIdsByProject: { 'project-jottathing': localPage.id },
+          currentProjectId: 'project-jottathing',
           pages: [localPage, externalPage],
           projects: [baseProject],
           status: 'saved',
@@ -872,8 +872,8 @@ describe('project metadata', () => {
       notionPageId: 'thread-deleted-on-second-device',
     };
     resetBrowserStorage({
-      activePageIdsByProject: { 'project-inkwell': deletedPage.id },
-      currentProjectId: 'project-inkwell',
+      activePageIdsByProject: { 'project-jottathing': deletedPage.id },
+      currentProjectId: 'project-jottathing',
       hasMigratedCapturesToPages: true,
       pages: [deletedPage, survivingPage],
       projects: [baseProject],
@@ -892,8 +892,8 @@ describe('project metadata', () => {
       if (String(url).endsWith('/sync/status')) return jsonResponse({ hasPending: false });
       if (String(url).endsWith('/sync/reload')) {
         return jsonResponse({
-          activePageIdsByProject: { 'project-inkwell': survivingPage.id },
-          currentProjectId: 'project-inkwell',
+          activePageIdsByProject: { 'project-jottathing': survivingPage.id },
+          currentProjectId: 'project-jottathing',
           pages: [survivingPage],
           projects: [baseProject],
           status: 'saved',
@@ -921,8 +921,8 @@ describe('project metadata', () => {
       status: 'saved',
       })));
     resetBrowserStorage({
-      activePageIdsByProject: { 'project-inkwell': 'page-inkwell' },
-      currentProjectId: 'project-inkwell',
+      activePageIdsByProject: { 'project-jottathing': 'page-jottathing' },
+      currentProjectId: 'project-jottathing',
       hasMigratedCapturesToPages: true,
       pages: [basePage],
       projects: [baseProject],
@@ -937,9 +937,9 @@ describe('project metadata', () => {
       preserveLocalWhenRemoteEmpty: true,
     });
 
-    expect(reloaded.projects.map((project) => project.id)).toEqual(['project-inkwell']);
+    expect(reloaded.projects.map((project) => project.id)).toEqual(['project-jottathing']);
     expect((readBrowserStorage().projects as Project[]).map((project) => project.id))
-      .toEqual(['project-inkwell']);
+      .toEqual(['project-jottathing']);
     expect(readBrowserStorage().notionHydrationSource).toBe(
       'http://localhost:8787::workspace-new',
     );
@@ -954,8 +954,8 @@ describe('project metadata', () => {
       content: docWithText('cached local notes'),
     };
     resetBrowserStorage({
-      activePageIdsByProject: { 'project-inkwell': 'page-inkwell' },
-      currentProjectId: 'project-inkwell',
+      activePageIdsByProject: { 'project-jottathing': 'page-jottathing' },
+      currentProjectId: 'project-jottathing',
       hasExplicitlyLoggedOut: false,
       hasMigratedCapturesToPages: true,
       pages: [localPage],
@@ -963,19 +963,19 @@ describe('project metadata', () => {
       syncConfig: connectedConfig,
     });
 
-    const store = useInkwellStore();
+    const store = useJottathingStore();
     const initialization = store.initialize();
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
 
     expect(store.isLoading).toBe(false);
     expect(store.isCheckingSync).toBe(true);
-    expect(stripInkwellBlockIds(store.currentPage?.content)).toEqual(localPage.content);
+    expect(stripJottathingBlockIds(store.currentPage?.content)).toEqual(localPage.content);
 
     session.resolve(jsonResponse({ authenticated: false, connected: false }));
     await initialization;
 
     expect(store.isCheckingSync).toBe(false);
-    expect(stripInkwellBlockIds(store.currentPage?.content)).toEqual(localPage.content);
+    expect(stripJottathingBlockIds(store.currentPage?.content)).toEqual(localPage.content);
   });
 
   test('keeps local workspace available when session verification fails', async () => {
@@ -985,8 +985,8 @@ describe('project metadata', () => {
       content: docWithText('still available offline'),
     };
     resetBrowserStorage({
-      activePageIdsByProject: { 'project-inkwell': 'page-inkwell' },
-      currentProjectId: 'project-inkwell',
+      activePageIdsByProject: { 'project-jottathing': 'page-jottathing' },
+      currentProjectId: 'project-jottathing',
       hasExplicitlyLoggedOut: false,
       hasMigratedCapturesToPages: true,
       pages: [localPage],
@@ -994,13 +994,13 @@ describe('project metadata', () => {
       syncConfig: connectedConfig,
     });
 
-    const store = useInkwellStore();
+    const store = useJottathingStore();
     await store.initialize();
 
     expect(store.isLoading).toBe(false);
     expect(store.isCheckingSync).toBe(false);
     expect(store.syncCheckError).toContain('connection refused');
-    expect(stripInkwellBlockIds(store.currentPage?.content)).toEqual(localPage.content);
+    expect(stripJottathingBlockIds(store.currentPage?.content)).toEqual(localPage.content);
   });
 
   test('shows local content and reports server validation failures', async () => {
@@ -1016,8 +1016,8 @@ describe('project metadata', () => {
     );
     const OriginalEventSource = globalThis.EventSource;
     resetBrowserStorage({
-      activePageIdsByProject: { 'project-inkwell': 'page-inkwell' },
-      currentProjectId: 'project-inkwell',
+      activePageIdsByProject: { 'project-jottathing': 'page-jottathing' },
+      currentProjectId: 'project-jottathing',
       hasMigratedCapturesToPages: true,
       notionHydrationSource: 'http://localhost:8787::',
       pages: [localPage],
@@ -1026,12 +1026,12 @@ describe('project metadata', () => {
     });
 
     try {
-      const store = useInkwellStore();
+      const store = useJottathingStore();
       await store.initialize();
 
       expect(store.syncCheckError).toContain('Couldn\'t check Notion for changes.');
       expect(store.syncCheckError).toContain('Sync server returned 500.');
-      expect(stripInkwellBlockIds(store.currentPage?.content)).toEqual(localPage.content);
+      expect(stripJottathingBlockIds(store.currentPage?.content)).toEqual(localPage.content);
     } finally {
       globalThis.EventSource = OriginalEventSource;
       vi.restoreAllMocks();
@@ -1050,8 +1050,8 @@ describe('project metadata', () => {
       value: { onLine: false },
     });
     resetBrowserStorage({
-      activePageIdsByProject: { 'project-inkwell': 'page-inkwell' },
-      currentProjectId: 'project-inkwell',
+      activePageIdsByProject: { 'project-jottathing': 'page-jottathing' },
+      currentProjectId: 'project-jottathing',
       hasMigratedCapturesToPages: true,
       pages: [basePage],
       projects: [baseProject],
@@ -1068,8 +1068,8 @@ describe('project metadata', () => {
       await notionClient.updateProjectPage(editedPage);
 
       reload.resolve(jsonResponse({
-        activePageIdsByProject: { 'project-inkwell': 'page-inkwell' },
-        currentProjectId: 'project-inkwell',
+        activePageIdsByProject: { 'project-jottathing': 'page-jottathing' },
+        currentProjectId: 'project-jottathing',
         pages: [{ ...basePage, content: docWithText('older server snapshot') }],
         projects: [baseProject],
         status: 'saved',
@@ -1131,7 +1131,7 @@ describe('project metadata', () => {
     });
 
     try {
-      const store = useInkwellStore();
+      const store = useJottathingStore();
       await store.initialize();
 
       expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
@@ -1201,8 +1201,8 @@ describe('project metadata', () => {
     vi.spyOn(notionClient, 'prefetchProjectPages').mockResolvedValue(undefined);
     const originalEventSource = globalThis.EventSource;
     resetBrowserStorage({
-      activePageIdsByProject: { 'project-inkwell': 'page-inkwell' },
-      currentProjectId: 'project-inkwell',
+      activePageIdsByProject: { 'project-jottathing': 'page-jottathing' },
+      currentProjectId: 'project-jottathing',
       hasMigratedCapturesToPages: true,
       notionHydrationSource: 'http://localhost:8787::workspace-main',
       pages: [basePage],
@@ -1211,7 +1211,7 @@ describe('project metadata', () => {
     });
 
     try {
-      const store = useInkwellStore();
+      const store = useJottathingStore();
       await store.initialize();
       await waitFor(() => expect(reloadFromNotion).toHaveBeenCalledTimes(1));
 
@@ -1272,8 +1272,8 @@ describe('project metadata', () => {
       constructor() { eventSource = this as unknown as EventSource; }
     } as unknown as typeof EventSource;
     resetBrowserStorage({
-      activePageIdsByProject: { 'project-inkwell': 'page-inkwell' },
-      currentProjectId: 'project-inkwell',
+      activePageIdsByProject: { 'project-jottathing': 'page-jottathing' },
+      currentProjectId: 'project-jottathing',
       hasMigratedCapturesToPages: true,
       notionHydrationSource: 'http://localhost:8787::workspace-main',
       pages: [basePage],
@@ -1282,7 +1282,7 @@ describe('project metadata', () => {
     });
 
     try {
-      const store = useInkwellStore();
+      const store = useJottathingStore();
       await store.initialize();
 
       expect(eventSource).toBeDefined();
@@ -1320,8 +1320,8 @@ describe('project metadata', () => {
 
     resetBrowserStorage({
       activePageIdsByProject: {
-        'project-older': 'page-inkwell',
-        'project-newer': 'page-inkwell',
+        'project-older': 'page-jottathing',
+        'project-newer': 'page-jottathing',
       },
       currentProjectId: 'project-older',
       hasMigratedCapturesToPages: true,
@@ -1342,7 +1342,7 @@ describe('project metadata', () => {
     const metadataSync = deferred<Response>();
     const fetchMock = vi.fn(() => metadataSync.promise);
     vi.stubGlobal('fetch', fetchMock);
-    const store = useInkwellStore();
+    const store = useJottathingStore();
 
     await seedStore(store);
     const updatePromise = store.updateCurrentProjectMetadata({
@@ -1372,21 +1372,21 @@ describe('optimistic page creation', () => {
   test('appears and is selected immediately with an empty document', async () => {
     const pageSync = deferred<Response>();
     vi.stubGlobal('fetch', vi.fn(() => pageSync.promise));
-    const store = useInkwellStore();
+    const store = useJottathingStore();
 
     await seedStore(store);
     await store.createPage();
 
     expect(store.currentPage?.id).toMatch(/^temp-page-/);
-    expect(stripInkwellBlockIds(store.currentPage?.content)).toEqual(emptyDocument());
+    expect(stripJottathingBlockIds(store.currentPage?.content)).toEqual(emptyDocument());
     expect(store.pages.some((page) => page.id === store.currentPage?.id)).toBe(true);
     expect(store.saveStatus).toBe('creating');
   });
 
   test('replays latest edit after temp page reconciliation through the local queue', async () => {
-    const fetchMock = vi.fn(async () => jsonResponse({ queued: true, versions: { 'page-inkwell': 1 } }));
+    const fetchMock = vi.fn(async () => jsonResponse({ queued: true, versions: { 'page-jottathing': 1 } }));
     vi.stubGlobal('fetch', fetchMock);
-    const store = useInkwellStore();
+    const store = useJottathingStore();
     const editedContent = docWithText('typed while creating');
 
     await seedStore(store);
@@ -1396,7 +1396,7 @@ describe('optimistic page creation', () => {
 
     await waitFor(() => expect(store.currentPage?.id).not.toBe(tempPageId));
 
-    expect(stripInkwellBlockIds(store.currentPage?.content)).toEqual(editedContent);
+    expect(stripJottathingBlockIds(store.currentPage?.content)).toEqual(editedContent);
     expect(fetchMock).not.toHaveBeenCalled();
     expect((await listPendingSyncOps()).length).toBeGreaterThan(0);
   });
@@ -1405,7 +1405,7 @@ describe('optimistic page creation', () => {
     vi.stubGlobal('fetch', vi.fn(async () => {
       throw new TypeError('offline');
     }));
-    const store = useInkwellStore();
+    const store = useJottathingStore();
 
     await seedStore(store);
     await store.createPage();
@@ -1420,7 +1420,7 @@ describe('optimistic page creation', () => {
 
 describe('page title and content saves', () => {
   test('reports when a local page save fails so the editor can retry', async () => {
-    const store = useInkwellStore();
+    const store = useJottathingStore();
     await seedStore(store);
     vi.spyOn(notionClient, 'updateProjectPage').mockRejectedValueOnce(
       new Error('local storage unavailable'),
@@ -1435,7 +1435,7 @@ describe('page title and content saves', () => {
   });
 
   test('reports when an exit-time page snapshot fails to persist', async () => {
-    const store = useInkwellStore();
+    const store = useJottathingStore();
     await seedStore(store);
     vi.spyOn(notionClient, 'updateProjectPage').mockRejectedValueOnce(
       new Error('local storage unavailable'),
@@ -1472,7 +1472,7 @@ describe('page title and content saves', () => {
     const saveRequest = deferred<Response>();
     const fetchMock = vi.fn(() => saveRequest.promise);
     vi.stubGlobal('fetch', fetchMock);
-    const store = useInkwellStore();
+    const store = useJottathingStore();
     const content = docWithText('durable draft');
 
     await seedStore(store);
@@ -1480,10 +1480,10 @@ describe('page title and content saves', () => {
       preserveLocalContent: true,
     });
 
-    expect(stripInkwellBlockIds((readBrowserStorage().pages as ProjectPage[])[0].content)).toEqual(content);
+    expect(stripJottathingBlockIds((readBrowserStorage().pages as ProjectPage[])[0].content)).toEqual(content);
     expect((await listPendingSyncOps()).length).toBeGreaterThan(0);
     await advanceTimersToFlush(fetchMock);
-    saveRequest.resolve(jsonResponse({ queued: true, versions: { 'page-inkwell': 1 } }));
+    saveRequest.resolve(jsonResponse({ queued: true, versions: { 'page-jottathing': 1 } }));
   });
 
   test('content save shows saved locally after IndexedDB queue write', async () => {
@@ -1502,10 +1502,10 @@ describe('page title and content saves', () => {
   test('local queue waits 10 seconds after the latest edit before pushing compacted updates', async () => {
     vi.useFakeTimers();
     const fetchMock = vi.fn(async () =>
-      jsonResponse({ queued: true, versions: { 'page-inkwell': 2 } }),
+      jsonResponse({ queued: true, versions: { 'page-jottathing': 2 } }),
     );
     vi.stubGlobal('fetch', fetchMock);
-    const store = useInkwellStore();
+    const store = useJottathingStore();
     const startingPage = { ...basePage, content: docWithBlock('debounced-block', 'first') };
 
     await setupStoreWithPages(store, [startingPage]);
@@ -1535,7 +1535,7 @@ describe('page title and content saves', () => {
   test('force flushing sends pending edits immediately', async () => {
     vi.useFakeTimers();
     const fetchMock = vi.fn(async () =>
-      jsonResponse({ queued: true, versions: { 'page-inkwell': 1 } }),
+      jsonResponse({ queued: true, versions: { 'page-jottathing': 1 } }),
     );
     vi.stubGlobal('fetch', fetchMock);
     const content = docWithText('flush now');
@@ -1570,7 +1570,7 @@ describe('page title and content saves', () => {
         return secondPush.promise;
       });
     vi.stubGlobal('fetch', fetchMock);
-    const store = useInkwellStore();
+    const store = useJottathingStore();
     const startingPage = { ...basePage, content: docWithBlock('focus-block', 'first') };
 
     await setupStoreWithPages(store, [startingPage]);
@@ -1586,11 +1586,11 @@ describe('page title and content saves', () => {
     });
     const overlappingFlush = notionClient.flushPendingSyncOps({ force: true });
 
-    firstPush.resolve(jsonResponse({ queued: true, versions: { 'page-inkwell': 1 } }));
+    firstPush.resolve(jsonResponse({ queued: true, versions: { 'page-jottathing': 1 } }));
     await secondRequestStarted.promise;
     expect(fetchMock).toHaveBeenCalledTimes(2);
 
-    secondPush.resolve(jsonResponse({ queued: true, versions: { 'page-inkwell': 2 } }));
+    secondPush.resolve(jsonResponse({ queued: true, versions: { 'page-jottathing': 2 } }));
     await Promise.all([firstFlush, overlappingFlush]);
 
     expect(await listPendingSyncOps()).toEqual([]);
@@ -1615,7 +1615,7 @@ describe('page title and content saves', () => {
     vi.stubGlobal('fetch', vi.fn(async () => {
       throw new TypeError('offline');
     }));
-    const store = useInkwellStore();
+    const store = useJottathingStore();
     const startingPage = { ...basePage, content: docWithBlock('same-block', 'first') };
 
     await setupStoreWithPages(store, [startingPage]);
@@ -1637,7 +1637,7 @@ describe('page title and content saves', () => {
     vi.stubGlobal('fetch', vi.fn(async () => {
       throw new TypeError('offline');
     }));
-    const store = useInkwellStore();
+    const store = useJottathingStore();
     const startingPage = { ...basePage, content: docWithBlock('formatted-block', 'plain') };
     const formattedContent = docWithMarkedBlock('formatted-block', 'plain', [{ type: 'bold' }]);
 
@@ -1657,7 +1657,7 @@ describe('page title and content saves', () => {
     vi.stubGlobal('fetch', vi.fn(async () => {
       throw new TypeError('offline');
     }));
-    const store = useInkwellStore();
+    const store = useJottathingStore();
     const startingPage = { ...basePage, content: docWithBlock('highlight-block', 'plain') };
     const highlightedContent = docWithMarkedBlock('highlight-block', 'plain', [
       { type: 'textStyle', attrs: { backgroundColor: '#fef08a', color: null, fontSize: null } },
@@ -1679,7 +1679,7 @@ describe('page title and content saves', () => {
     vi.stubGlobal('fetch', vi.fn(async () => {
       throw new TypeError('offline');
     }));
-    const store = useInkwellStore();
+    const store = useJottathingStore();
     const startingPage = { ...basePage, content: docWithBlock('unchanged-block', 'same') };
 
     await setupStoreWithPages(store, [startingPage]);
@@ -1716,7 +1716,7 @@ describe('page title and content saves', () => {
     vi.stubGlobal('fetch', vi.fn(async () => {
       throw new TypeError('offline');
     }));
-    const store = useInkwellStore();
+    const store = useJottathingStore();
     const startingPage = { ...basePage, content: docWithBlock('removed-block', 'before') };
 
     await setupStoreWithPages(store, [startingPage]);
@@ -1732,14 +1732,14 @@ describe('page title and content saves', () => {
   test('force flushing compacts the queue before sending', async () => {
     vi.useFakeTimers();
     const fetchMock = vi.fn(async () =>
-      jsonResponse({ queued: true, versions: { 'page-inkwell': 2 } }),
+      jsonResponse({ queued: true, versions: { 'page-jottathing': 2 } }),
     );
     vi.stubGlobal('fetch', fetchMock);
     const startingPage = { ...basePage, content: docWithBlock('force-block', 'first') };
 
     resetBrowserStorage({
-      activePageIdsByProject: { 'project-inkwell': 'page-inkwell' },
-      currentProjectId: 'project-inkwell',
+      activePageIdsByProject: { 'project-jottathing': 'page-jottathing' },
+      currentProjectId: 'project-jottathing',
       hasMigratedCapturesToPages: true,
       pages: [startingPage],
       projects: [baseProject],
@@ -1765,14 +1765,14 @@ describe('page title and content saves', () => {
   test('force flushing keeps metadata and latest block ops separate', async () => {
     vi.useFakeTimers();
     const fetchMock = vi.fn(async () =>
-      jsonResponse({ queued: true, versions: { 'page-inkwell': 3 } }),
+      jsonResponse({ queued: true, versions: { 'page-jottathing': 3 } }),
     );
     vi.stubGlobal('fetch', fetchMock);
     const startingPage = { ...basePage, content: docWithBlock('snapshot-block', 'first') };
 
     resetBrowserStorage({
-      activePageIdsByProject: { 'project-inkwell': 'page-inkwell' },
-      currentProjectId: 'project-inkwell',
+      activePageIdsByProject: { 'project-jottathing': 'page-jottathing' },
+      currentProjectId: 'project-jottathing',
       hasMigratedCapturesToPages: true,
       pages: [startingPage],
       projects: [baseProject],
@@ -1816,10 +1816,10 @@ describe('offline queue lifecycle', () => {
     };
     resetBrowserStorage({
       activePageIdsByProject: {
-        'project-inkwell': 'page-inkwell',
+        'project-jottathing': 'page-jottathing',
         [secondProject.id]: secondPage.id,
       },
-      currentProjectId: 'project-inkwell',
+      currentProjectId: 'project-jottathing',
       hasMigratedCapturesToPages: true,
       pages: [basePage, secondPage],
       projects: [baseProject, secondProject],
@@ -1839,15 +1839,15 @@ describe('offline queue lifecycle', () => {
     const projectEvents = await listPendingProjectSyncEvents();
     const pageOps = await listPendingSyncOps();
     expect(projectEvents.map((event) => event.projectId).sort()).toEqual([
-      'project-inkwell',
+      'project-jottathing',
       'project-local-two',
     ]);
     expect(new Set(pageOps.map((op) => op.pageId))).toEqual(new Set([
-      'page-inkwell',
+      'page-jottathing',
       'page-local-two',
     ]));
     expect(pageOps).toHaveLength(4);
-    for (const pageId of ['page-inkwell', 'page-local-two']) {
+    for (const pageId of ['page-jottathing', 'page-local-two']) {
       const ops = pageOps.filter((op) => op.pageId === pageId);
       expect(ops.map((op) => op.type)).toEqual(['blocks_reset', 'block_create']);
       expect(ops.every((op) => op.payload.page.content === undefined)).toBe(true);
@@ -1882,7 +1882,7 @@ describe('offline queue lifecycle', () => {
         ...shared,
         opId: 'legacy-block-create',
         type: 'block_create',
-        inkwellBlockId: 'legacy-block',
+        jottathingBlockId: 'legacy-block',
         sequence: 2,
         localVersion: 2,
         payload: {
@@ -1902,7 +1902,7 @@ describe('offline queue lifecycle', () => {
     });
     expect(compacted[1]).toMatchObject({
       opId: 'legacy-page-upsert:block:legacy-block',
-      inkwellBlockId: 'legacy-block',
+      jottathingBlockId: 'legacy-block',
       localVersion: 2,
       payload: {
         block: blockWithId('legacy-block', 'only once'),
@@ -1921,8 +1921,8 @@ describe('offline queue lifecycle', () => {
     });
     const offlineConfig = { ...connectedConfig, connected: false };
     resetBrowserStorage({
-      activePageIdsByProject: { 'project-inkwell': 'page-inkwell' },
-      currentProjectId: 'project-inkwell',
+      activePageIdsByProject: { 'project-jottathing': 'page-jottathing' },
+      currentProjectId: 'project-jottathing',
       hasMigratedCapturesToPages: true,
       pages: [basePage],
       projects: [baseProject],
@@ -1934,12 +1934,12 @@ describe('offline queue lifecycle', () => {
       await notionClient.updateProjectPage({ ...basePage, content: offlineContent });
 
       setActivePinia(createPinia());
-      const reloadedStore = useInkwellStore();
+      const reloadedStore = useJottathingStore();
       const initialization = reloadedStore.initialize();
       await vi.runAllTimersAsync();
       await initialization;
 
-      expect(stripInkwellBlockIds(reloadedStore.currentPage?.content)).toEqual(offlineContent);
+      expect(stripJottathingBlockIds(reloadedStore.currentPage?.content)).toEqual(offlineContent);
       expect(reloadedStore.pendingSyncCount).toBeGreaterThan(0);
       expect(reloadedStore.isOnline).toBe(false);
     } finally {
@@ -1959,12 +1959,12 @@ describe('offline queue lifecycle', () => {
         filename: 'offline.png',
         mimeType: 'image/png',
         uploadState: 'local',
-        inkwellBlockId: 'offline-image',
+        jottathingBlockId: 'offline-image',
       })]),
     };
     resetBrowserStorage({
-      activePageIdsByProject: { 'project-inkwell': 'page-inkwell' },
-      currentProjectId: 'project-inkwell',
+      activePageIdsByProject: { 'project-jottathing': 'page-jottathing' },
+      currentProjectId: 'project-jottathing',
       hasMigratedCapturesToPages: true,
       pages: [localMediaPage],
       projects: [baseProject],
@@ -1977,7 +1977,7 @@ describe('offline queue lifecycle', () => {
       if (String(url).endsWith('/sync/project')) {
         return jsonResponse({ status: 'saved', project: baseProject });
       }
-      return jsonResponse({ queued: true, versions: { 'page-inkwell': 1 } });
+      return jsonResponse({ queued: true, versions: { 'page-jottathing': 1 } });
     });
     vi.stubGlobal('fetch', fetchMock);
 
@@ -2007,7 +2007,7 @@ describe('offline queue lifecycle', () => {
     const fetchMock = vi.fn(async (url: string) =>
       String(url).endsWith('/session')
         ? jsonResponse({ authenticated: true, connected: true })
-        : jsonResponse({ queued: true, versions: { 'page-inkwell': 1 } }),
+        : jsonResponse({ queued: true, versions: { 'page-jottathing': 1 } }),
     );
     vi.stubGlobal('fetch', fetchMock);
     const OriginalEventSource = globalThis.EventSource;
@@ -2023,7 +2023,7 @@ describe('offline queue lifecycle', () => {
         ...basePage,
         content: docWithText('sync on reconnect'),
       });
-      const store = useInkwellStore();
+      const store = useJottathingStore();
       await seedStore(store);
       store.handleOffline();
 
@@ -2056,12 +2056,12 @@ describe('project page caching', () => {
       notionPageId: 'notion-page-two',
       remoteRevision: 'rev-1',
     };
-    const store = useInkwellStore();
+    const store = useJottathingStore();
     await setupStoreWithPages(store, [basePage, pageTwo]);
 
     await store.selectPage('page-two');
 
-    expect(stripInkwellBlockIds(store.currentPage?.content)).toEqual(docWithText('cached body'));
+    expect(stripJottathingBlockIds(store.currentPage?.content)).toEqual(docWithText('cached body'));
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -2088,7 +2088,7 @@ describe('project page caching', () => {
       knownSyncVersion: 1,
       serverSyncVersion: 2,
     };
-    const store = useInkwellStore();
+    const store = useJottathingStore();
     await setupStoreWithPages(store, [basePage, pageTwo]);
 
     await store.selectPage('page-two');
@@ -2109,7 +2109,7 @@ describe('project page caching', () => {
       title: 'Second Page',
       content: docWithText('second body'),
     };
-    const store = useInkwellStore();
+    const store = useJottathingStore();
 
     await setupStoreWithPages(store, [basePage, pageTwo]);
 
@@ -2132,7 +2132,7 @@ describe('project page caching', () => {
 
     expect(store.currentPage?.id).toBe('page-two');
     expect(store.currentPage?.content).toEqual(docWithText('second body'));
-    expect(store.pages.find((page) => page.id === 'page-inkwell')?.content)
+    expect(store.pages.find((page) => page.id === 'page-jottathing')?.content)
       .toEqual(docWithText('old page edit'));
   });
 
@@ -2165,7 +2165,7 @@ describe('project page caching', () => {
           paragraph('remote content'),
           image({
             src: 'https://secure.notion-static.com/image.png',
-            inkwellBlockId: 'remote-image',
+            jottathingBlockId: 'remote-image',
           }),
         ]),
         remoteRevision: 'remote-2',
@@ -2178,14 +2178,14 @@ describe('project page caching', () => {
       paragraph('newer local draft'),
       image({
         src: 'https://secure.notion-static.com/image.png',
-        inkwellBlockId: 'remote-image',
+        jottathingBlockId: 'remote-image',
       }),
     ]);
     expect(store.currentPage?.remoteRevision).toBe('remote-2');
   });
 
   test('runtime page updates do not overwrite newer active page content', async () => {
-    const store = useInkwellStore();
+    const store = useJottathingStore();
     const localPage = {
       ...basePage,
       content: docWithText('newer local draft'),
@@ -2208,7 +2208,7 @@ describe('project page caching', () => {
     const listener = vi.mocked(browser.runtime.onMessage.addListener)
       .mock.calls.at(-1)?.[0] as ((message: unknown) => unknown) | undefined;
     listener?.({
-      type: 'inkwell.projectPageUpdated',
+      type: 'jottathing.projectPageUpdated',
       payload: {
         page: incomingPage,
       },
@@ -2233,7 +2233,7 @@ describe('cross-instance workspace refresh', () => {
       projectId: remoteProject.id,
       title: 'Remote page',
     };
-    const store = useInkwellStore();
+    const store = useJottathingStore();
     await setupStoreWithPages(store, [basePage]);
     const resync = vi.spyOn(notionClient, 'resyncPendingChanges').mockImplementation(async () => {
       resetBrowserStorage({
@@ -2273,7 +2273,7 @@ describe('cross-instance workspace refresh', () => {
       id: 'page-deleted-remotely',
       title: 'Deleted page',
     };
-    const store = useInkwellStore();
+    const store = useJottathingStore();
     await setupStoreWithPages(store, [deletedPage, survivingPage]);
     store.currentPage = deletedPage;
     const resync = vi.spyOn(notionClient, 'resyncPendingChanges').mockImplementation(async () => {
@@ -2308,7 +2308,7 @@ describe('cross-instance workspace refresh', () => {
       title: 'External page',
       notionPageId: 'external-thread-block',
     };
-    const store = useInkwellStore();
+    const store = useJottathingStore();
     await setupStoreWithPages(store, [basePage]);
     vi.spyOn(notionClient, 'flushPendingSyncOps').mockResolvedValue(undefined);
     vi.spyOn(notionClient, 'pendingSyncEventCount').mockResolvedValue(0);
@@ -2337,12 +2337,12 @@ describe('cross-instance workspace refresh', () => {
 });
 
 async function setupStoreWithPages(
-  store: ReturnType<typeof useInkwellStore>,
+  store: ReturnType<typeof useJottathingStore>,
   pages: ProjectPage[],
 ) {
   resetBrowserStorage({
-    activePageIdsByProject: { 'project-inkwell': 'page-inkwell' },
-    currentProjectId: 'project-inkwell',
+    activePageIdsByProject: { 'project-jottathing': 'page-jottathing' },
+    currentProjectId: 'project-jottathing',
     hasMigratedCapturesToPages: true,
     pages,
     projects: [baseProject],
@@ -2352,13 +2352,13 @@ async function setupStoreWithPages(
 }
 
 async function seedStore(
-  store: ReturnType<typeof useInkwellStore>,
+  store: ReturnType<typeof useJottathingStore>,
   pages = [basePage],
 ) {
   store.syncConfig = connectedConfig;
   store.projects = [baseProject];
   store.pages = pages;
-  store.currentProjectId = 'project-inkwell';
+  store.currentProjectId = 'project-jottathing';
   store.currentPage = basePage;
   await nextTick();
 }
@@ -2366,7 +2366,7 @@ async function seedStore(
 async function setupProjectSyncTest(projectName: string) {
   const projectSync = deferred<Response>();
   vi.stubGlobal('fetch', vi.fn(() => projectSync.promise));
-  const store = useInkwellStore();
+  const store = useJottathingStore();
   await seedStore(store);
   await store.createProject(projectName);
   return { projectSync, store };
@@ -2375,10 +2375,10 @@ async function setupProjectSyncTest(projectName: string) {
 async function setupTimerFetchStoreTest() {
   vi.useFakeTimers();
   const fetchMock = vi.fn(async () =>
-    jsonResponse({ queued: true, versions: { 'page-inkwell': 1 } }),
+    jsonResponse({ queued: true, versions: { 'page-jottathing': 1 } }),
   );
   vi.stubGlobal('fetch', fetchMock);
-  const store = useInkwellStore();
+  const store = useJottathingStore();
   await seedStore(store);
   return { fetchMock, store };
 }
@@ -2409,7 +2409,7 @@ async function setupOfflineEmptyPageTest(blockId: string) {
   vi.stubGlobal('fetch', vi.fn(async () => {
     throw new TypeError('offline');
   }));
-  const store = useInkwellStore();
+  const store = useJottathingStore();
   const startingPage = { ...basePage, content: { type: 'doc', content: [] } };
   await setupStoreWithPages(store, [startingPage]);
   store.currentPage = startingPage;
@@ -2419,7 +2419,7 @@ async function setupOfflineEmptyPageTest(blockId: string) {
   return { store };
 }
 
-async function saveEmptyAndCompact(store: ReturnType<typeof useInkwellStore>) {
+async function saveEmptyAndCompact(store: ReturnType<typeof useJottathingStore>) {
   await store.saveCurrentPageContent({ type: 'doc', content: [] }, {
     preserveLocalContent: true,
   });
@@ -2437,9 +2437,9 @@ async function setupRefreshTest() {
   };
   const pagePull = deferred<Response>();
   vi.stubGlobal('fetch', vi.fn(() => pagePull.promise));
-  const store = useInkwellStore();
+  const store = useJottathingStore();
   await setupStoreWithPages(store, [syncedBasePage]);
-  const refreshPromise = store.refreshSelectedPage('page-inkwell');
+  const refreshPromise = store.refreshSelectedPage('page-jottathing');
   store.currentPage = {
     ...store.currentPage!,
     content: docWithText('newer local draft'),
@@ -2467,23 +2467,23 @@ function docWithText(text: string): DocumentContent {
   };
 }
 
-function docWithBlock(inkwellBlockId: string, text: string): DocumentContent {
+function docWithBlock(jottathingBlockId: string, text: string): DocumentContent {
   return {
     type: 'doc',
-    content: [blockWithId(inkwellBlockId, text)],
+    content: [blockWithId(jottathingBlockId, text)],
   };
 }
 
-function blockWithId(inkwellBlockId: string, text: string): DocumentContent {
+function blockWithId(jottathingBlockId: string, text: string): DocumentContent {
   return {
     type: 'paragraph',
-    attrs: { inkwellBlockId },
+    attrs: { jottathingBlockId },
     content: [{ type: 'text', text }],
   };
 }
 
 function docWithMarkedBlock(
-  inkwellBlockId: string,
+  jottathingBlockId: string,
   text: string,
   marks: NonNullable<DocumentContent['marks']>,
 ): DocumentContent {
@@ -2492,7 +2492,7 @@ function docWithMarkedBlock(
     content: [
       {
         type: 'paragraph',
-        attrs: { inkwellBlockId },
+        attrs: { jottathingBlockId },
         content: [{ type: 'text', text, marks }],
       },
     ],
@@ -2510,7 +2510,7 @@ function docWithParagraphs(lines: string[]): DocumentContent {
 }
 
 
-function stripInkwellBlockIds(content: DocumentContent | undefined): DocumentContent | undefined {
+function stripJottathingBlockIds(content: DocumentContent | undefined): DocumentContent | undefined {
   if (!content) {
     return content;
   }
@@ -2521,11 +2521,11 @@ function stripInkwellBlockIds(content: DocumentContent | undefined): DocumentCon
   delete rest.content;
   const attrs = content.attrs
     ? Object.fromEntries(
-        Object.entries(content.attrs).filter(([key]) => key !== 'inkwellBlockId'),
+        Object.entries(content.attrs).filter(([key]) => key !== 'jottathingBlockId'),
       )
     : undefined;
   const children = originalContent
-    ?.map(stripInkwellBlockIds)
+    ?.map(stripJottathingBlockIds)
     .filter((child): child is DocumentContent => Boolean(child));
 
   return {

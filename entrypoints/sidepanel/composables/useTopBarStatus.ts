@@ -1,9 +1,9 @@
 /** @file Derives sync feedback and workspace labels displayed in the top bar. */
 import { computed } from 'vue';
-import type { useInkwellStore } from '@/src/stores/inkwell';
+import type { useJottathingStore } from '@/src/stores/jottathing';
 
 /** Groups the topbar's saved-state badge and workspace identity labels. */
-export function useTopBarStatus(store: ReturnType<typeof useInkwellStore>) {
+export function useTopBarStatus(store: ReturnType<typeof useJottathingStore>) {
   const saveLabel = computed(() => {
     if (store.isLoading) return 'Loading workspace';
     if (store.isCheckingSync) return 'Checking sync';
@@ -46,7 +46,7 @@ export function useTopBarStatus(store: ReturnType<typeof useInkwellStore>) {
           : 'Live updates disconnected';
 
     if (!store.syncConfig.selectedParentPageId) {
-      return `Inkwell will create a root Notion page with project folders on first sync. · ${sseNote}`;
+      return `Jottathing will create a root Notion page with project folders on first sync. · ${sseNote}`;
     }
 
     const base = store.syncConfig.selectedParentPageTitle

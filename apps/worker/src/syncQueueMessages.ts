@@ -12,7 +12,7 @@ export const MAX_SYNC_QUEUE_MESSAGE_BYTES = 120 * 1024;
 
 /** Describes a queue operation with repeated page context removed. */
 export type ContextFreeSyncOperation = Omit<SyncBlockOperation, 'payload'> & {
-  inkwellBlockId: string | undefined;
+  jottathingBlockId: string | undefined;
   payload: Omit<SyncBlockOperation['payload'], 'page' | 'project' | 'selectedParentPageId'>;
 };
 
@@ -72,7 +72,7 @@ export function syncOpGroupsByPage(operations: SyncBlockOperation[]): SyncOperat
  */
 export function syncOpWithoutRepeatedContext(operation: SyncBlockOperation): ContextFreeSyncOperation {
   const { page: _page, project: _project, selectedParentPageId: _parent, ...payload } = operation.payload;
-  return { ...operation, inkwellBlockId: operation.inkwellBlockId, payload };
+  return { ...operation, jottathingBlockId: operation.jottathingBlockId, payload };
 }
 
 /**

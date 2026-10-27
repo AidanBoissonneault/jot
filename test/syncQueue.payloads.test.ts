@@ -12,7 +12,7 @@ import type { Project, ProjectPage } from '@/src/types/capture';
 
 const block = (id: string, text: string) => ({
   type: 'paragraph',
-  attrs: { inkwellBlockId: id },
+  attrs: { jottathingBlockId: id },
   content: [{ type: 'text', text }],
 });
 
@@ -59,7 +59,7 @@ describe('block sync queue payloads', () => {
 
   test('queues each source independently without copying project state or duplicate retries', async () => {
     resetBrowserStorage();
-    const sourceBlock = block('source:capture-1', 'inkwell_source_v1:{}');
+    const sourceBlock = block('source:capture-1', 'jottathing_source_v1:{}');
 
     await addPendingProjectSourceSyncEvent(project, 'capture-1', sourceBlock);
     await addPendingProjectSourceSyncEvent(project, 'capture-1', sourceBlock);
@@ -86,7 +86,7 @@ describe('block sync queue payloads', () => {
     const original = await addPendingProjectSyncEvent(localProject, 'parent');
     await blockPendingProjectSyncEvents(localProject.id, {
       code: 'unmapped_notion_content',
-      message: 'Notion has content without matching Inkwell block mappings.',
+      message: 'Notion has content without matching Jottathing block mappings.',
     });
 
     const persisted: Project[] = [];
@@ -122,7 +122,7 @@ describe('block sync queue payloads', () => {
     await addPendingProjectSyncEvent(localProject, 'parent');
     await blockPendingProjectSyncEvents(localProject.id, {
       code: 'unmapped_notion_content',
-      message: 'Notion has content without matching Inkwell block mappings.',
+      message: 'Notion has content without matching Jottathing block mappings.',
     });
 
     const rebased = await rebaseBlockedProjectSyncEvents(
@@ -151,7 +151,7 @@ describe('block sync queue payloads', () => {
       'block_create',
       'block_create',
     ]);
-    expect(ops.map((op) => op.payload.afterInkwellBlockId)).toEqual([
+    expect(ops.map((op) => op.payload.afterJottathingBlockId)).toEqual([
       'first',
       'second',
       'third',

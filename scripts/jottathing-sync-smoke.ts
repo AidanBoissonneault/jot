@@ -4,7 +4,7 @@ import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { DocumentContent, Project, ProjectPage } from '../src/types/capture.js';
 
-const COOKIE_NAME = 'inkwell_session';
+const COOKIE_NAME = 'jottathing_session';
 const DEFAULT_WORKER_URL = 'http://127.0.0.1:8787';
 const DEFAULT_TIMEOUT_MS = 120_000;
 const DEFAULT_POLL_INTERVAL_MS = 1_000;
@@ -63,6 +63,12 @@ interface SyncStatus {
   syncedVersion: number;
 }
 
+interface SmokeSession {
+  authenticated: boolean;
+  connected: boolean;
+  userId: string;
+}
+
 function parseArgs(argv: string[]): CliOptions {
   const command = argv[0] && !argv[0].startsWith('--') ? argv[0] : 'help';
   const values = new Map<string, string>();
@@ -117,17 +123,25 @@ function normalizeLocalWorkerUrl(value: string): string {
   return parsed.origin;
 }
 
+function localWorkerOrigin(workerUrl: string): string {
+  const origin = new URL(workerUrl);
+  // Wrangler's local Worker trusts localhost as its request origin, while the
+  // smoke client targets 127.0.0.1 to keep its network destination loopback-only.
+  origin.hostname = 'localhost';
+  return origin.origin;
+}
+
 function sessionCookieFromEnvironment(value: string | undefined): string {
   if (!value?.trim()) {
-    throw new Error('Set INKWELL_SESSION_COOKIE to the local inkwell_session cookie before running this command.');
+    throw new Error('Set JOTTATHING_SESSION_COOKIE to the local jottathing_session cookie before running this command.');
   }
 
   const raw = value.trim().replace(/^cookie\s*:\s*/i, '');
-  if (/[\r\n\0]/.test(raw)) throw new Error('INKWELL_SESSION_COOKIE contains invalid characters.');
+  if (/[\r\n\0]/.test(raw)) throw new Error('JOTTATHING_SESSION_COOKIE contains invalid characters.');
 
   const pairs = raw.split(';').map((part) => part.trim()).filter(Boolean);
   const matches = pairs.filter((part) => part.startsWith(`${COOKIE_NAME}=`));
-  if (matches.length > 1) throw new Error('INKWELL_SESSION_COOKIE contains multiple session cookies.');
+  if (matches.length > 1) throw new Error('JOTTATHING_SESSION_COOKIE contains multiple session cookies.');
 
   let cookiePair: string;
   if (matches.length === 1) {
@@ -135,11 +149,11 @@ function sessionCookieFromEnvironment(value: string | undefined): string {
   } else if (pairs.length === 1 && !pairs[0].includes('=')) {
     cookiePair = `${COOKIE_NAME}=${pairs[0]}`;
   } else {
-    throw new Error(`INKWELL_SESSION_COOKIE must contain the ${COOKIE_NAME} cookie pair.`);
+    throw new Error(`JOTTATHING_SESSION_COOKIE must contain the ${COOKIE_NAME} cookie pair.`);
   }
 
   if (!cookiePair.slice(COOKIE_NAME.length + 1)) {
-    throw new Error(`INKWELL_SESSION_COOKIE has an empty ${COOKIE_NAME} value.`);
+    throw new Error(`JOTTATHING_SESSION_COOKIE has an empty ${COOKIE_NAME} value.`);
   }
   return cookiePair;
 }
@@ -156,7 +170,7 @@ function textToDocument(text: string): DocumentContent {
 
 function statePaths(cwd: string, runId: string): { directory: string; stateFile: string; latestFile: string } {
   if (!/^[a-zA-Z0-9_-]+$/.test(runId)) throw new Error('Run ID contains invalid characters.');
-  const directory = join(cwd, '.tmp', 'inkwell-sync-smoke');
+  const directory = join(cwd, '.tmp', 'jottathing-sync-smoke');
   return {
     directory,
     stateFile: join(directory, `${runId}.json`),
@@ -177,7 +191,7 @@ async function saveState(cwd: string, state: SmokeState): Promise<void> {
 }
 
 async function loadState(cwd: string, runIdOption?: string): Promise<SmokeState> {
-  const directory = join(cwd, '.tmp', 'inkwell-sync-smoke');
+  const directory = join(cwd, '.tmp', 'jottathing-sync-smoke');
   let runId = runIdOption;
   if (!runId) {
     try {
@@ -249,9 +263,55 @@ async function delay(milliseconds: number): Promise<void> {
   await new Promise((resolveDelay) => setTimeout(resolveDelay, milliseconds));
 }
 
-function makeApiClient(workerUrl: string, cookie: string, fetchImpl: typeof fetch) {
+async function readSmokeSession(
+  workerUrl: string,
+  cookie: string,
+  origin: string,
+  fetchImpl: typeof fetch,
+): Promise<SmokeSession> {
+  let response: Response;
+  try {
+    response = await fetchImpl(new URL('/session', `${workerUrl}/`), {
+      method: 'GET',
+      headers: new Headers({ cookie, origin }),
+      redirect: 'error',
+      signal: AbortSignal.timeout(20_000),
+    });
+  } catch {
+    throw new Error('GET /session could not reach the local Worker.');
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = await response.json();
+  } catch {
+    throw new Error(`GET /session returned invalid JSON (HTTP ${response.status}).`);
+  }
+  if (!response.ok) throw new Error(`GET /session failed with HTTP ${response.status}.`);
+  const result = asApiResult(parsed);
+  const userId = typeof result.userId === 'string' ? result.userId.trim() : '';
+  if (result.authenticated !== true || !userId) {
+    throw new Error('The Jottathing session is not authenticated.');
+  }
+  if (result.connected !== true) {
+    throw new Error('The Jottathing session has no connected Notion workspace.');
+  }
+  return { authenticated: true, connected: true, userId };
+}
+
+function makeApiClient(
+  workerUrl: string,
+  cookie: string,
+  origin: string,
+  accountId: string,
+  fetchImpl: typeof fetch,
+) {
   return async (method: 'GET' | 'POST', route: string, body?: unknown): Promise<ApiResult> => {
-    const headers = new Headers({ cookie });
+    const headers = new Headers({
+      cookie,
+      origin,
+      'x-jottathing-account': accountId,
+    });
     const request: RequestInit = { method, headers, redirect: 'error', signal: AbortSignal.timeout(20_000) };
     if (body !== undefined) {
       headers.set('content-type', 'application/json');
@@ -451,7 +511,7 @@ async function archiveRun(
 
 function helpText(): string {
   return [
-    'Inkwell local sync smoke driver',
+    'Jottathing local sync smoke driver',
     '',
     'Commands:',
     '  create                         Create a unique Test project and page',
@@ -466,8 +526,8 @@ function helpText(): string {
     `  --timeout-ms <ms>               Sync wait limit (default ${DEFAULT_TIMEOUT_MS})`,
     `  --poll-interval-ms <ms>         Status polling interval (default ${DEFAULT_POLL_INTERVAL_MS})`,
     '',
-    'Set INKWELL_SESSION_COOKIE to the local inkwell_session cookie pair. The CLI never prints or stores it.',
-    'Run state is stored under .tmp/inkwell-sync-smoke/ for recovery after an interrupted run.',
+    'Set JOTTATHING_SESSION_COOKIE to the local jottathing_session cookie pair. The CLI never prints or stores it.',
+    'Run state is stored under .tmp/jottathing-sync-smoke/ for recovery after an interrupted run.',
   ].join('\n');
 }
 
@@ -483,7 +543,7 @@ export async function runSmokeCli(argv: string[], dependencies: CliDependencies 
   if (!knownCommands.has(options.command)) throw new Error(`Unknown command: ${options.command}. Run help for usage.`);
 
   const cwd = resolve(dependencies.cwd ?? process.cwd());
-  const cookie = sessionCookieFromEnvironment((dependencies.env ?? process.env).INKWELL_SESSION_COOKIE);
+  const cookie = sessionCookieFromEnvironment((dependencies.env ?? process.env).JOTTATHING_SESSION_COOKIE);
   const fetchImpl = dependencies.fetchImpl ?? fetch;
   const timeoutMs = parsePositiveInteger(option(options, 'timeout-ms'), DEFAULT_TIMEOUT_MS, 'timeout-ms');
   const pollIntervalMs = parsePositiveInteger(option(options, 'poll-interval-ms'), DEFAULT_POLL_INTERVAL_MS, 'poll-interval-ms');
@@ -501,7 +561,9 @@ export async function runSmokeCli(argv: string[], dependencies: CliDependencies 
     }
   }
 
-  const api = makeApiClient(workerUrl, cookie, fetchImpl);
+  const origin = localWorkerOrigin(workerUrl);
+  const session = await readSmokeSession(workerUrl, cookie, origin, fetchImpl);
+  const api = makeApiClient(workerUrl, cookie, origin, session.userId, fetchImpl);
   if (options.command === 'create') {
     await createRun(cwd, workerUrl, api, output, option(options, 'text'));
     return;

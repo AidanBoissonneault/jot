@@ -8,14 +8,14 @@ import type {
 } from '@/src/types/messages';
 import { parseCaptureSelectionPayload } from '@/src/lib/capturePayload';
 
-const INKWELL_DRAG_MIME = 'application/x-inkwell-capture';
-const INKWELL_HEADING_DRAG_MIME = 'application/x-inkwell-heading-capture';
-const INKWELL_CAPTURE_DATA_ATTR = 'data-inkwell-capture';
+const JOTTATHING_DRAG_MIME = 'application/x-jottathing-capture';
+const JOTTATHING_HEADING_DRAG_MIME = 'application/x-jottathing-heading-capture';
+const JOTTATHING_CAPTURE_DATA_ATTR = 'data-jottathing-capture';
 const MAX_CAPTURE_DRAG_DATA_CHARS = 1024 * 1024;
 
 /** Reads a selection payload from custom drag data or its embedded HTML fallback. */
-export function readInkwellDropPayload(event: DragEvent): CaptureSelectionPayload | null {
-  const rawPayload = event.dataTransfer?.getData(INKWELL_DRAG_MIME);
+export function readJottathingDropPayload(event: DragEvent): CaptureSelectionPayload | null {
+  const rawPayload = event.dataTransfer?.getData(JOTTATHING_DRAG_MIME);
 
   if (rawPayload && rawPayload.length <= MAX_CAPTURE_DRAG_DATA_CHARS) {
     try {
@@ -32,8 +32,8 @@ export function readInkwellDropPayload(event: DragEvent): CaptureSelectionPayloa
     if (!html || html.length > MAX_CAPTURE_DRAG_DATA_CHARS) return null;
     const document = new DOMParser().parseFromString(html, 'text/html');
     const embedded = document
-      .querySelector(`[${INKWELL_CAPTURE_DATA_ATTR}]`)
-      ?.getAttribute(INKWELL_CAPTURE_DATA_ATTR);
+      .querySelector(`[${JOTTATHING_CAPTURE_DATA_ATTR}]`)
+      ?.getAttribute(JOTTATHING_CAPTURE_DATA_ATTR);
     if (!embedded || embedded.length > MAX_CAPTURE_DRAG_DATA_CHARS) return null;
     return parseCaptureSelectionPayload(JSON.parse(embedded) as unknown);
   } catch {
@@ -43,15 +43,15 @@ export function readInkwellDropPayload(event: DragEvent): CaptureSelectionPayloa
 
 /** Identifies a pending heading drag before consuming its one-shot payload. */
 export function isLikelyHeadingDrop(event: DragEvent): boolean {
-  return Array.from(event.dataTransfer?.types ?? []).includes(INKWELL_HEADING_DRAG_MIME);
+  return Array.from(event.dataTransfer?.types ?? []).includes(JOTTATHING_HEADING_DRAG_MIME);
 }
 
 /** Identifies plain-text and selection drags that the editor should capture. */
 export function isLikelyTextCaptureDrop(event: DragEvent): boolean {
   const types = Array.from(event.dataTransfer?.types ?? []);
   return (
-    !types.includes(INKWELL_HEADING_DRAG_MIME) &&
-    (types.includes(INKWELL_DRAG_MIME) ||
+    !types.includes(JOTTATHING_HEADING_DRAG_MIME) &&
+    (types.includes(JOTTATHING_DRAG_MIME) ||
       (!types.includes('text/uri-list') &&
         (types.includes('text/plain') || types.includes('text/html'))))
   );
@@ -63,7 +63,7 @@ export async function consumeTextDragPayload(
 ): Promise<CaptureSelectionPayload | null> {
   return browser.runtime
     .sendMessage({
-      type: 'inkwell.consumeTextDrag',
+      type: 'jottathing.consumeTextDrag',
       payload: { text },
     } satisfies ConsumeTextDragMessage)
     .then((payload: unknown) => {
@@ -81,7 +81,7 @@ export async function consumeHeadingDropPayload(
 
   return browser.runtime
     .sendMessage({
-      type: 'inkwell.consumeHeadingDrag',
+      type: 'jottathing.consumeHeadingDrag',
       payload: { text },
     } satisfies ConsumeHeadingDragMessage)
     .then((payload: unknown) => {

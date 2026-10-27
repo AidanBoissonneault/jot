@@ -4,7 +4,7 @@ import type { BlockMapping, NotionBlockPayload } from '@/apps/worker/src/types';
 
 function mapping(type: string): BlockMapping {
   return {
-    inkwellBlockId: 'local-heading',
+    jottathingBlockId: 'local-heading',
     kind: 'heading',
     lastSyncedHash: 'previous',
     localNodeId: 'local-heading',
@@ -19,7 +19,7 @@ function mapping(type: string): BlockMapping {
 function desired(type: string) {
   const notionBlock: NotionBlockPayload = { object: 'block', type };
   return {
-    inkwellBlockId: 'local-heading',
+    jottathingBlockId: 'local-heading',
     kind: 'heading',
     lastSyncedHash: 'next',
     localNodeId: 'local-heading',

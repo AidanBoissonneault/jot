@@ -387,30 +387,30 @@ body.marketing-demo {
   gap: 12px;
 }
 
-#inkwell-demo-root {
+#jottathing-demo-root {
   width: 100%;
   height: 100dvh;
   min-height: 100vh;
   overflow: auto;
-  background: var(--inkwell-bg, #fafafa);
+  background: var(--jottathing-bg, #fafafa);
 }
 
-#inkwell-demo-root .shell {
+#jottathing-demo-root .shell {
   min-height: 100dvh;
 }
 
-#inkwell-demo-root .topbar-status {
+#jottathing-demo-root .topbar-status {
   grid-template-columns: minmax(0, 1fr);
 }
 
-#inkwell-demo-root .topbar-status > .sync-badge,
-#inkwell-demo-root .topbar-meta > small {
+#jottathing-demo-root .topbar-status > .sync-badge,
+#jottathing-demo-root .topbar-meta > small {
   display: none;
 }
 
-#inkwell-demo-root .topbar-actions button[aria-label="Resync with Notion"],
-#inkwell-demo-root .topbar-actions button[aria-label="Syncing with Notion"],
-#inkwell-demo-root .topbar-actions button[aria-label="Settings"] {
+#jottathing-demo-root .topbar-actions button[aria-label="Resync with Notion"],
+#jottathing-demo-root .topbar-actions button[aria-label="Syncing with Notion"],
+#jottathing-demo-root .topbar-actions button[aria-label="Settings"] {
   display: none;
 }
 
@@ -443,13 +443,13 @@ body.marketing-demo {
     border-bottom: 1px solid #d9d7d1;
   }
 
-  #inkwell-demo-root {
+  #jottathing-demo-root {
     height: 100dvh;
     min-height: 100dvh;
     border-top: 1px solid #c9c6bd;
   }
 
-  #inkwell-demo-root .shell {
+  #jottathing-demo-root .shell {
     min-height: 100dvh;
   }
 }

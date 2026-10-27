@@ -2,7 +2,7 @@
 import { computed, ref, watch } from 'vue';
 import type { DocumentContent } from '@/src/types/capture';
 import type { SyncContentConflict } from '@/src/types/sync';
-import { normalizeInkwellBlockIds } from '@/src/extensions/inkwellBlockIds';
+import { normalizeJottathingBlockIds } from '@/src/extensions/jottathingBlockIds';
 import { isProjectStateMetadataNode } from '@/src/extensions/sourceRegistry';
 
 type Choice = 'local' | 'notion' | 'both' | '';
@@ -123,7 +123,7 @@ function createRows(conflict: SyncContentConflict): ConflictRow[] {
 }
 
 function stableBlockId(block: DocumentContent): string | undefined {
-  const value = block.attrs?.inkwellBlockId;
+  const value = block.attrs?.jottathingBlockId;
   return typeof value === 'string' && value ? value : undefined;
 }
 
@@ -137,7 +137,7 @@ function withoutIdentity(value: unknown): unknown {
   const record = value as Record<string, unknown>;
   const isFileUpload = Boolean(record.notionFileUploadId);
   return Object.fromEntries(Object.entries(record)
-    .filter(([key]) => key !== 'inkwellBlockId' && key !== 'notionBlockId' && key !== 'inkwellConflictResolution' && key !== 'uploadState' && !(isFileUpload && key === 'src'))
+    .filter(([key]) => key !== 'jottathingBlockId' && key !== 'notionBlockId' && key !== 'jottathingConflictResolution' && key !== 'uploadState' && !(isFileUpload && key === 'src'))
     .sort(([first], [second]) => first.localeCompare(second))
     .map(([key, nested]) => [key, key === 'src' ? stableMediaUrl(nested) : withoutIdentity(nested)]));
 }
@@ -260,11 +260,11 @@ function resolve() {
     else if (row.notion) chosen.push(row.notion);
   }
 
-  const merged = normalizeInkwellBlockIds({
+  const merged = normalizeJottathingBlockIds({
     type: props.conflict.localContent.type ?? 'doc',
     attrs: {
-      inkwellConflictResolution: true,
-      inkwellPreserveRemoteBlocks: Boolean(props.conflict.remoteContent),
+      jottathingConflictResolution: true,
+      jottathingPreserveRemoteBlocks: Boolean(props.conflict.remoteContent),
     },
     // Applying the merge confirms every block in the reviewed snapshot,
     // including Notion-only blocks that the modal preserves automatically.
@@ -272,7 +272,7 @@ function resolve() {
       ...block,
       attrs: {
         ...block.attrs,
-        inkwellConflictResolution: true,
+        jottathingConflictResolution: true,
       },
     })),
   });
@@ -290,7 +290,7 @@ function markBlock(block: DocumentContent, notionBlockId?: string): DocumentCont
     attrs: {
       ...block.attrs,
       ...(notionBlockId ? { notionBlockId } : {}),
-      inkwellConflictResolution: true,
+      jottathingConflictResolution: true,
     },
   };
 }
@@ -315,7 +315,7 @@ function markBlock(block: DocumentContent, notionBlockId?: string): DocumentCont
         <article v-for="row in rows" :key="row.id" class="sync-conflict-row">
           <div class="sync-conflict-blocks">
             <div v-if="row.local && !row.internal" class="sync-conflict-side">
-              <strong>Inkwell</strong>
+              <strong>Jottathing</strong>
               <pre>{{ displayBlock(row.local) }}</pre>
             </div>
             <div v-if="row.notion && !row.internal" class="sync-conflict-side">
@@ -326,7 +326,7 @@ function markBlock(block: DocumentContent, notionBlockId?: string): DocumentCont
           </div>
           <div v-if="row.bothEdited && row.local && row.notion && !row.internal" class="sync-conflict-diff-wrap">
             <p>Both sides changed since the last shared version. Review the diff, then choose one version.</p>
-            <div class="sync-conflict-diff-legend"><span class="removed">− Inkwell</span><span class="added">+ Notion</span></div>
+            <div class="sync-conflict-diff-legend"><span class="removed">− Jottathing</span><span class="added">+ Notion</span></div>
             <pre class="sync-conflict-diff"><span v-for="(part, index) in diffParts(row.local, row.notion)" :key="index" :class="part.kind">{{ part.text }}</span></pre>
           </div>
           <p v-else-if="row.duplicate" class="sync-conflict-duplicate">
@@ -334,12 +334,12 @@ function markBlock(block: DocumentContent, notionBlockId?: string): DocumentCont
           </p>
           <fieldset v-if="row.local && row.notion && row.changed && !row.duplicate && !row.internal" class="sync-conflict-choices">
             <legend>Choose this block’s version</legend>
-            <label><input v-model="row.choice" type="radio" value="local" /> Keep Inkwell</label>
+            <label><input v-model="row.choice" type="radio" value="local" /> Keep Jottathing</label>
             <label><input v-model="row.choice" type="radio" value="notion" /> Keep Notion</label>
           </fieldset>
           <fieldset v-else-if="row.duplicate" class="sync-conflict-choices">
             <legend>Resolve duplicate</legend>
-            <label><input v-model="row.choice" type="radio" value="local" /> Keep Inkwell copy</label>
+            <label><input v-model="row.choice" type="radio" value="local" /> Keep Jottathing copy</label>
             <label><input v-model="row.choice" type="radio" value="notion" /> Keep Notion copy</label>
             <label><input v-model="row.choice" type="radio" value="both" /> Keep both</label>
           </fieldset>

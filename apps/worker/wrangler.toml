@@ -1,55 +1,19 @@
-name = "inkwell-sync"
-main = "src/worker.ts"
-compatibility_date = "2025-05-01"
-compatibility_flags = ["nodejs_compat"]
+name = "jottathing-sync"
+main = "src/proxy.js"
+compatibility_date = "2026-10-27"
 workers_dev = true
+routes = [{ pattern = "sync.jottathing.byaidan.com", custom_domain = true }]
+
+[observability]
+enabled = true
 
 [observability.logs]
 enabled = true
 invocation_logs = true
 
-[[durable_objects.bindings]]
-name = "SYNC_EVENTS"
-class_name = "SyncEventsDO"
+[observability.traces]
+enabled = true
 
-[[migrations]]
-tag = "v1"
-new_sqlite_classes = ["SyncEventsDO"]
-
-# Create queues before deploying: wrangler queues create inkwell-sync-queue && wrangler queues create inkwell-sync-dlq
-[[queues.producers]]
-queue   = "inkwell-sync-queue"
-binding = "SYNC_QUEUE"
-
-[[queues.consumers]]
-queue             = "inkwell-sync-queue"
-max_batch_size    = 1
-max_batch_timeout = 30
-max_retries       = 3
-max_concurrency   = 1
-dead_letter_queue = "inkwell-sync-dlq"
-
-[[queues.consumers]]
-queue             = "inkwell-sync-dlq"
-max_batch_size    = 100
-max_batch_timeout = 30
-max_retries       = 3
-
-[vars]
-NOTION_VERSION = "2026-03-11"
-INKWELL_ROOT_PAGE_TITLE = "Inkwell"
-# Set this to your actual workers.dev URL after deploying once
-WORKER_URL = "https://sync.inkwell.byaidan.com"
-TRUSTED_ORIGINS = "chrome-extension://mfpjgeohimhcjdnlikbaibjfijdchmhc,chrome-extension://fpmkfddbnjalacgkciemoceecidjnoee"
-
-# Secrets — set with: wrangler secret put <NAME>
-#   NOTION_OAUTH_CLIENT_ID
-#   NOTION_OAUTH_CLIENT_SECRET
-#   SESSION_SECRET            (any random 32+ char string)
-#   INKWELL_EXTENSION_ORIGIN      (chrome-extension://YOUR_EXTENSION_ID)
-#   SUPABASE_URL              (Project Settings → API → Project URL)
-#   SUPABASE_SERVICE_KEY      (Project Settings → API → service_role key)
-#   NOTION_WEBHOOK_SETUP_TOKEN (random 32+ byte bearer secret used by the protected setup endpoints)
-# Webhook setup: arm with POST /webhooks/notion/setup/arm, create the subscription in Notion,
-# retrieve once with GET /webhooks/notion/verification-token, then paste the token into Notion.
-# NOTION_WEBHOOK_SECRET remains an optional legacy fallback while moving secrets into Supabase.
+[[services]]
+binding = "JOTTATHING_CORE"
+service = "inkwell-sync"

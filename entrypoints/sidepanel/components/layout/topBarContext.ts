@@ -1,8 +1,8 @@
 /** @file Typed contract between the sidepanel coordinator and its top bar. */
 import type { CSSProperties, ComputedRef, Ref } from 'vue';
-import type { useInkwellStore } from '@/src/stores/inkwell';
+import type { useJottathingStore } from '@/src/stores/jottathing';
 
-type InkwellStore = ReturnType<typeof useInkwellStore>;
+type JottathingStore = ReturnType<typeof useJottathingStore>;
 export type CategoryColor =
   | '#2563eb'
   | '#7c3aed'
@@ -15,7 +15,7 @@ export type CategoryColor =
 
 /** State and commands the top bar needs from the sidepanel coordinator. */
 export interface TopBarContext {
-  store: InkwellStore;
+  store: JottathingStore;
   syncBadgeClass: ComputedRef<Record<string, boolean>>;
   syncBadgeHoverTitle: ComputedRef<string>;
   saveLabel: ComputedRef<string>;

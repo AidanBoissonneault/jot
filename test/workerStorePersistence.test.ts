@@ -39,7 +39,7 @@ function fakeSupabase(failOn?: 'upsert' | 'select' | 'update', storedState: Reco
 }
 
 const store: WorkerStore = {
-  ignoredInkwellDatabaseIds: new Set(),
+  ignoredJottathingDatabaseIds: new Set(),
   installationId: 42,
   parentPages: {},
   projectPages: {},
@@ -49,8 +49,8 @@ const store: WorkerStore = {
   blockMappings: {},
   logs: [],
   tokens: undefined,
-  inkwellRootPage: undefined,
-  inkwellDatabase: undefined,
+  jottathingRootPage: undefined,
+  jottathingDatabase: undefined,
 };
 
 describe('worker sync-state persistence failures', () => {
@@ -58,8 +58,8 @@ describe('worker sync-state persistence failures', () => {
     const { client } = fakeSupabase('select');
     const persistence = createWorkerStorePersistence(client);
 
-    await expect(persistence.readInkwellSyncState(42))
-      .rejects.toThrow('Unable to read Inkwell synchronization state.');
+    await expect(persistence.readJottathingSyncState(42))
+      .rejects.toThrow('Unable to read Jottathing synchronization state.');
   });
 
   it('rejects a failed state write instead of acknowledging the sync', async () => {
@@ -67,15 +67,15 @@ describe('worker sync-state persistence failures', () => {
     const persistence = createWorkerStorePersistence(client);
 
     await expect(persistence.writeStore(store))
-      .rejects.toThrow('Unable to save Inkwell synchronization state.');
+      .rejects.toThrow('Unable to save Jottathing synchronization state.');
   });
 
   it('rejects failure to ensure the installation state row', async () => {
     const { client } = fakeSupabase('upsert');
     const persistence = createWorkerStorePersistence(client);
 
-    await expect(persistence.ensureInkwellSyncStateRow(42))
-      .rejects.toThrow('Unable to ensure Inkwell synchronization state.');
+    await expect(persistence.ensureJottathingSyncStateRow(42))
+      .rejects.toThrow('Unable to ensure Jottathing synchronization state.');
   });
 
   it('keeps hostile JSON keys as own metadata keys without changing map prototypes', async () => {
@@ -84,7 +84,7 @@ describe('worker sync-state persistence failures', () => {
     ) as WorkerStore['notePages'];
     const { client } = fakeSupabase(undefined, { note_pages_json: hostileMap });
     const persistence = createWorkerStorePersistence(client);
-    const state = await persistence.readInkwellSyncState(42);
+    const state = await persistence.readJottathingSyncState(42);
 
     expect(Object.getPrototypeOf(state.notePages)).toBeNull();
     expect(Object.keys(state.notePages)).toEqual(['__proto__', 'constructor']);

@@ -28,7 +28,7 @@ import { isNotionObjectForbidden } from './workerUtils.js';
 import type { DocumentContent, Project, ProjectPage } from '../../../src/types/capture.js';
 import type {
   AppendLog,
-  InkwellDatabase,
+  JottathingDatabase,
   ListAllBlockChildren,
   NotionBlock,
   NotionBlockPayload,
@@ -134,7 +134,7 @@ export function createProjectDatabaseHelpers({
   });
   const {
     queryManagedProjectRows,
-    findProjectPageByInkwellId,
+    findProjectPageByJottathingId,
     createProjectDatabasePage,
     updateProjectDatabasePage,
   } = createProjectDatabaseRows(notionRequest);
@@ -165,7 +165,7 @@ export function createProjectDatabaseHelpers({
     {
       selectedParentPageId,
       syncState = true,
-      isForcedMerge = project.stateContent?.attrs?.inkwellConflictResolution === true,
+      isForcedMerge = project.stateContent?.attrs?.jottathingConflictResolution === true,
     }: Partial<Pick<EnsureProjectPageOptions, 'selectedParentPageId' | 'syncState' | 'isForcedMerge'>> = {},
   ): Promise<ProjectPageResult> {
     return ensureProjectPageAttempt(store, project, { selectedParentPageId, syncState, isForcedMerge });
@@ -179,7 +179,7 @@ export function createProjectDatabaseHelpers({
       selectedParentPageId,
       retryOnArchivedAncestor = true,
       syncState = true,
-      isForcedMerge = project.stateContent?.attrs?.inkwellConflictResolution === true,
+      isForcedMerge = project.stateContent?.attrs?.jottathingConflictResolution === true,
     }: Partial<EnsureProjectPageOptions> = {},
   ): Promise<ProjectPageResult> {
     const database = await ensureProjectDatabase(store, { selectedParentPageId });
@@ -195,7 +195,7 @@ export function createProjectDatabaseHelpers({
       : undefined;
 
     if (!page) {
-      page = await findProjectPageByInkwellId(store, database.dataSourceId, project.id);
+      page = await findProjectPageByJottathingId(store, database.dataSourceId, project.id);
     }
 
     try {
@@ -249,8 +249,8 @@ export function createProjectDatabaseHelpers({
     const database = await ensureProjectDatabase(store, { selectedParentPageId, readOnly: true });
     const clearSelectedParentPage = Boolean(
       requestedParentPageId &&
-      store.inkwellRootPage?.id &&
-      store.inkwellRootPage.id !== requestedParentPageId,
+      store.jottathingRootPage?.id &&
+      store.jottathingRootPage.id !== requestedParentPageId,
     );
     const rows = await queryManagedProjectRows(store, database.dataSourceId);
     const projects: Project[] = [];
