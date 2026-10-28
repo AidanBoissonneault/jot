@@ -61,7 +61,7 @@ export const JottathingImage = Image.extend({
       const deleteButton = document.createElement('button');
       deleteButton.className = 'jottathing-image-delete';
       deleteButton.type = 'button';
-      deleteButton.textContent = 'Delete';
+      deleteButton.appendChild(createTrashIcon(document));
       deleteButton.setAttribute('aria-label', 'Delete image');
       deleteButton.title = 'Delete image';
       controls.append(title, deleteButton);
@@ -658,9 +658,24 @@ function applyImageTitle(
   attrs: Record<string, unknown>,
 ) {
   const displayTitle = imageDisplayTitle(attrs);
-  wrapper.dataset.jottathingImageTitle = displayTitle;
   wrapper.title = displayTitle;
   label.textContent = displayTitle;
+}
+
+function createTrashIcon(ownerDocument: Document): SVGSVGElement {
+  const icon = ownerDocument.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  icon.setAttribute('viewBox', '0 0 24 24');
+  icon.setAttribute('aria-hidden', 'true');
+  icon.setAttribute('focusable', 'false');
+  const path = ownerDocument.createElementNS('http://www.w3.org/2000/svg', 'path');
+  path.setAttribute('d', 'M4 7h16M10 11v6m4-6v6M5 7l1 14h12l1-14M9 7V4h6v3');
+  path.setAttribute('fill', 'none');
+  path.setAttribute('stroke', 'currentColor');
+  path.setAttribute('stroke-linecap', 'round');
+  path.setAttribute('stroke-linejoin', 'round');
+  path.setAttribute('stroke-width', '2');
+  icon.appendChild(path);
+  return icon;
 }
 
 function clamp(value: number, min: number, max: number) {

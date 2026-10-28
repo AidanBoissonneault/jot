@@ -309,41 +309,23 @@
   outline-offset: 3px;
 }
 
-.editor .tiptap .jottathing-image-wrapper.is-selected[data-jottathing-block-id]::before {
-  background: var(--jottathing-accent);
-  border-radius: 4px;
-  color: var(--jottathing-surface);
-  content: attr(data-jottathing-image-title);
-  font-size: 0.68rem;
-  left: 0;
-  line-height: 1.25;
-  max-width: min(100%, 28ch);
-  overflow: hidden;
-  padding: 2px 5px;
-  position: absolute;
-  text-overflow: ellipsis;
-  top: -1.45rem;
-  white-space: nowrap;
-}
-
 .editor .tiptap .jottathing-image-wrapper .jottathing-image-controls {
   align-items: center;
-  background: var(--jottathing-surface);
-  border: 1px solid var(--jottathing-border-strong);
-  border-radius: 8px;
-  box-shadow: 0 3px 12px rgba(15, 23, 42, 0.2);
+  background: var(--jottathing-accent);
+  border-radius: 4px;
+  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.2);
   display: flex;
-  gap: 8px;
-  max-width: calc(100% - 12px);
+  gap: 4px;
+  left: 0;
+  max-width: min(100%, 32ch);
   opacity: 0;
-  padding: 4px 5px 4px 9px;
+  padding: 2px 4px 2px 6px;
   pointer-events: none;
   position: absolute;
-  right: 6px;
-  top: 6px;
+  top: -1.45rem;
   transform: translateY(-3px);
   transition: opacity 120ms ease, transform 120ms ease;
-  z-index: 2;
+  z-index: 3;
 }
 
 .editor .tiptap .jottathing-image-wrapper:hover .jottathing-image-controls,
@@ -355,10 +337,11 @@
 }
 
 .editor .tiptap .jottathing-image-title {
-  color: var(--jottathing-text);
-  font-size: 0.76rem;
+  color: var(--jottathing-surface);
+  font-size: 0.68rem;
   font-weight: 650;
-  max-width: min(32ch, 42vw);
+  line-height: 1.25;
+  max-width: min(26ch, 32vw);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -366,26 +349,29 @@
 
 .editor .tiptap .jottathing-image-delete {
   align-items: center;
-  background: #fff1f2;
-  border: 1px solid #fecdd3;
-  border-radius: 6px;
-  color: #be123c;
+  background: transparent;
+  border: 0;
+  border-radius: 3px;
+  color: var(--jottathing-surface);
   cursor: pointer;
   display: inline-flex;
-  font: inherit;
-  font-size: 0.76rem;
-  font-weight: 700;
   justify-content: center;
-  min-height: 28px;
-  padding: 0 8px;
+  min-height: 20px;
+  min-width: 20px;
+  padding: 2px;
 }
 
 .editor .tiptap .jottathing-image-delete:hover,
 .editor .tiptap .jottathing-image-delete:focus-visible {
-  background: #ffe4e6;
-  border-color: #fb7185;
-  outline: 2px solid #fb7185;
+  background: rgba(255, 255, 255, 0.2);
+  outline: 2px solid var(--jottathing-surface);
   outline-offset: 1px;
+}
+
+.editor .tiptap .jottathing-image-delete svg {
+  display: block;
+  height: 14px;
+  width: 14px;
 }
 
 .jottathing-image-preview-overlay {
@@ -470,12 +456,6 @@
   color: var(--jottathing-muted);
   padding: 10px;
   font-size: 0.86rem;
-}
-
-.editor .tiptap .jottathing-image-wrapper.is-error .jottathing-image-controls {
-  bottom: 6px;
-  max-width: calc(100% - 12px);
-  top: auto;
 }
 
 @media (prefers-reduced-motion: reduce) {
