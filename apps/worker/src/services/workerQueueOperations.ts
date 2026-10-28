@@ -226,11 +226,26 @@ export function createWorkerQueueOperations(dependencies: WorkerQueueDependencie
       let refreshed: NotionObject;
 
       if (ensureProjectPage && ensureThreadToggle) {
-        let projectPage = await ensureProjectPage(freshStore, project, {
-          isForcedMerge: page.content.attrs?.jottathingConflictResolution === true,
-          selectedParentPageId,
-          syncState: false,
-        });
+        let projectPage: Awaited<ReturnType<typeof ensureProjectPage>>;
+        try {
+          projectPage = await ensureProjectPage(freshStore, project, {
+            isForcedMerge: page.content.attrs?.jottathingConflictResolution === true,
+            selectedParentPageId,
+            syncState: false,
+          });
+        } catch (error) {
+          console.error('[queue] project row preparation failed before page sync', {
+            failureTarget: knownArchivedWriteTarget(
+              error,
+              freshStore,
+              project.id,
+              page.id,
+              selectedParentPageId,
+            ),
+            error: safeNotionErrorMetadata(error),
+          });
+          throw error;
+        }
         if (page.status === 'archived' || ops.some((op) => op.type === 'page_archive')) {
           await archiveThreadToggle?.(freshStore, page);
           appendLog(freshStore, 'sync_thread_archived', page.title);
@@ -421,6 +436,27 @@ function archivedWriteTarget(
   if (!failedBlockId) return 'unknown';
   if (failedBlockId === projectPageId) return 'project_row';
   if (failedBlockId === threadToggleId) return 'thread_toggle';
+  return 'other_block';
+}
+
+/** Classifies a failed block write against known workspace mappings without logging IDs. */
+function knownArchivedWriteTarget(
+  error: unknown,
+  store: WorkerStore,
+  projectId: string,
+  pageId: string,
+  selectedParentPageId: string | undefined,
+): 'workspace_root' | 'selected_parent' | 'project_database' | 'project_row' | 'thread_toggle' | 'other_block' | 'unknown' {
+  const failedBlockId = notionBlockIdFromError(error);
+  if (!failedBlockId) return 'unknown';
+  if (failedBlockId === store.jottathingRootPage?.id) return 'workspace_root';
+  if (failedBlockId === selectedParentPageId) return 'selected_parent';
+  if (
+    failedBlockId === store.jottathingDatabase?.databaseId ||
+    failedBlockId === store.jottathingDatabase?.dataSourceId
+  ) return 'project_database';
+  if (failedBlockId === store.projectPages?.[projectId]?.notionPageId) return 'project_row';
+  if (failedBlockId === store.threadBlocks?.[threadKey(pageId)]?.blockId) return 'thread_toggle';
   return 'other_block';
 }
 
