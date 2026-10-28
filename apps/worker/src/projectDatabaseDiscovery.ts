@@ -30,6 +30,7 @@ import type {
   NotionRequester,
   WorkerStore,
 } from './types.js';
+import { isNotionPageIdValidationError } from './workerUtils.js';
 
 /** Parent selection passed to database discovery. */
 interface ParentSelection {
@@ -93,14 +94,22 @@ export function createProjectDatabaseDiscoveryHelpers({
       }
     }
 
-    // An explicit parent selection is authoritative. Do not keep querying a
-    // previously cached database under another parent; each installation can
-    // otherwise keep reading a different project/page inventory indefinitely.
+    // An explicit parent selection is authoritative while it resolves. Do not
+    // query a cached database under a different valid parent, because that can
+    // make the app read a different project inventory indefinitely.
     if (selectedParentPageId) {
       store.jottathingDatabase = undefined;
     }
 
-    if (!selectedParentPageId) {
+    const parentPage = selectedParentPageId
+      ? await ensureDatabaseParentPage(store, selectedParentPageId)
+      : undefined;
+
+    // A stale or invalid explicit page ID must not hide an already-created
+    // Jottathing database and cause another database (and project rows) to be
+    // created. Search globally only when no parent was selected or it could
+    // not be resolved; a valid selected parent remains authoritative.
+    if (!selectedParentPageId || !parentPage) {
       const foundAccessible = await findExistingDatabase(store, { ignoredDatabaseIds });
 
       if (foundAccessible) {
@@ -112,9 +121,6 @@ export function createProjectDatabaseDiscoveryHelpers({
       }
     }
 
-    const parentPage = selectedParentPageId
-      ? await ensureDatabaseParentPage(store, selectedParentPageId)
-      : undefined;
     const found = parentPage
       ? await findExistingDatabase(store, { parentPageId: parentPage.id, ignoredDatabaseIds })
       : undefined;
@@ -152,7 +158,11 @@ export function createProjectDatabaseDiscoveryHelpers({
         };
         return store.jottathingRootPage;
       } catch (error) {
-        if (!isNotionObjectNotFound(error) && !isBlockNotPageError(error)) {
+        if (
+          !isNotionObjectNotFound(error) &&
+          !isBlockNotPageError(error) &&
+          !isNotionPageIdValidationError(error)
+        ) {
           throw error;
         }
         appendLog(
