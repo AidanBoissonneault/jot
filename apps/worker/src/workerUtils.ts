@@ -131,6 +131,7 @@ export function notionApiErrorResponse(
   const notionError = error as {
     code?: unknown;
     endpoint?: unknown;
+    message?: unknown;
     method?: unknown;
     status?: unknown;
   };
@@ -143,6 +144,14 @@ export function notionApiErrorResponse(
   const method = typeof notionError.method === 'string' && /^[A-Z]{3,7}$/.test(notionError.method)
     ? notionError.method
     : 'unknown';
+  const detail = typeof notionError.message === 'string'
+    ? notionError.message
+        .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/gi, ':id')
+        .replace(/["'`][^"'`\r\n]{1,160}["'`]/g, '[redacted]')
+        .replace(/\b[A-Za-z0-9_-]{40,}\b/g, '[redacted]')
+        .replace(/\s+/g, ' ')
+        .slice(0, 240)
+    : undefined;
   console.error(JSON.stringify({
     event: 'notion_api_request_failed',
     workerRoute: context.req.path,
@@ -150,6 +159,7 @@ export function notionApiErrorResponse(
     endpoint,
     status: notionError.status,
     code: notionError.code,
+    detail,
   }));
   if (failure.retryAfter !== undefined) {
     context.header('Retry-After', String(Math.ceil(failure.retryAfter)));
