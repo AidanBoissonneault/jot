@@ -4,6 +4,7 @@ import type { Editor } from '@tiptap/core';
 import type { EditorView } from '@tiptap/pm/view';
 import {
   peekUploadableAudioDrop,
+  peekUploadableImageClipboard,
   peekUploadableImageDrop,
   readAudioDropSrc,
   readImageDropSrc,
@@ -46,6 +47,22 @@ export function useEditorDropHandling({
   handleUploadableImageDrop,
   saveEditorContent,
 }: EditorDropHandlingDependencies) {
+  /** Inserts image files pasted from the operating-system clipboard. */
+  function handlePaste(_view: EditorView, event: ClipboardEvent): boolean {
+    const clipboardData = event.clipboardData;
+    if (!clipboardData) return false;
+
+    // Let ProseMirror preserve a copied editor slice, including image identity and width.
+    if (clipboardData.getData('text/html').includes('data-pm-slice')) return false;
+
+    const uploadableImage = peekUploadableImageClipboard(clipboardData);
+    if (!uploadableImage) return false;
+
+    event.preventDefault();
+    void handleUploadableImageDrop(uploadableImage);
+    return true;
+  }
+
   /** Handles one drop event, returning whether Tiptap should handle it further. */
   function handleDrop(view: EditorView, event: DragEvent): boolean {
     const jottathingPayload = readJottathingDropPayload(event);
@@ -171,5 +188,5 @@ export function useEditorDropHandling({
     return true;
   }
 
-  return { handleDrop };
+  return { handleDrop, handlePaste };
 }

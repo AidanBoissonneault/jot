@@ -183,6 +183,7 @@ const editorStateVersion = ref(0);
 const isApplyingStoredContent = ref(false);
 const editorHandlers: JottathingEditorHandlers = {
   handleDrop: () => false,
+  handlePaste: () => false,
   showContextMenu: () => undefined,
 };
 
@@ -258,6 +259,8 @@ const {
   videoUrlDraft,
   audioUrlDraft,
   insertImage,
+  imageFileAccept,
+  handleImageFileInput,
   insertVideo,
   insertAudio,
   handleUploadableImageDrop,
@@ -273,13 +276,15 @@ const {
   saveEditorContentOptimistically,
 );
 
-editorHandlers.handleDrop = useEditorDropHandling({
+const editorDropHandling = useEditorDropHandling({
   captureInsertion,
   editor,
   handleUploadableAudioDrop,
   handleUploadableImageDrop,
   saveEditorContent: saveEditorContentOptimistically,
-}).handleDrop;
+});
+editorHandlers.handleDrop = editorDropHandling.handleDrop;
+editorHandlers.handlePaste = editorDropHandling.handlePaste;
 
 const {
   recordingPhase,
@@ -839,6 +844,8 @@ const editorToolbarContext: EditorToolbarContext = {
   runEditorBlockCommand,
   imageUrlDraft,
   insertImage,
+  imageFileAccept,
+  handleImageFileInput,
   videoUrlDraft,
   insertVideo,
   audioUrlDraft,

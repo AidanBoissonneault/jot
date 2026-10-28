@@ -17,6 +17,7 @@ export const JottathingImage = Image.extend({
     return {
       ...this.parent?.(),
       uploadState: { default: 'idle' },
+      uploadStartedAt: { default: null },
       mimeType: { default: '' },
       kind: { default: 'image' },
       notionFileUploadId: { default: '' },
@@ -330,6 +331,7 @@ const JottathingAudio = Audio.extend({
     return {
       ...this.parent?.(),
       uploadState: { default: 'idle' },
+      uploadStartedAt: { default: null },
       mimeType: { default: '' },
       kind: { default: 'audio' },
       notionFileUploadId: { default: '' },

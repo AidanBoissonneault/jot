@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
+  DIRECT_MEDIA_UPLOAD_LEASE_MS,
   hasPendingTransientMedia,
+  isDirectMediaUploadActive,
+  mergeUploadedMediaAttributes,
   markUnrecoverableTransientMedia,
   mergeSyncedMediaContent,
   sanitizeMediaForSync,
@@ -8,6 +11,13 @@ import {
 import { doc, paragraph, image, audio } from './helpers/docBuilders';
 
 describe('media content helpers', () => {
+  it('keeps active direct uploads out of the retry queue, then retries stale upload leases', () => {
+    const now = 1_000_000;
+    expect(isDirectMediaUploadActive({ uploadState: 'uploading', uploadStartedAt: now - 1000 }, now)).toBe(true);
+    expect(isDirectMediaUploadActive({ uploadState: 'uploading', uploadStartedAt: now - DIRECT_MEDIA_UPLOAD_LEASE_MS }, now)).toBe(false);
+    expect(isDirectMediaUploadActive({ uploadState: 'local', uploadStartedAt: now - 1000 }, now)).toBe(false);
+  });
+
   it('detects pending blob images and removes them from sync content', () => {
     const content = doc([
       image({ src: 'blob:chrome-extension://preview' }),
@@ -69,6 +79,52 @@ describe('media content helpers', () => {
     expect(sanitizeMediaForSync(merged).content?.[0].attrs).not.toHaveProperty('localSrc');
   });
 
+  it('merges background upload identities into newer page content by stable block id', () => {
+    const localSrc = 'data:image/png;base64,YQ==';
+    const current = doc([
+      paragraph('Newer text edit'),
+      image({ src: localSrc, jottathingBlockId: 'image-1', alt: 'Kept alt text' }),
+    ]);
+    const uploaded = doc([
+      paragraph('Older text snapshot'),
+      image({
+        src: localSrc,
+        jottathingBlockId: 'image-1',
+        notionFileUploadId: 'upload-1',
+        notionBlockId: 'notion-image-1',
+        uploadState: 'done',
+      }),
+    ]);
+
+    expect(mergeUploadedMediaAttributes(current, uploaded).content).toEqual([
+      paragraph('Newer text edit'),
+      image({
+        src: localSrc,
+        jottathingBlockId: 'image-1',
+        notionFileUploadId: 'upload-1',
+        notionBlockId: 'notion-image-1',
+        uploadState: 'done',
+        alt: 'Kept alt text',
+      }),
+    ]);
+  });
+
+  it('does not attach an upload that finished for a removed or replaced image', () => {
+    const current = doc([
+      image({ src: 'data:image/png;base64,Yg==', jottathingBlockId: 'image-1' }),
+    ]);
+    const uploaded = doc([
+      image({
+        src: 'data:image/png;base64,YQ==',
+        jottathingBlockId: 'image-1',
+        notionFileUploadId: 'upload-1',
+      }),
+    ]);
+
+    expect(mergeUploadedMediaAttributes(current, uploaded)).toEqual(current);
+    expect(mergeUploadedMediaAttributes(doc([]), uploaded)).toEqual(doc([]));
+  });
+
   it('marks existing unsynced blob images as unrecoverable', () => {
     const content = markUnrecoverableTransientMedia(
       doc([image({ src: 'blob:chrome-extension://stale' })]),
@@ -105,6 +161,17 @@ describe('media content helpers', () => {
       notionFileUploadId: 'upload-id',
       uploadState: 'done',
     });
+  });
+
+  it('does not send transient upload leases to the sync server', () => {
+    const content = doc([image({
+      src: 'data:image/png;base64,YQ==',
+      notionFileUploadId: 'upload-id',
+      uploadState: 'done',
+      uploadStartedAt: Date.now(),
+    })]);
+
+    expect(sanitizeMediaForSync(content).content?.[0].attrs).not.toHaveProperty('uploadStartedAt');
   });
 
   it('handles transient audio uploads like image uploads', () => {

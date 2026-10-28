@@ -50,6 +50,8 @@ export interface EditorToolbarContext {
   runEditorBlockCommand: (command: 'blockquote' | 'codeBlock') => void;
   imageUrlDraft: Ref<string>;
   insertImage: () => void;
+  imageFileAccept: string;
+  handleImageFileInput: (event: Event) => void;
   videoUrlDraft: Ref<string>;
   insertVideo: () => void;
   audioUrlDraft: Ref<string>;

@@ -1,6 +1,19 @@
 import type { DocumentContent } from '@/src/types/capture';
 
 const TRANSIENT_URL_PATTERN = /^(blob:|data:)/i;
+export const DIRECT_MEDIA_UPLOAD_LEASE_MS = 2 * 60 * 1000;
+
+/** Prevents the sync queue from uploading a file already being sent by the editor. */
+export function isDirectMediaUploadActive(
+  attrs: Record<string, unknown>,
+  now = Date.now(),
+): boolean {
+  const startedAt = Number(attrs.uploadStartedAt);
+  return attrs.uploadState === 'uploading' &&
+    Number.isFinite(startedAt) &&
+    startedAt <= now &&
+    now - startedAt < DIRECT_MEDIA_UPLOAD_LEASE_MS;
+}
 
 export function sanitizeMediaForSync(content: DocumentContent): DocumentContent {
   const sanitized = sanitizeNode(content);
@@ -33,6 +46,16 @@ export function mergeSyncedMediaContent(
   return mergeNode(localContent, syncedContent);
 }
 
+/** Copies upload identities onto matching current nodes without replacing newer edits. */
+export function mergeUploadedMediaAttributes(
+  currentContent: DocumentContent,
+  uploadedContent: DocumentContent,
+): DocumentContent {
+  const uploadedByBlockId = new Map<string, DocumentContent>();
+  collectMediaByBlockId(uploadedContent, uploadedByBlockId);
+  return addUploadedMediaAttributes(currentContent, uploadedByBlockId);
+}
+
 /** Keeps embedded local media backups while replacing content with a Notion snapshot. */
 export function preserveLocalMediaSources(
   localContent: DocumentContent,
@@ -52,6 +75,7 @@ function sanitizeNode(node: DocumentContent): DocumentContent | undefined {
     const attrs = node.attrs ?? {};
     const syncAttrs = { ...attrs };
     delete syncAttrs.localSrc;
+    delete syncAttrs.uploadStartedAt;
     const src = String(attrs.src ?? '');
     const hasUpload = Boolean(attrs.notionFileUploadId);
     const isTransient = isTransientUrl(src);
@@ -131,6 +155,55 @@ function collectLocalMedia(
     }
   }
   node.content?.forEach((child) => collectLocalMedia(child, mediaByIdentity));
+}
+
+function collectMediaByBlockId(
+  node: DocumentContent,
+  mediaByBlockId: Map<string, DocumentContent>,
+): void {
+  if (isUploadableMediaNode(node)) {
+    const id = nonEmptyString(node.attrs?.jottathingBlockId);
+    if (id) mediaByBlockId.set(id, node);
+  }
+  node.content?.forEach((child) => collectMediaByBlockId(child, mediaByBlockId));
+}
+
+function addUploadedMediaAttributes(
+  node: DocumentContent,
+  uploadedByBlockId: Map<string, DocumentContent>,
+): DocumentContent {
+  let nextNode = node;
+  if (isUploadableMediaNode(node)) {
+    const id = nonEmptyString(node.attrs?.jottathingBlockId);
+    const uploaded = id ? uploadedByBlockId.get(id) : undefined;
+    const currentAttrs = node.attrs ?? {};
+    const uploadedAttrs = uploaded?.attrs ?? {};
+    const sameFile = Boolean(
+      uploaded &&
+      uploaded.type === node.type &&
+      String(uploadedAttrs.src ?? '') === String(currentAttrs.src ?? '') &&
+      nonEmptyString(uploadedAttrs.notionFileUploadId),
+    );
+    if (sameFile) {
+      const { uploadStartedAt: _uploadStartedAt, ...attrs } = currentAttrs;
+      nextNode = {
+        ...node,
+        attrs: {
+          ...attrs,
+          notionFileUploadId: uploadedAttrs.notionFileUploadId,
+          ...(nonEmptyString(uploadedAttrs.notionBlockId)
+            ? { notionBlockId: uploadedAttrs.notionBlockId }
+            : {}),
+          uploadState: 'done',
+        },
+      };
+    }
+  }
+  if (!nextNode.content?.length) return nextNode;
+  return {
+    ...nextNode,
+    content: nextNode.content.map((child) => addUploadedMediaAttributes(child, uploadedByBlockId)),
+  };
 }
 
 function retainLocalMediaSources(

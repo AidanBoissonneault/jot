@@ -51,6 +51,8 @@ import type {
   SyncValidationResponse,
 } from '@/src/types/sync';
 import {
+  isDirectMediaUploadActive,
+  mergeUploadedMediaAttributes,
   markUnrecoverableTransientMedia,
   preserveLocalMediaSources,
   sanitizeMediaForSync,
@@ -1383,7 +1385,8 @@ function countPendingLocalMedia(node: DocumentContent): number {
   const isPendingMedia =
     (node.type === 'image' || node.type === 'audio') &&
     /^data:/i.test(String(attrs.src ?? '')) &&
-    !attrs.notionFileUploadId;
+    !attrs.notionFileUploadId &&
+    !isDirectMediaUploadActive(attrs);
   return (isPendingMedia ? 1 : 0) + (node.content ?? []).reduce(
     (count, child) => count + countPendingLocalMedia(child),
     0,
@@ -1439,6 +1442,9 @@ async function uploadLocalMediaInNode(
     /^data:/i.test(src) &&
     !attrs.notionFileUploadId
   ) {
+    if (isDirectMediaUploadActive(attrs)) {
+      return { content: node, changed: false, failed: false };
+    }
     const decoded = blobFromDataUrl(src);
     if (!decoded) return { content: node, changed: false, failed: true };
     try {
@@ -1448,11 +1454,12 @@ async function uploadLocalMediaInNode(
         String(attrs.filename || `${node.type}-${crypto.randomUUID()}`),
         syncConfig,
       );
+      const { uploadStartedAt: _uploadStartedAt, ...cleanAttrs } = attrs;
       return {
         content: {
           ...node,
           attrs: {
-            ...attrs,
+            ...cleanAttrs,
             notionFileUploadId: fileUploadId,
             uploadState: 'done',
           },
@@ -1494,11 +1501,17 @@ async function uploadPendingLocalMedia(syncConfig: SyncConfig): Promise<boolean>
     const result = await uploadLocalMediaInNode(page.content, syncConfig);
     hadFailures ||= result.failed;
     if (!result.changed) continue;
-    const project = projects.find((candidate) => candidate.id === page.projectId);
+    const latestStorage = await readStorage();
+    const latestPage = latestStorage.pages.find((candidate) => candidate.id === page.id);
+    const project = latestStorage.projects.find((candidate) => candidate.id === page.projectId) ??
+      projects.find((candidate) => candidate.id === page.projectId);
     if (!project) continue;
-    const updatedPage = markPageDirty({ ...page, content: result.content });
+    const updatedPage = markPageDirty({
+      ...(latestPage ?? page),
+      content: mergeUploadedMediaAttributes(latestPage?.content ?? page.content, result.content),
+    });
     await persistPage(updatedPage);
-    const queuedPage = await enqueuePageSync(updatedPage, project, page);
+    const queuedPage = await enqueuePageSync(updatedPage, project, latestPage ?? page);
     await persistPage(queuedPage);
   }
 
@@ -3057,31 +3070,33 @@ export const notionClient = {
     if (!page || !sourceProject || !destinationProject || !sourceWorkspace || !destinationWorkspace) {
       throw new Error('The page or destination project is no longer available.');
     }
-    if (sourceProject.id === destinationProject.id) {
+    const initialPage = page;
+    const initialSourceProject = sourceProject;
+    if (initialSourceProject.id === destinationProject.id) {
       const pagesInOrder = sortProjectPages(storage.pages.filter((entry) =>
-        entry.projectId === sourceProject.id && entry.status !== 'archived',
+        entry.projectId === initialSourceProject.id && entry.status !== 'archived',
       ));
-      if (targetPageId === page.id) return page;
-      const reorderedPages = pagesInOrder.filter((entry) => entry.id !== page.id);
+      if (targetPageId === initialPage.id) return initialPage;
+      const reorderedPages = pagesInOrder.filter((entry) => entry.id !== initialPage.id);
       const targetIndex = targetPageId
         ? reorderedPages.findIndex((entry) => entry.id === targetPageId)
         : -1;
       const insertionIndex = targetIndex < 0
         ? reorderedPages.length
         : targetIndex + (position === 'after' ? 1 : 0);
-      reorderedPages.splice(insertionIndex, 0, page);
+      reorderedPages.splice(insertionIndex, 0, initialPage);
       const orderByPageId = new Map<string, number>(
         reorderedPages.map((entry, index) => [entry.id, index] as const),
       );
       const hasChanged = reorderedPages.some((entry, index) =>
         entry.id !== pagesInOrder[index]?.id || entry.pageOrder !== index,
       );
-      if (!hasChanged) return page;
+      if (!hasChanged) return initialPage;
       const nextPages = storage.pages.map((entry) => orderByPageId.has(entry.id)
         ? { ...entry, pageOrder: orderByPageId.get(entry.id) }
         : entry);
       await writeStorage({ pages: nextPages });
-      return nextPages.find((entry) => entry.id === page.id)!;
+      return nextPages.find((entry) => entry.id === initialPage.id)!;
     }
 
     let syncConfig = storage.syncConfig;
@@ -4439,7 +4454,11 @@ export const notionClient = {
       syncWorkspaceId: isAlreadySynced
         ? workspace?.notionWorkspaceId ?? previousPage?.syncWorkspaceId
         : undefined,
-      content: normalizeJottathingBlockIds(page.content),
+      content: normalizeJottathingBlockIds(
+        previousPage
+          ? mergeUploadedMediaAttributes(page.content, previousPage.content)
+          : page.content,
+      ),
     });
 
     await writeStorage({

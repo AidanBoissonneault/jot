@@ -7,6 +7,8 @@ const {
   editor,
   imageUrlDraft,
   insertImage,
+  imageFileAccept,
+  handleImageFileInput,
   videoUrlDraft,
   insertVideo,
   audioUrlDraft,
@@ -16,6 +18,17 @@ const {
 
 <template>
   <div class="media-tool-panel">
+    <label class="media-file-picker">
+      <font-awesome-icon :icon="['fas', 'image']" fixed-width />
+      <span>Choose image file</span>
+      <input
+        type="file"
+        :accept="imageFileAccept"
+        aria-label="Choose image file"
+        :disabled="!editor"
+        @change="handleImageFileInput"
+      />
+    </label>
     <form @submit.prevent="insertImage">
       <input
         v-model="imageUrlDraft"

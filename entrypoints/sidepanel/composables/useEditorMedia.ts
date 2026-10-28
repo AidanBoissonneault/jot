@@ -3,8 +3,10 @@ import { ref, type Ref, type ShallowRef } from 'vue';
 import type { Editor } from '@tiptap/core';
 import { notionClient } from '@/src/services/notionClient';
 import type { useJottathingStore } from '@/src/stores/jottathing';
+import { createJottathingBlockId } from '@/src/extensions/jottathingBlockIds';
 import {
   AUDIO_UPLOAD_MAX_BYTES,
+  IMAGE_FILE_ACCEPT,
   IMAGE_UPLOAD_MAX_BYTES,
   isUploadableAudioFile,
   isUploadableImageFile,
@@ -77,17 +79,18 @@ export function useEditorMedia(
   function updateMediaNodeUploadState(
     editorInstance: Editor | undefined,
     nodeTypeName: string,
-    localSrc: string,
+    blockId: string,
     fileUploadId: string,
   ) {
     skipNextEditorUpdate();
     editorInstance?.state.doc.descendants((node, pos) => {
-      if (node.type.name === nodeTypeName && node.attrs.src === localSrc) {
+      if (node.type.name === nodeTypeName && node.attrs.jottathingBlockId === blockId) {
+        const { uploadStartedAt: _uploadStartedAt, ...attrs } = node.attrs;
         editorInstance
           .chain()
           .command(({ tr }) => {
             tr.setNodeMarkup(pos, undefined, {
-              ...node.attrs,
+              ...attrs,
               ...(fileUploadId ? { notionFileUploadId: fileUploadId } : {}),
               uploadState: fileUploadId ? 'done' : 'local',
             });
@@ -98,14 +101,24 @@ export function useEditorMedia(
     });
   }
 
-  async function handleUploadableImageDrop(info: { kind: 'file'; file: File }): Promise<void> {
-    const { file } = info;
+  async function handleUploadableImageFile(file: File): Promise<void> {
     if (!isUploadableImageFile(file)) {
-      uiMessage.value = `Images must be ${Math.floor(IMAGE_UPLOAD_MAX_BYTES / 1024 / 1024)} MB or smaller.`;
+      uiMessage.value = imageValidationMessage(file);
       return;
     }
-    const localSrc = await fileToDataUrl(file);
+    if (!editor.value) return;
+
+    let localSrc: string;
+    try {
+      localSrc = await fileToDataUrl(file);
+    } catch {
+      uiMessage.value = 'Unable to read this image file.';
+      return;
+    }
+    const blockId = createJottathingBlockId();
+    const shouldUploadNow = store.syncConfig.connected && store.isOnline;
     skipNextEditorUpdate();
+    uiMessage.value = '';
     // The upload-state attributes are defined by the Jottathing image extension.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     editor.value
@@ -113,14 +126,30 @@ export function useEditorMedia(
       .focus()
       .setImage({
         src: localSrc,
-        uploadState: store.syncConfig.connected && store.isOnline ? 'uploading' : 'local',
-        filename: file.name,
+        uploadState: shouldUploadNow ? 'uploading' : 'local',
+        ...(shouldUploadNow ? { uploadStartedAt: Date.now() } : {}),
+        mimeType: file.type,
+        filename: file.name || filenameForImageType(file.type),
+        jottathingBlockId: blockId,
       } as any)
       .run();
     await saveEditorContent();
     const fileUploadId = await uploadMediaFile(file, 'image');
-    updateMediaNodeUploadState(editor.value, 'image', localSrc, fileUploadId);
-    if (fileUploadId) void saveEditorContent();
+    updateMediaNodeUploadState(editor.value, 'image', blockId, fileUploadId);
+    await saveEditorContent();
+  }
+
+  async function handleUploadableImageDrop(info: { kind: 'file'; file: File }): Promise<void> {
+    await handleUploadableImageFile(info.file);
+  }
+
+  async function handleImageFileInput(event: Event): Promise<void> {
+    const input = event.currentTarget as HTMLInputElement | null;
+    if (!input || typeof input !== 'object' || !('files' in input) || !('value' in input)) return;
+    const file = input.files?.[0];
+    // Let the same image be selected again after an upload or validation failure.
+    input.value = '';
+    if (file) await handleUploadableImageFile(file);
   }
 
   async function handleUploadableAudioDrop(info: { kind: 'file'; file: File }): Promise<void> {
@@ -137,6 +166,8 @@ export function useEditorMedia(
     const editorInstance = editor.value;
     if (editorInstance) {
       const insertPos = editorInstance.state.selection.from;
+      const blockId = createJottathingBlockId();
+      const shouldUploadNow = store.syncConfig.connected && store.isOnline;
       // The upload-state attributes are defined by the Jottathing audio extension.
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       editorInstance
@@ -144,16 +175,19 @@ export function useEditorMedia(
         .focus(insertPos || 'end')
         .setAudio({
           src: localSrc,
-          uploadState: store.syncConfig.connected && store.isOnline ? 'uploading' : 'local',
+          uploadState: shouldUploadNow ? 'uploading' : 'local',
+          ...(shouldUploadNow ? { uploadStartedAt: Date.now() } : {}),
           mimeType: file.type,
-          filename: file.name,
+          filename: file.name || 'audio-upload',
+          jottathingBlockId: blockId,
         } as any)
         .run();
+      await saveEditorContent();
+      const fileUploadId = await uploadMediaFile(file, 'audio');
+      updateMediaNodeUploadState(editorInstance, 'audio', blockId, fileUploadId);
+      await saveEditorContent();
+      return;
     }
-    await saveEditorContent();
-    const fileUploadId = await uploadMediaFile(file, 'audio');
-    updateMediaNodeUploadState(editor.value, 'audio', localSrc, fileUploadId);
-    if (fileUploadId) void saveEditorContent();
   }
 
   return {
@@ -163,10 +197,32 @@ export function useEditorMedia(
     insertImage,
     insertVideo,
     insertAudio,
+    handleUploadableImageFile,
     handleUploadableImageDrop,
+    handleImageFileInput,
     handleUploadableAudioDrop,
     handleUploadableAudioFile,
+    imageFileAccept: IMAGE_FILE_ACCEPT,
   };
+}
+
+function imageValidationMessage(file: File): string {
+  if (file.size > IMAGE_UPLOAD_MAX_BYTES) {
+    return `Images must be 20 MB or smaller.`;
+  }
+  if (file.size === 0) return 'The selected image file is empty.';
+  return 'Use a JPEG, PNG, GIF, WebP, or AVIF image.';
+}
+
+function filenameForImageType(mimeType: string): string {
+  const extensions: Record<string, string> = {
+    'image/jpeg': 'jpg',
+    'image/png': 'png',
+    'image/gif': 'gif',
+    'image/webp': 'webp',
+    'image/avif': 'avif',
+  };
+  return `pasted-image.${extensions[mimeType.toLowerCase()] ?? 'img'}`;
 }
 
 function isHttpAudioUrl(value: string) {

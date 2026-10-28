@@ -14,6 +14,7 @@ import {
   MAX_CONTROL_JSON_REQUEST_BYTES,
   findMappedNotionBlockId,
   findNotionBlockIdByFileUploadId,
+  hasValidImageSignature,
   isBase64,
   isSupportedMediaMimeType,
   mediaUrlFromNotionBlock,
@@ -63,12 +64,16 @@ export function registerMediaRoutes(app: Hono<{ Bindings: WorkerEnv }>): void {
     }
     if (!isBase64(dataBase64)) return c.json({ error: 'Invalid upload data.' }, 400);
   
-    const store = await requireConnectedStore(c);
     const buffer = Buffer.from(dataBase64, 'base64');
   
     if (buffer.byteLength > MAX_MEDIA_UPLOAD_BYTES) {
       return c.json({ error: 'Media files must be 20 MB or smaller.' }, 413);
     }
+    if (mimeType.trim().toLowerCase().startsWith('image/') && !hasValidImageSignature(buffer, mimeType)) {
+      return c.json({ error: 'Image data does not match its file type.' }, 400);
+    }
+
+    const store = await requireConnectedStore(c);
   
     const fileUploadId = await uploadFileToNotion(
       store,

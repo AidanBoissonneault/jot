@@ -248,6 +248,28 @@ export function isSupportedMediaMimeType(mimeType: string): boolean {
   return SUPPORTED_MEDIA_MIME_TYPES.has(mimeType.trim().toLowerCase());
 }
 
+/** Confirms image bytes carry the file signature declared by the upload request. */
+export function hasValidImageSignature(data: Uint8Array, mimeType: string): boolean {
+  const mime = mimeType.trim().toLowerCase();
+  const ascii = (start: number, end: number) =>
+    String.fromCharCode(...data.subarray(start, end));
+  const startsWith = (...bytes: number[]) =>
+    bytes.every((byte, index) => data[index] === byte);
+
+  if (mime === 'image/jpeg') return data.length >= 3 && startsWith(0xff, 0xd8, 0xff);
+  if (mime === 'image/png') {
+    return data.length >= 8 && startsWith(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a);
+  }
+  if (mime === 'image/gif') return data.length >= 6 && ['GIF87a', 'GIF89a'].includes(ascii(0, 6));
+  if (mime === 'image/webp') {
+    return data.length >= 12 && ascii(0, 4) === 'RIFF' && ascii(8, 12) === 'WEBP';
+  }
+  if (mime === 'image/avif') {
+    return data.length >= 12 && ascii(4, 8) === 'ftyp' && ['avif', 'avis'].includes(ascii(8, 12));
+  }
+  return false;
+}
+
 /** Produces a safe upload filename with an extension. @param filename - Requested filename. @param mimeType - MIME type. @returns Safe filename. */
 export function sanitizeMediaFilename(filename: string | undefined, mimeType: string): string {
   const safeName = String(filename ?? '').trim().replace(/[\\/:"*?<>|]+/g, '-').replace(/\s+/g, ' ').slice(0, 180);

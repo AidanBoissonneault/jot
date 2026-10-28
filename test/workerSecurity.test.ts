@@ -1067,4 +1067,23 @@ describe('Notion webhook verification', () => {
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({ error: 'This image or audio format is not supported.' });
   });
+
+  it('rejects image bytes that do not match their declared MIME type', async () => {
+    const sessionToken = 'media-signature-session-token-test';
+    const accountId = 'notion:media-signature-test';
+    stubAuthenticatedJottathingSession(sessionToken, accountId);
+    const response = await workerApp.request('/media/upload', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Origin: 'http://localhost:3000',
+        Cookie: `jottathing_session=${sessionToken}`,
+        'X-Jottathing-Account': accountId,
+      },
+      body: JSON.stringify({ dataBase64: 'bm90IGFuIGltYWdl', mimeType: 'image/png' }),
+    }, env);
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: 'Image data does not match its file type.' });
+  });
 });

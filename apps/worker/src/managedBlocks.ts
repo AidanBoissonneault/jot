@@ -790,11 +790,9 @@ function repairMappingsByContent(
     if (match) {
       mapping.notionBlockId = match.id;
       usedRemoteIds.add(match.id);
-    } else if (!current) {
+    } else {
       // A remotely deleted block can be safely recreated by the normal reconcile pass.
       mapping.notionBlockId = undefined;
-    } else {
-      usedRemoteIds.add(current.id);
     }
   }
 

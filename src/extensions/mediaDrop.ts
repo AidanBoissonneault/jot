@@ -1,14 +1,25 @@
 export const IMAGE_UPLOAD_MAX_BYTES = 20 * 1024 * 1024;
 export const AUDIO_UPLOAD_MAX_BYTES = 20 * 1024 * 1024;
+export const SUPPORTED_IMAGE_MIME_TYPES = [
+  'image/jpeg',
+  'image/png',
+  'image/gif',
+  'image/webp',
+  'image/avif',
+] as const;
+export const IMAGE_FILE_ACCEPT = SUPPORTED_IMAGE_MIME_TYPES.join(',');
 
 export type UploadableImageDrop = { kind: 'file'; file: File };
 export type UploadableAudioDrop = { kind: 'file'; file: File };
 
 type DropData = {
   files?: FileList | File[] | null;
+  items?: ArrayLike<{ kind?: string; type?: string; getAsFile?: () => File | null }> | null;
   types?: readonly string[] | null;
   getData(type: string): string;
 };
+
+type ClipboardImageData = Pick<DropData, 'files' | 'items'>;
 
 const IMAGE_URL_PATTERN = /\.(png|jpe?g|gif|webp|svg|avif)(\?[^#]*)?(#.*)?$/i;
 const AUDIO_URL_PATTERN = /\.(mp3|mpeg|m4a|aac|wav|ogg|oga|opus|webm)(\?[^#]*)?(#.*)?$/i;
@@ -86,10 +97,16 @@ export function readAudioDropSrc(dataTransfer: DropData | null | undefined): str
 export function peekUploadableImageDrop(
   dataTransfer: DropData | null | undefined,
 ): UploadableImageDrop | null {
-  const file = Array.from(dataTransfer?.files ?? []).find((item) =>
-    item.type.startsWith('image/'),
-  );
+  const file = imageFileFromTransfer(dataTransfer);
 
+  return file ? { kind: 'file', file } : null;
+}
+
+/** Reads image files from clipboard files or file-kind clipboard items. */
+export function peekUploadableImageClipboard(
+  clipboardData: ClipboardImageData | null | undefined,
+): UploadableImageDrop | null {
+  const file = imageFileFromTransfer(clipboardData);
   return file ? { kind: 'file', file } : null;
 }
 
@@ -104,7 +121,31 @@ export function peekUploadableAudioDrop(
 }
 
 export function isUploadableImageFile(file: File): boolean {
-  return file.type.startsWith('image/') && file.size <= IMAGE_UPLOAD_MAX_BYTES;
+  return isSupportedImageMimeType(file.type) && file.size > 0 && file.size <= IMAGE_UPLOAD_MAX_BYTES;
+}
+
+export function isSupportedImageMimeType(mimeType: string): boolean {
+  return SUPPORTED_IMAGE_MIME_TYPES.includes(
+    mimeType.trim().toLowerCase() as (typeof SUPPORTED_IMAGE_MIME_TYPES)[number],
+  );
+}
+
+function imageFileFromTransfer(data: ClipboardImageData | null | undefined): File | null {
+  const file = Array.from(data?.files ?? []).find((candidate) => candidate.type.startsWith('image/'));
+  if (file) return file;
+
+  for (const item of Array.from(data?.items ?? [])) {
+    if (item.kind !== 'file' || !item.type?.toLowerCase().startsWith('image/')) continue;
+    const itemFile = item.getAsFile?.();
+    if (!itemFile) continue;
+    if (itemFile.type) return itemFile;
+    return new File([itemFile], itemFile.name || 'pasted-image', {
+      type: item.type.toLowerCase(),
+      lastModified: itemFile.lastModified,
+    });
+  }
+
+  return null;
 }
 
 export function isUploadableAudioFile(file: File): boolean {

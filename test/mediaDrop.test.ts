@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
   AUDIO_UPLOAD_MAX_BYTES,
+  IMAGE_FILE_ACCEPT,
   IMAGE_UPLOAD_MAX_BYTES,
   isUploadableAudioFile,
   isUploadableImageFile,
   peekUploadableAudioDrop,
   peekUploadableImageDrop,
+  peekUploadableImageClipboard,
   readAudioDropSrc,
   readImageDropSrc,
   readYoutubeDropSrc,
@@ -221,6 +223,40 @@ describe('media drop helpers', () => {
       file: image,
     });
     expect(isUploadableImageFile(image)).toBe(true);
+    expect(isUploadableImageFile(oversized)).toBe(false);
+  });
+
+  it('reads pasted image files from clipboard items even when the file has no MIME type', () => {
+    const clipboardFile = new File(['pixels'], '', { type: '' });
+    const clipboard = {
+      files: [],
+      items: [{ kind: 'file', type: 'image/png', getAsFile: () => clipboardFile }],
+    };
+
+    expect(peekUploadableImageClipboard(clipboard)).toMatchObject({
+      kind: 'file',
+      file: { type: 'image/png', name: 'pasted-image' },
+    });
+    expect(IMAGE_FILE_ACCEPT).toBe('image/jpeg,image/png,image/gif,image/webp,image/avif');
+  });
+
+  it('uses image files listed directly on clipboard data before item fallback', () => {
+    const file = new File(['pixels'], 'clipboard.webp', { type: 'image/webp' });
+    expect(peekUploadableImageClipboard({ files: [file], items: [] })).toEqual({
+      kind: 'file',
+      file,
+    });
+  });
+
+  it('rejects empty, oversized, and unsupported image formats consistently', () => {
+    const empty = new File([], 'empty.png', { type: 'image/png' });
+    const svg = new File(['<svg/>'], 'vector.svg', { type: 'image/svg+xml' });
+    const oversized = new File([new Uint8Array(IMAGE_UPLOAD_MAX_BYTES + 1)], 'huge.png', {
+      type: 'image/png',
+    });
+
+    expect(isUploadableImageFile(empty)).toBe(false);
+    expect(isUploadableImageFile(svg)).toBe(false);
     expect(isUploadableImageFile(oversized)).toBe(false);
   });
 

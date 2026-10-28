@@ -25,6 +25,7 @@ import type { SyncContentConflict } from '@/src/types/sync';
 /** Stable callbacks connected after their editor-dependent composables initialize. */
 export interface JottathingEditorHandlers {
   handleDrop: (view: EditorView, event: DragEvent) => boolean;
+  handlePaste: (view: EditorView, event: ClipboardEvent) => boolean;
   showContextMenu: (view: EditorView, event: MouseEvent) => void;
 }
 
@@ -139,6 +140,7 @@ export function useJottathingEditor({
         return true;
       },
       handleDrop: (view, event) => handlers.handleDrop(view, event),
+      handlePaste: (view, event) => handlers.handlePaste(view, event),
     },
     onUpdate: () => {
       editorStateVersion.value += 1;
