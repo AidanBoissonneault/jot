@@ -268,7 +268,13 @@ export function createWorkerQueueOperations(dependencies: WorkerQueueDependencie
             page.syncBaselineContent,
           );
         } catch (error) {
-          if (!isArchivedBlockEditError(error) || project.status === 'archived') throw error;
+          const isArchivedWrite = isArchivedBlockEditError(error);
+          console.log('[queue] block operation write failed', {
+            classifiedArchivedBlock: isArchivedWrite,
+            projectArchived: project.status === 'archived',
+            error: safeNotionErrorMetadata(error),
+          });
+          if (!isArchivedWrite || project.status === 'archived') throw error;
           const mappedToggleId = freshStore.threadBlocks?.[threadKey(page.id)]?.blockId;
           const failedBlockId = notionBlockIdFromError(error);
           const excludedBlockIds = failedBlockId && failedBlockId === mappedToggleId
