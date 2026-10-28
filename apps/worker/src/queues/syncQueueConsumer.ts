@@ -18,7 +18,7 @@ import type {
   WorkerEnv,
 } from '../types.js';
 import { isUnmappedNotionContentError } from '../managedBlocks.js';
-import { safeErrorMetadata } from '../workerUtils.js';
+import { safeErrorMetadata, safeNotionErrorMetadata } from '../workerUtils.js';
 import { notionApiHttpFailure } from '../notionRequest.js';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -239,7 +239,13 @@ export async function processSyncQueue(
       console.log('[queue] done', job.type);
       message.ack();
     } catch (error) {
-      console.error('[queue] failed', job?.type ?? 'payload', safeErrorMetadata(error));
+      console.error(
+        '[queue] failed',
+        job?.type ?? 'payload',
+        error && typeof error === 'object' && 'isNotionApiError' in error
+          ? safeNotionErrorMetadata(error)
+          : safeErrorMetadata(error),
+      );
 
       // A remote mutation already succeeded; retry only the content-free
       // reference cleanup, never replay the Notion write for this row.

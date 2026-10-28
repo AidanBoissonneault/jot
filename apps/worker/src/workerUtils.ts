@@ -121,6 +121,32 @@ export function safeErrorMetadata(error: unknown): Record<string, string | numbe
   return result;
 }
 
+/** Adds sanitized Notion request details to transient queue-failure diagnostics. */
+export function safeNotionErrorMetadata(error: unknown): Record<string, string | number> {
+  const metadata = safeErrorMetadata(error);
+  if (!error || typeof error !== 'object') return metadata;
+
+  const notionError = error as { endpoint?: unknown; message?: unknown; method?: unknown };
+  if (typeof notionError.endpoint === 'string') {
+    metadata.endpoint = notionError.endpoint
+      .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/gi, ':id')
+      .replace(/[0-9a-f]{32}/gi, ':id')
+      .slice(0, 160);
+  }
+  if (typeof notionError.method === 'string' && /^[A-Z]{3,7}$/.test(notionError.method)) {
+    metadata.method = notionError.method;
+  }
+  if (typeof notionError.message === 'string') {
+    metadata.detail = notionError.message
+      .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/gi, ':id')
+      .replace(/["'`][^"'`\r\n]{1,160}["'`]/g, '[redacted]')
+      .replace(/\b[A-Za-z0-9_-]{40,}\b/g, '[redacted]')
+      .replace(/\s+/g, ' ')
+      .slice(0, 240);
+  }
+  return metadata;
+}
+
 /** Builds a safe client response for a typed Notion API failure. */
 export function notionApiErrorResponse(
   context: Context<{ Bindings: WorkerEnv }>,
