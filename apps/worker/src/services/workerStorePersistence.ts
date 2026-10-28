@@ -51,7 +51,7 @@ export function createWorkerStorePersistence(supabase: WorkerSupabaseClient) {
         { installation_id: installationId },
         { onConflict: 'installation_id', ignoreDuplicates: true },
       );
-    if (error) throw new Error('Unable to ensure Jottathing synchronization state.');
+    if (error) throw persistenceError('Unable to ensure Jottathing synchronization state.', error);
   }
 
   /** Copies JSON-backed dictionaries into prototype-free maps before key lookups or writes. */
@@ -75,9 +75,31 @@ export function createWorkerStorePersistence(supabase: WorkerSupabaseClient) {
             if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return entry;
             const mapping = entry as Record<string, unknown>;
             const blockId = mapping.jottathingBlockId ?? mapping.inkwellBlockId;
-            if (typeof blockId !== 'string' || !blockId) return mapping;
             const { inkwellBlockId: _legacyId, ...remaining } = mapping;
-            return { ...remaining, jottathingBlockId: blockId };
+            return {
+              ...remaining,
+              ...(typeof blockId === 'string' && blockId ? { jottathingBlockId: blockId } : {}),
+              lastSyncedHash: typeof mapping.lastSyncedHash === 'string' ? mapping.lastSyncedHash : '',
+              newState: mapping.newState ?? null,
+              oldState: mapping.oldState ?? null,
+            };
+          })
+        : entries,
+    ])) as WorkerStore['blockMappings'];
+  }
+
+  /** Keeps block identities remote while leaving content baselines in local storage. */
+  function blockMappingsWithoutLocalBaselines(value: unknown): WorkerStore['blockMappings'] {
+    const mappings = safeRecord<unknown>(value);
+    return Object.fromEntries(Object.entries(mappings).map(([pageId, entries]) => [
+      pageId,
+      Array.isArray(entries)
+        ? entries.map((entry) => {
+            if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return entry;
+            const mapping = entry as Record<string, unknown>;
+            if (mapping.localBaselineAcknowledged !== true) return mapping;
+            const { newState: _newState, oldState: _oldState, lastSyncedHash: _hash, ...identity } = mapping;
+            return identity;
           })
         : entries,
     ])) as WorkerStore['blockMappings'];
@@ -145,7 +167,7 @@ export function createWorkerStorePersistence(supabase: WorkerSupabaseClient) {
         jottathing_database_title:
           store.jottathingDatabase?.title ?? store.jottathingRootPage?.title ?? null,
         note_pages_json: safeRecord(store.notePages),
-        block_mappings_json: safeRecord(store.blockMappings),
+        block_mappings_json: blockMappingsWithoutLocalBaselines(store.blockMappings),
         parent_pages_json: safeRecord(store.parentPages),
         project_pages_json: safeRecord(store.projectPages),
         project_blocks_json: safeRecord(store.projectBlocks),
@@ -153,7 +175,23 @@ export function createWorkerStorePersistence(supabase: WorkerSupabaseClient) {
         updated_at: new Date().toISOString(),
       })
       .eq('installation_id', installationId);
-    if (error) throw new Error('Unable to save Jottathing synchronization state.');
+    if (error) throw persistenceError('Unable to save Jottathing synchronization state.', error);
+  }
+
+  /** Preserves safe PostgREST error metadata for the request error boundary. */
+  function persistenceError(
+    message: string,
+    cause: { code?: unknown; message?: unknown; status?: unknown },
+  ): Error {
+    const isTimeout = typeof cause.message === 'string' && /timeout|timed out/i.test(cause.message);
+    return Object.assign(new Error(message, { cause }), {
+      ...(typeof cause.code === 'string'
+        ? { code: cause.code }
+        : isTimeout
+          ? { code: 'sync_storage_timeout' }
+          : {}),
+      ...(typeof cause.status === 'number' ? { status: cause.status } : {}),
+    });
   }
 
   return {

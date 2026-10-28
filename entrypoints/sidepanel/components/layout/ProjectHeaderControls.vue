@@ -2,7 +2,7 @@
 /** Owns project rename, project switching, and category editing controls. */
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import type { TopBarContext } from './topBarContext';
-import ProjectMenuList from '../lists/ProjectMenuList.vue';
+import WorkspaceMenuList from '../lists/WorkspaceMenuList.vue';
 import CategoryList from '../lists/CategoryList.vue';
 import CategoryColorPicker from '../lists/CategoryColorPicker.vue';
 
@@ -29,9 +29,13 @@ const {
   currentCategoryColor,
   chooseCategoryColor,
   colorForCategory,
+  flushEditorContent,
   createProject,
+  createPage,
   selectProject,
-  archiveProject,
+  selectPage: selectPageAction,
+  createWorkspace: createWorkspaceAction,
+  selectWorkspace: selectWorkspaceAction,
 } = props.context;
 
 const controlsRef = ref<HTMLElement | null>(null);
@@ -42,6 +46,89 @@ const categoryDropdownStyle = ref<Record<string, string>>({
   top: '0px',
   visibility: 'hidden',
 });
+
+async function createWorkspace() {
+  const name = window.prompt('Workspace name', 'New workspace');
+  if (name === null) return;
+  await createWorkspaceAction(name);
+  toggleTitleMenu('project');
+}
+
+async function moveProjectToWorkspace(projectId: string, workspaceId: string) {
+  if (projectId === store.currentProjectId) await flushEditorContent();
+  await store.moveProjectToWorkspace(projectId, workspaceId);
+  toggleTitleMenu('project');
+}
+
+async function movePageToProject(
+  pageId: string,
+  projectId: string,
+  targetPageId?: string,
+  position: 'before' | 'after' = 'after',
+) {
+  if (store.currentPage?.id === pageId) await flushEditorContent();
+  await store.movePageToProject(pageId, projectId, targetPageId, position);
+}
+
+async function selectProjectFromTree(workspaceId: string, projectId: string) {
+  if (workspaceId !== store.currentWorkspaceId) await selectWorkspaceAction(workspaceId);
+  if (projectId !== store.currentProjectId) await selectProject(projectId);
+  if (activeTitleMenu.value === 'project') toggleTitleMenu('project');
+}
+
+async function selectPageFromTree(workspaceId: string, projectId: string, pageId: string) {
+  if (workspaceId !== store.currentWorkspaceId) await selectWorkspaceAction(workspaceId);
+  if (projectId !== store.currentProjectId) await selectProject(projectId);
+  if (pageId !== store.currentPage?.id) await selectPageAction(pageId);
+  if (activeTitleMenu.value === 'project') toggleTitleMenu('project');
+}
+
+function loadWorkspacePages(projectId: string) {
+  void store.loadWorkspaceMenuPages(projectId);
+}
+
+async function createProjectInWorkspace(workspaceId: string) {
+  if (workspaceId !== store.currentWorkspaceId) await selectWorkspaceAction(workspaceId);
+  await createProject();
+}
+
+async function renameWorkspace(workspaceId: string, name: string) {
+  try {
+    await store.renameLocalWorkspace(workspaceId, name);
+  } catch {
+    // The store exposes the save error in the shared status area.
+  }
+}
+
+async function createPageInProject(workspaceId: string, projectId: string) {
+  if (workspaceId !== store.currentWorkspaceId) await selectWorkspaceAction(workspaceId);
+  if (projectId !== store.currentProjectId) await selectProject(projectId);
+  await createPage();
+}
+
+async function deleteWorkspace(workspaceId: string) {
+  const workspace = store.workspaces.find((entry) => entry.id === workspaceId);
+  if (!workspace || workspace.kind !== 'local') return;
+  if (!window.confirm(`Delete "${workspace.name}" and all of its projects and pages? This cannot be undone.`)) return;
+  await flushEditorContent();
+  await store.deleteLocalWorkspace(workspaceId);
+}
+
+async function deleteProject(projectId: string) {
+  const project = store.workspaceMenuProjects.find((entry) => entry.id === projectId);
+  if (!project) return;
+  if (!window.confirm(`Delete "${project.name}"? It will be archived in its workspace.`)) return;
+  if (project.id === store.currentProjectId) await flushEditorContent();
+  await store.archiveProjectById(projectId);
+}
+
+async function deletePage(pageId: string) {
+  const page = Object.values(store.workspaceMenuPagesByProject).flat().find((entry) => entry.id === pageId);
+  if (!page) return;
+  if (!window.confirm(`Delete "${page.title}"?`)) return;
+  if (store.currentPage?.id === pageId) await flushEditorContent();
+  await store.archivePageById(pageId);
+}
 
 function positionCategoryDropdown() {
   const button = categoryButtonRef.value;
@@ -71,6 +158,7 @@ function updateCategoryDropdownPosition() {
 }
 
 watch(activeTitleMenu, (menu) => {
+  if (menu === 'project') void store.refreshWorkspaceMenuTree();
   if (menu !== 'category') {
     categoryDropdownStyle.value.visibility = 'hidden';
     return;
@@ -104,7 +192,11 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div ref="controlsRef" class="project-header-control">
+  <div
+    ref="controlsRef"
+    class="project-header-control"
+    :class="{ 'has-sync-dot': Boolean(store.currentProject && store.syncConfig.authenticated) }"
+  >
     <input
       v-if="isProjectNameEditing"
       ref="projectNameInputRef"
@@ -127,28 +219,41 @@ onBeforeUnmount(() => {
     >
       {{ store.currentProject ? (projectNameDraft || contextLabel) : contextLabel }}
     </button>
-
     <button
       ref="categoryButtonRef"
       type="button"
       class="category-pill"
-      :style="currentCategoryStyle"
+      :class="{ empty: !projectCategoryDraft.trim() }"
+      :style="projectCategoryDraft.trim() ? currentCategoryStyle : undefined"
       :disabled="store.isLoading || !store.currentProject"
-      title="Edit project category"
-      aria-label="Edit project category"
+      :title="projectCategoryDraft.trim() ? 'Edit project category' : 'Add project category'"
+      :aria-label="projectCategoryDraft.trim() ? 'Edit project category' : 'Add project category'"
       :aria-expanded="activeTitleMenu === 'category'"
       @click="toggleTitleMenu('category')"
     >
-      {{ projectCategoryDraft || 'Category' }}
+      {{ projectCategoryDraft.trim() || '+ Category' }}
     </button>
+
+    <span
+      v-if="store.currentProject && store.syncConfig.authenticated"
+      class="project-title-sync-dot"
+      role="img"
+      :class="[
+        store.currentWorkspace?.kind,
+        store.currentProject.syncState,
+        { authenticated: true },
+      ]"
+      :title="store.currentProject.syncMessage || (store.currentWorkspace?.kind === 'notion' ? 'Project synced with Notion' : 'Local only')"
+      :aria-label="store.currentProject.syncMessage || (store.currentWorkspace?.kind === 'notion' ? 'Project synced with Notion' : 'Local only')"
+    />
 
     <button
       type="button"
       class="title-menu-trigger project-menu-trigger"
       :class="{ active: activeTitleMenu === 'project' }"
-      :disabled="store.isLoading || store.projects.length === 0"
-      title="Switch project"
-      aria-label="Switch project"
+      :disabled="store.isLoading || store.workspaces.length === 0"
+      title="Switch workspace or project"
+      aria-label="Switch workspace or project"
       :aria-expanded="activeTitleMenu === 'project'"
       @click="toggleTitleMenu('project')"
     >
@@ -157,26 +262,30 @@ onBeforeUnmount(() => {
 
     <Transition name="popover">
       <div v-if="activeTitleMenu === 'project'" class="title-dropdown project-dropdown">
-        <ProjectMenuList
-          :projects="store.projects"
-          :selected-project-id="store.currentProjectId"
-          :color-for-category="colorForCategory"
-          @select="selectProject"
-        />
-        <div class="title-dropdown-actions">
-          <button type="button" @click="createProject">
-            <font-awesome-icon :icon="['fas', 'folder-plus']" fixed-width />
-            New project
-          </button>
-          <button
-            type="button"
-            class="danger-button"
-            :disabled="!store.currentProject"
-            @click="archiveProject"
-          >
-            <font-awesome-icon :icon="['fas', 'trash-can']" fixed-width />
-            Delete project
-          </button>
+        <div class="workspace-dropdown-section">
+          <WorkspaceMenuList
+            :workspaces="store.workspaces"
+            :projects="store.workspaceMenuProjects"
+            :pages-by-project="store.workspaceMenuPagesByProject"
+            :loading-project-ids="store.workspaceMenuPageLoads"
+            :color-for-category="colorForCategory"
+            :selected-workspace-id="store.currentWorkspaceId"
+            :selected-project-id="store.currentProjectId"
+            :selected-page-id="store.currentPage?.id"
+            :authenticated="Boolean(store.syncConfig.authenticated)"
+            @select-project="selectProjectFromTree"
+            @select-page="selectPageFromTree"
+            @load-pages="loadWorkspacePages"
+            @create-workspace="createWorkspace"
+            @rename-workspace="renameWorkspace"
+            @create-project="createProjectInWorkspace"
+            @create-page="createPageInProject"
+            @delete-workspace="deleteWorkspace"
+            @delete-project="deleteProject"
+            @delete-page="deletePage"
+            @move-project="moveProjectToWorkspace"
+            @move-page="movePageToProject"
+          />
         </div>
       </div>
     </Transition>

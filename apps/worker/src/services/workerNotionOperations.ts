@@ -94,12 +94,14 @@ export function createWorkerNotionOperations({
     localPageId: string,
     notionPageId: string,
     content: DocumentContent,
+    baselineContent?: DocumentContent,
   ) {
     return replaceManagedBlocksWithDependencies({
       store,
       localPageId,
       notionPageId,
       content,
+      baselineContent,
       listAllBlockChildren,
       deleteManagedBlock,
       appendManagedBlocks,
@@ -117,6 +119,7 @@ export function createWorkerNotionOperations({
     notionPageId: string,
     ops: ManagedBlockOperation[],
     content: DocumentContent,
+    baselineContent?: DocumentContent,
   ) {
     return applyManagedBlockOpsWithDependencies({
       store,
@@ -124,6 +127,7 @@ export function createWorkerNotionOperations({
       notionPageId,
       ops,
       content,
+      baselineContent,
       appendManagedBlocks,
       deleteManagedBlock,
       updateManagedBlock,

@@ -16,9 +16,6 @@ export type CategoryColor =
 /** State and commands the top bar needs from the sidepanel coordinator. */
 export interface TopBarContext {
   store: JottathingStore;
-  syncBadgeClass: ComputedRef<Record<string, boolean>>;
-  syncBadgeHoverTitle: ComputedRef<string>;
-  saveLabel: ComputedRef<string>;
   isProjectNameEditing: Ref<boolean>;
   projectNameInputRef: Ref<HTMLInputElement | null>;
   projectNameDraft: Ref<string>;
@@ -39,15 +36,17 @@ export interface TopBarContext {
   currentCategoryColor: ComputedRef<string>;
   chooseCategoryColor: (color: CategoryColor) => Promise<void>;
   colorForCategory: (category: string) => string;
-  accountLabel: ComputedRef<string>;
-  workspaceLabel: ComputedRef<string>;
+  flushEditorContent: () => Promise<void>;
   canUseEditor: ComputedRef<boolean>;
   isResyncing: Ref<boolean>;
   activeTab: Ref<'editor' | 'settings'>;
   createProject: () => Promise<void>;
   createPage: () => Promise<void>;
+  createWorkspace: (name: string) => Promise<void>;
+  selectWorkspace: (workspaceId: string) => Promise<void>;
   resync: () => Promise<void>;
   logout: () => Promise<void>;
   selectProject: (projectId: string) => Promise<void>;
+  selectPage: (pageId: string) => Promise<void>;
   archiveProject: () => Promise<void>;
 }

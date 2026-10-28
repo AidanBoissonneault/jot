@@ -240,8 +240,10 @@ export function createWorkerQueueOperations(dependencies: WorkerQueueDependencie
           notionPageId,
           ops,
           content,
+          page.syncBaselineContent,
         );
         page.content = normalizeSyncedMediaContent(content, replacement?.createdBlocks ?? []);
+        page.syncBaselineContent = replacement?.baselineContent ?? page.syncBaselineContent;
         refreshed = await notionRequest(freshStore, `/blocks/${notionPageId}`).catch(() => toggle);
         freshStore.notePages[page.id] = {
           archived: false,
@@ -276,8 +278,10 @@ export function createWorkerQueueOperations(dependencies: WorkerQueueDependencie
           notionPageId,
           ops,
           content,
+          page.syncBaselineContent,
         );
         page.content = normalizeSyncedMediaContent(content, replacement?.createdBlocks ?? []);
+        page.syncBaselineContent = replacement?.baselineContent ?? page.syncBaselineContent;
         refreshed = await notionRequest(freshStore, `/pages/${notionPageId}`).catch(() => notePage);
         freshStore.notePages[page.id] = {
           archived: false,

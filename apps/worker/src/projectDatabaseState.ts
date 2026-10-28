@@ -76,7 +76,12 @@ export function createProjectDatabaseStateHelpers({
     stateBlock: NotionBlock,
   ): Promise<Project> {
     const blocks = await listAllBlockChildren(store, stateBlock.id);
-    const content = blocks.length ? notionBlocksToTiptapDocument(blocks) : emptyDocument();
+    const mappingKey = projectStateKey(project.id);
+    const imported = blocks.length
+      ? await importManagedBlocks(store, { id: mappingKey, notionPageId: stateBlock.id }, blocks)
+      : null;
+    const content = imported ?? (blocks.length ? notionBlocksToTiptapDocument(blocks) : emptyDocument());
+    if (!blocks.length) store.blockMappings[mappingKey] = [];
     store.projectBlocks[projectStateKey(project.id)] = {
       blockId: stateBlock.id,
       lastEditedTime: stateBlock.last_edited_time,
@@ -87,6 +92,7 @@ export function createProjectDatabaseStateHelpers({
     return {
       ...project,
       stateContent: content,
+      stateSyncBaselineContent: content,
       stateRemoteRevision: stateBlock.last_edited_time,
     };
   }
@@ -138,6 +144,7 @@ export function createProjectDatabaseStateHelpers({
       title,
       status: 'active',
       content,
+      syncBaselineContent: content,
       createdAt: timestamp,
       updatedAt: timestamp,
       notionPageId: threadBlock.id,
@@ -158,17 +165,12 @@ export function createProjectDatabaseStateHelpers({
     isForcedMerge = false,
   ) {
     const key = projectStateKey(project.id);
-    const previous = store.projectBlocks?.[key];
     const isUserReviewedReplacement = project.stateContent?.attrs?.jottathingConflictResolution === true;
     const container = await ensureToggleBlock(store, notionPageId, 'Project State', {
       isForcedMerge: isForcedMerge || isUserReviewedReplacement,
       key,
       mappings: store.projectBlocks,
     });
-    const hasRemoteEdit =
-      previous?.lastEditedTime &&
-      container.last_edited_time &&
-      container.last_edited_time !== previous.lastEditedTime;
     const existingJottathingBlockIds = isUserReviewedReplacement
       ? new Set<string>()
       : jottathingBlockIdsForProjectState(store, key);
@@ -233,28 +235,13 @@ export function createProjectDatabaseStateHelpers({
       }
     }
 
-    if (hasRemoteEdit && !isUserReviewedReplacement) {
-      const content = remoteBlocks.length
-        ? pruneOrphanedProjectStateSources(
-            notionBlocksToTiptapDocument(remoteBlocks),
-            existingJottathingBlockIds,
-          )
-        : emptyDocument();
-      const refreshed = await notionRequest(store, `/blocks/${container.id}`).catch(() => container);
-      store.projectBlocks[key] = {
-        ...store.projectBlocks[key],
-        blockId: container.id,
-        lastEditedTime: refreshed.last_edited_time,
-        parentPageId: notionPageId,
-        title: 'Project State',
-      };
-      return {
-        content,
-        lastEditedTime: refreshed.last_edited_time,
-      };
-    }
-
-    await replaceManagedBlocks(store, key, container.id, stateContent);
+    const replacement = await replaceManagedBlocks(
+      store,
+      key,
+      container.id,
+      stateContent,
+      project.stateSyncBaselineContent,
+    );
     const refreshed = await notionRequest(store, `/blocks/${container.id}`).catch(() => container);
     store.projectBlocks[key] = {
       ...store.projectBlocks[key],
@@ -264,7 +251,8 @@ export function createProjectDatabaseStateHelpers({
       title: 'Project State',
     };
     return {
-      content: stateContent,
+      content: replacement.content ?? stateContent,
+      baselineContent: replacement.baselineContent ?? replacement.content ?? stateContent,
       lastEditedTime: refreshed.last_edited_time,
     };
   }

@@ -47,6 +47,7 @@ export interface WorkerSyncDependencies {
     notionPageId: string,
     ops: ManagedBlockOperation[],
     content: DocumentContent,
+    baselineContent?: DocumentContent,
   ) => Promise<ManagedBlockResult>;
   archiveProjectRootPage: (store: WorkerStore, pageId: string) => Promise<NotionObject>;
   archiveThreadToggle: DatabaseHelpers['archiveThreadToggle'] | undefined;
@@ -68,6 +69,7 @@ export interface WorkerSyncDependencies {
     localPageId: string,
     notionPageId: string,
     content: DocumentContent,
+    baselineContent?: DocumentContent,
   ) => Promise<ManagedBlockResult>;
   requireConnectedStore: (context: ApiContext) => Promise<ConnectedWorkerStore>;
   supabase: WorkerSupabaseClient;

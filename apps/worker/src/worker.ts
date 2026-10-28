@@ -5,6 +5,7 @@
  */
 
 import { Hono } from 'hono';
+import { HTTPException } from 'hono/http-exception';
 import {
   processSyncDeadLetterQueue,
   processSyncQueue,
@@ -17,21 +18,46 @@ import { registerSyncQueryRoutes } from './routes/syncQueryRoutes.js';
 import { registerWebhookRoutes } from './routes/webhookRoutes.js';
 import { initSingletons } from './services/workerRuntime.js';
 import type { SyncQueueReference, WorkerEnv } from './types.js';
-import { notionApiErrorResponse } from './workerUtils.js';
+import { notionApiErrorResponse, safeErrorMetadata } from './workerUtils.js';
 
 export { SyncEventsDO } from './syncEvents.js';
 
 /** Hono application containing every public Jottathing API feature. */
 export const app = new Hono<{ Bindings: WorkerEnv }>();
 
-app.use('*', async (c, next) => {
-  try {
-    await next();
-  } catch (error) {
-    const response = notionApiErrorResponse(c, error);
-    if (response) return response;
-    throw error;
+app.onError((error, c) => {
+  if (error instanceof HTTPException) return error.getResponse();
+
+  const notionResponse = notionApiErrorResponse(c, error);
+  if (notionResponse) return notionResponse;
+
+  const metadata = safeErrorMetadata(error);
+  const isTransientDatabaseFailure =
+    metadata.status === 503 ||
+    metadata.status === 504 ||
+    ['PGRST000', 'PGRST001', 'PGRST002', 'PGRST003', 'sync_storage_timeout']
+      .includes(String(metadata.code ?? ''));
+  console.error(JSON.stringify({
+    event: 'worker_request_failed',
+    method: c.req.method,
+    path: new URL(c.req.url).pathname,
+    ...metadata,
+  }));
+
+  if (isTransientDatabaseFailure) {
+    c.header('Retry-After', '10');
+    return c.json({
+      status: 'error',
+      code: 'sync_storage_unavailable',
+      message: 'Sync storage is temporarily unavailable. Please try again shortly.',
+    }, 503);
   }
+
+  return c.json({
+    status: 'error',
+    code: 'internal_error',
+    message: 'The sync service hit an unexpected error. Please try again.',
+  }, 500);
 });
 
 registerAuthRoutes(app);

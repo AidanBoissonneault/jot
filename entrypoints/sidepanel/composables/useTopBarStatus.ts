@@ -20,70 +20,12 @@ export function useTopBarStatus(store: ReturnType<typeof useJottathingStore>) {
     return 'Saved locally';
   });
 
-  const syncBadgeTitle = computed(() => {
-    if (store.syncCheckError) {
-      return `Could not verify the sync server. Your local data is available. ${store.syncCheckError}`;
-    }
-    if (store.isCheckingSync) {
-      return 'Checking your sync connection. Your local data is available while this finishes.';
-    }
-    if (store.errorMessage) return store.errorMessage;
-    if (!store.isOnline) {
-      return 'You are offline. Changes are saved on this device and will sync automatically when you reconnect.';
-    }
-    if (!store.syncConfig.connected) {
-      return 'Changes are saved on this device. Connect Notion when you are ready to sync.';
-    }
-    if (store.pendingSyncCount > 0) {
-      return `${store.pendingSyncCount} queued ${store.pendingSyncCount === 1 ? 'change is' : 'changes are'} waiting to sync with Notion.`;
-    }
-
-    const sseNote =
-      store.sseStatus === 'connected'
-        ? 'Live updates active'
-        : store.sseStatus === 'connecting'
-          ? 'Connecting…'
-          : 'Live updates disconnected';
-
-    if (!store.syncConfig.selectedParentPageId) {
-      return `Jottathing will create a root Notion page with project folders on first sync. · ${sseNote}`;
-    }
-
-    const base = store.syncConfig.selectedParentPageTitle
-      ? `Synced inside ${store.syncConfig.selectedParentPageTitle}`
-      : saveLabel.value;
-    return `${base} · ${sseNote}`;
-  });
-
-  const syncBadgeClass = computed(() => ({
-    'sync-badge': true,
-    checking: store.isCheckingSync,
-    error: store.saveStatus === 'error',
-    stale:
-      store.saveStatus === 'stale' ||
-      Boolean(store.syncCheckError) ||
-      !store.syncConfig.connected ||
-      !store.isOnline ||
-      store.pendingSyncCount > 0,
-    saving: store.saveStatus === 'saving' || store.saveStatus === 'creating' || store.isLoading,
-    saved:
-      store.saveStatus === 'saved' &&
-      store.syncConfig.connected &&
-      store.isOnline &&
-      store.pendingSyncCount === 0,
-  }));
-
   const canUseEditor = computed(() => !store.isLoading && store.projects.length > 0);
   const accountLabel = computed(
     () =>
       store.syncConfig.userEmail ||
       store.syncConfig.userName ||
       (store.syncConfig.connected ? 'Connected' : 'Local only'),
-  );
-  const workspaceLabel = computed(() =>
-    store.syncConfig.workspaceName
-      ? `Workspace: ${store.syncConfig.workspaceName}`
-      : 'No workspace selected',
   );
   const contextLabel = computed(() => store.currentProject?.name ?? 'No project');
 
@@ -92,8 +34,5 @@ export function useTopBarStatus(store: ReturnType<typeof useJottathingStore>) {
     canUseEditor,
     contextLabel,
     saveLabel,
-    syncBadgeClass,
-    syncBadgeTitle,
-    workspaceLabel,
   };
 }

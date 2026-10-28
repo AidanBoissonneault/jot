@@ -125,6 +125,7 @@ export type SyncProjectResponse = {
 export type SyncConflictDiff = {
   /** Last shared version of mapped blocks, used to detect edits on both sides. */
   baseContent?: DocumentContent | null;
+  reason?: 'merge' | 'duplicates';
   localChangedBlockIds?: string[];
   remoteChangedBlockIds?: string[];
   localContent: DocumentContent;
@@ -144,6 +145,7 @@ export type SyncContentConflict = {
   targetId: string;
   targetTitle: string;
   baseContent?: DocumentContent | null;
+  reason?: 'merge' | 'duplicates';
   localChangedBlockIds?: string[];
   remoteChangedBlockIds?: string[];
   localContent: DocumentContent;

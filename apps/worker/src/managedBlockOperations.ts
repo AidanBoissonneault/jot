@@ -23,7 +23,7 @@ import type { BlockPosition, DesiredManagedBlock } from './managedBlockIdentity.
 import { managedBlockSignature } from './managedBlockSignatures.js';
 import { appendAndTrackBlock } from './managedBlockReconciliation.js';
 import { notionBlocksToTiptapDocumentStrict } from './blockConversion/notionToTiptap.js';
-import { UnmappedNotionContentError } from './managedBlocks.js';
+import { restoreLocalBlockBaseline, UnmappedNotionContentError } from './managedBlocks.js';
 
 type AppendManagedBlocks = (
   store: WorkerStore,
@@ -43,6 +43,7 @@ type ClassifyBlock = (block: Pick<NotionBlockPayload, 'type'>) => string;
 /** Operation state and mutation dependencies used by granular queue updates. */
 interface ApplyManagedBlockOpsOptions {
   appendManagedBlocks: AppendManagedBlocks;
+  baselineContent?: DocumentContent;
   content: DocumentContent;
   deleteManagedBlock: DeleteManagedBlock;
   hash: HashValue;
@@ -56,6 +57,7 @@ interface ApplyManagedBlockOpsOptions {
     localPageId: string,
     notionPageId: string,
     content: DocumentContent,
+    baselineContent?: DocumentContent,
   ) => Promise<ManagedBlockResult>;
   store: WorkerStore;
   tiptapDocumentToNotionBlocks: ConvertDocument;
@@ -69,6 +71,7 @@ export async function applyManagedBlockOps({
   notionPageId,
   ops,
   content,
+  baselineContent,
   appendManagedBlocks,
   deleteManagedBlock,
   updateManagedBlock,
@@ -78,12 +81,20 @@ export async function applyManagedBlockOps({
   listAllBlockChildren,
   hash,
 }: ApplyManagedBlockOpsOptions) {
+  restoreLocalBlockBaseline(
+    store.blockMappings[localPageId] ?? [],
+    baselineContent,
+    hash,
+    kindFromNotionBlock,
+    localPageId,
+    tiptapDocumentToNotionBlocks,
+  );
   const replacementOp = ops.find((op) => op.type === 'block_reorder');
   if (replacementOp) {
     // Keep known remote identities. replaceManagedBlocks can reconcile a
     // non-empty snapshot; an empty queue envelope must never clear the note.
-    if (!content.content?.length) return { createdBlocks: [] };
-    return replaceManagedBlocks(store, localPageId, notionPageId, content);
+    if (!content.content?.length) return { createdBlocks: [], baselineContent };
+    return replaceManagedBlocks(store, localPageId, notionPageId, content, baselineContent);
   }
 
   const isGranularBatch = ops.every((op) =>
@@ -115,7 +126,7 @@ export async function applyManagedBlockOps({
         snapshot.content?.length &&
         knownMappings.every((mapping) => snapshotIds.has(mappingKey(mapping)))
       ) {
-        return replaceManagedBlocks(store, localPageId, notionPageId, snapshot);
+        return replaceManagedBlocks(store, localPageId, notionPageId, snapshot, baselineContent);
       }
     }
     for (const op of ops) {
@@ -125,6 +136,7 @@ export async function applyManagedBlockOps({
         localPageId,
         notionPageId,
         op,
+        content,
         appendManagedBlocks,
         deleteManagedBlock,
         updateManagedBlock,
@@ -135,7 +147,10 @@ export async function applyManagedBlockOps({
       });
       createdBlocks.push(...(result?.createdBlocks ?? []));
     }
-    return { createdBlocks };
+    return {
+      createdBlocks,
+      baselineContent: advanceLocalBaseline(baselineContent, content, ops),
+    };
   }
 
   const notionBlocks = tiptapDocumentToNotionBlocks(content);
@@ -212,7 +227,43 @@ export async function applyManagedBlockOps({
       Boolean(mapping?.notionBlockId),
     );
 
-  return { createdBlocks: createdByOrder, notionBlocks };
+  return { createdBlocks: createdByOrder, notionBlocks, baselineContent: content };
+}
+
+/** Applies only acknowledged granular operations to the local three-way baseline. */
+function advanceLocalBaseline(
+  baselineContent: DocumentContent | undefined,
+  currentContent: DocumentContent,
+  ops: ManagedBlockOperation[],
+): DocumentContent {
+  const content = [...(baselineContent?.content ?? [])];
+  for (const op of ops) {
+    if (!['block_create', 'block_update', 'block_delete'].includes(op.type)) continue;
+    const id = op.jottathingBlockId;
+    if (!id) continue;
+    const index = content.findIndex((node) =>
+      node.attrs?.jottathingBlockId === id || node.attrs?.inkwellBlockId === id,
+    );
+    if (op.type === 'block_delete') {
+      if (index >= 0) content.splice(index, 1);
+      continue;
+    }
+    const current = (currentContent.content ?? []).find((node) =>
+      node.attrs?.jottathingBlockId === id || node.attrs?.inkwellBlockId === id,
+    ) ?? op.payload.block;
+    if (!current) continue;
+    const next = {
+      ...current,
+      attrs: { ...current.attrs, jottathingBlockId: id },
+    };
+    if (index >= 0) content[index] = next;
+    else content.push(next);
+  }
+  return {
+    ...baselineContent,
+    type: baselineContent?.type ?? currentContent.type ?? 'doc',
+    content,
+  };
 }
 
 /** Applies one create, update, or delete operation and rewrites mapping order. */
@@ -221,6 +272,7 @@ async function applySingleManagedBlockOp({
   localPageId,
   notionPageId,
   op,
+  content,
   appendManagedBlocks,
   deleteManagedBlock,
   updateManagedBlock,
@@ -240,7 +292,7 @@ async function applySingleManagedBlockOp({
   | 'store'
   | 'tiptapDocumentToNotionBlocks'
   | 'updateManagedBlock'
-> & { op: ManagedBlockOperation }) {
+> & { op: ManagedBlockOperation; content: DocumentContent }) {
   const mappings = [...(store.blockMappings[localPageId] ?? [])];
   const existingIndex = mappings.findIndex((mapping) => mappingKey(mapping) === op.jottathingBlockId);
   const existing = existingIndex >= 0 ? mappings[existingIndex] : undefined;
@@ -283,17 +335,30 @@ async function applySingleManagedBlockOp({
     const baseSignature = existing.newState ? managedBlockSignature(existing.newState) : undefined;
     const currentSignature = current ? managedBlockSignature(current) : undefined;
     const desiredSignature = managedBlockSignature(notionBlock);
-    if (currentSignature !== baseSignature && currentSignature !== desiredSignature) {
-      const replacement = remoteBlocks.find((block) =>
-        block.id !== current?.id &&
+    const localChanged = existing.lastSyncedHash !== desired.lastSyncedHash;
+    const remoteChanged = !current || (
+      baseSignature !== undefined && currentSignature !== baseSignature
+    );
+    if (
+      existing.newState &&
+      localChanged &&
+      remoteChanged &&
+      currentSignature !== desiredSignature
+    ) {
+      const replacement = !current && remoteBlocks.find((block) =>
         managedBlockSignature(block) === (baseSignature ?? desiredSignature),
       );
       if (replacement) {
         existing.notionBlockId = replacement.id;
-      } else if (current) {
-        throw new UnmappedNotionContentError({
-          localContent: { type: 'doc', content: [op.payload.block] },
-          remoteContent: notionBlocksToTiptapDocumentStrict(remoteBlocks),
+      } else if (current || existing.newState) {
+        throw createBlockOperationConflict({
+          blockId: desired.jottathingBlockId,
+          baseState: existing.newState,
+          current,
+          localContent: content,
+          mappings,
+          localBlock: op.payload.block,
+          remoteBlocks,
         });
       } else {
         existing.notionBlockId = undefined;
@@ -378,6 +443,75 @@ async function applySingleManagedBlockOp({
   mappings.splice(insertionIndex, 0, nextMapping);
   store.blockMappings[localPageId] = normalizeMappingOrder(mappings);
   return { createdBlocks: createdBlock ? [createdBlock] : [], notionBlocks: [notionBlock] };
+}
+
+function createBlockOperationConflict({
+  blockId,
+  baseState,
+  current,
+  localContent,
+  mappings,
+  localBlock,
+  remoteBlocks,
+}: {
+  blockId: string;
+  baseState: NotionBlockPayload | undefined;
+  current: NotionBlock | undefined;
+  localContent: DocumentContent;
+  mappings: BlockMapping[];
+  localBlock: DocumentContent;
+  remoteBlocks: NotionBlock[];
+}): UnmappedNotionContentError {
+  const baseDocument = baseState
+    ? notionBlocksToTiptapDocumentStrict([baseState as unknown as NotionBlock])
+    : null;
+  const remoteContent = notionBlocksToTiptapDocumentStrict(remoteBlocks);
+  const localNodes = localContent.content ?? [];
+  const hasLocalBlock = localNodes.some((node) =>
+    String(node.attrs?.jottathingBlockId ?? node.attrs?.inkwellBlockId ?? '') === blockId,
+  );
+  const completeLocalContent: DocumentContent = {
+    ...localContent,
+    type: localContent.type ?? 'doc',
+    content: hasLocalBlock
+      ? localNodes
+      : [...localNodes, { ...localBlock, attrs: { ...localBlock.attrs, jottathingBlockId: blockId } }],
+  };
+  if (remoteContent) {
+    const idByNotionId = new Map(mappings
+      .filter((mapping) => mapping.notionBlockId)
+      .map((mapping) => [mapping.notionBlockId!, mapping.jottathingBlockId ?? mapping.localNodeId]));
+    remoteContent.content = remoteContent.content?.map((node, index) => {
+      const notionId = remoteBlocks[index]?.id;
+      const mappedId = notionId
+        ? idByNotionId.get(notionId) ?? (notionId === current?.id ? blockId : undefined)
+        : undefined;
+      return {
+        ...node,
+        attrs: {
+          ...node.attrs,
+          ...(mappedId ? { jottathingBlockId: mappedId } : {}),
+          ...(notionId ? { notionBlockId: notionId } : {}),
+        },
+      };
+    });
+  }
+
+  return new UnmappedNotionContentError({
+    baseContent: baseDocument?.content?.[0]
+      ? {
+          type: 'doc',
+          content: [{
+            ...baseDocument.content[0],
+            attrs: { ...baseDocument.content[0].attrs, jottathingBlockId: blockId },
+          }],
+        }
+      : null,
+    localChangedBlockIds: [blockId],
+    remoteChangedBlockIds: [blockId],
+    localContent: completeLocalContent,
+    remoteContent,
+  });
 }
 
 /** Removes invalid mappings and rewrites their contiguous order values. */

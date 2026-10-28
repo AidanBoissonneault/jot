@@ -15,6 +15,10 @@ type ConflictRow = {
   duplicate?: boolean;
   internal?: boolean;
   bothEdited?: boolean;
+  localDeleted?: boolean;
+  notionDeleted?: boolean;
+  localChanged?: boolean;
+  notionChanged?: boolean;
   changed: boolean;
   choice: Choice;
 };
@@ -34,7 +38,9 @@ watch(() => props.conflict, (conflict) => {
 }, { immediate: true });
 
 const hasUnresolvedHunks = computed(() => rows.value.some((row) =>
-  ((row.local && row.notion && row.changed) || row.duplicate) && !row.choice,
+  ((row.local && row.notion && row.bothEdited) || row.duplicate ||
+    (row.localDeleted && row.notion && row.notionChanged) ||
+    (row.notionDeleted && row.local && row.localChanged)) && !row.choice,
 ));
 
 function createRows(conflict: SyncContentConflict): ConflictRow[] {
@@ -69,10 +75,12 @@ function createRows(conflict: SyncContentConflict): ConflictRow[] {
       : Boolean(base && notion && signature(notion) !== signature(base));
     const changed = Boolean(notion && signature(local) !== signature(notion));
     const bothEdited = Boolean(base && localChanged && notionChanged && changed);
+    const notionDeleted = Boolean(conflict.remoteContent && base && !notion);
+    const deletionConflict = Boolean(base && localChanged && notionDeleted);
     const internal = conflict.targetType === 'project' && isProjectStateMetadataNode(local);
     const choice: Choice = internal
       ? notionChanged && !localChanged ? 'notion' : 'local'
-      : bothEdited || (changed && !base)
+      : bothEdited || deletionConflict
         ? ''
         : notionChanged && !localChanged
           ? 'notion'
@@ -85,6 +93,9 @@ function createRows(conflict: SyncContentConflict): ConflictRow[] {
       notion,
       internal,
       bothEdited,
+      notionDeleted,
+      localChanged,
+      notionChanged,
       changed,
       choice,
     };
@@ -93,6 +104,11 @@ function createRows(conflict: SyncContentConflict): ConflictRow[] {
   notionBlocks.forEach((notion, index) => {
     if (consumedNotion.has(index)) return;
     const notionId = stableBlockId(notion);
+    const base = notionId ? baseById.get(notionId) : undefined;
+    const notionChanged = notionId && remoteChangedIds
+      ? remoteChangedIds.has(notionId)
+      : Boolean(base && signature(notion) !== signature(base));
+    const localDeleted = Boolean(base && conflict.remoteContent);
     const internal = conflict.targetType === 'project' && isProjectStateMetadataNode(notion);
     const identicalLocal = result.find((row) =>
       row.local && !row.notion && row.internal === internal &&
@@ -104,6 +120,7 @@ function createRows(conflict: SyncContentConflict): ConflictRow[] {
     );
     if (identicalLocal) {
       identicalLocal.notion = notion;
+      identicalLocal.notionChanged = notionChanged;
       if (!internal) {
         identicalLocal.duplicate = true;
         identicalLocal.choice = '';
@@ -114,9 +131,12 @@ function createRows(conflict: SyncContentConflict): ConflictRow[] {
     result.push({
       id: notionId ?? `notion-${index}`,
       notion,
+      base,
+      localDeleted,
+      notionChanged,
       internal,
-      changed: false,
-      choice: '',
+      changed: Boolean(base && notionChanged),
+      choice: localDeleted && notionChanged ? '' : 'notion',
     });
   });
   return result;
@@ -236,6 +256,7 @@ function diffParts(local?: DocumentContent, notion?: DocumentContent): DiffPart[
 
 function resolve() {
   const chosen: DocumentContent[] = [];
+  const deleteNotionBlockIds: string[] = [];
   for (const row of rows.value) {
     if (row.duplicate && row.local && row.notion) {
       if (row.choice === 'local') {
@@ -248,10 +269,28 @@ function resolve() {
       }
       continue;
     }
+    if (row.localDeleted) {
+      if (row.choice === 'notion' && row.notion) {
+        chosen.push(markBlock(row.notion, remoteBlockId(row.notion)));
+      } else if (row.choice === 'local' && row.notion) {
+        const notionId = remoteBlockId(row.notion);
+        if (notionId) deleteNotionBlockIds.push(notionId);
+      }
+      continue;
+    }
+    if (row.notionDeleted) {
+      if (row.choice === 'local' && row.local) chosen.push(markBlock(row.local));
+      continue;
+    }
     if (row.local && row.notion && row.changed) {
-      if (row.choice === 'local') {
+      const choice = row.bothEdited
+        ? row.choice
+        : row.notionChanged && !row.localChanged
+          ? 'notion'
+          : 'local';
+      if (choice === 'local') {
         chosen.push(markBlock(row.local, remoteBlockId(row.notion)));
-      } else if (row.choice === 'notion') {
+      } else if (choice === 'notion') {
         chosen.push(markBlock(row.notion, remoteBlockId(row.notion)));
       }
       continue;
@@ -265,6 +304,7 @@ function resolve() {
     attrs: {
       jottathingConflictResolution: true,
       jottathingPreserveRemoteBlocks: Boolean(props.conflict.remoteContent),
+      ...(deleteNotionBlockIds.length ? { jottathingDeleteNotionBlockIds: deleteNotionBlockIds } : {}),
     },
     // Applying the merge confirms every block in the reviewed snapshot,
     // including Notion-only blocks that the modal preserves automatically.
@@ -299,9 +339,10 @@ function markBlock(block: DocumentContent, notionBlockId?: string): DocumentCont
 <template>
   <div class="modal-backdrop sync-conflict-backdrop" role="dialog" aria-modal="true" aria-labelledby="sync-conflict-title">
     <section class="modal sync-conflict-modal" :class="{ 'has-error': error }">
-      <h2 id="sync-conflict-title">Merge sync changes</h2>
+      <h2 id="sync-conflict-title">{{ conflict.reason === 'duplicates' ? 'Resolve duplicate blocks' : 'Merge sync changes' }}</h2>
       <p v-if="error" class="sync-conflict-error" role="alert">{{ error }}</p>
-      <p>{{ conflict.targetTitle }} has content that needs review. New blocks are preserved; exact duplicates require a choice, and blocks changed on both sides show a diff.</p>
+      <p v-if="conflict.reason === 'duplicates'">{{ conflict.targetTitle }} has identical new blocks on both sides. Choose whether to keep the Jottathing copy, the Notion copy, or both.</p>
+      <p v-else>{{ conflict.targetTitle }} has content that needs review. New blocks are preserved; exact duplicates require a separate choice, and blocks changed on both sides show a diff.</p>
 
       <div v-if="!conflict.remoteContent" class="sync-conflict-warning" role="alert">
         Notion contains blocks this editor cannot represent. The available resolution replaces the Notion content with the local version.
@@ -323,16 +364,42 @@ function markBlock(block: DocumentContent, notionBlockId?: string): DocumentCont
               <pre>{{ displayBlock(row.notion) }}</pre>
             </div>
             <p v-if="row.internal" class="sync-conflict-internal">Project source metadata will be preserved automatically.</p>
+            <p v-if="row.localDeleted && row.notion && row.notionChanged" class="sync-conflict-deletion">Jottathing removed this block while Notion changed it.</p>
+            <p v-if="row.notionDeleted && row.local && row.localChanged" class="sync-conflict-deletion">Notion removed this block while Jottathing changed it.</p>
           </div>
           <div v-if="row.bothEdited && row.local && row.notion && !row.internal" class="sync-conflict-diff-wrap">
-            <p>Both sides changed since the last shared version. Review the diff, then choose one version.</p>
+            <p>Both sides changed since the last shared version. Compare each version with that baseline, then choose one.</p>
+            <div v-if="row.base" class="sync-conflict-three-way">
+              <div>
+                <strong>Last synced</strong>
+                <pre class="sync-conflict-diff">{{ displayBlock(row.base) }}</pre>
+              </div>
+              <div>
+                <strong>Jottathing changes</strong>
+                <pre class="sync-conflict-diff"><span v-for="(part, index) in diffParts(row.base, row.local)" :key="index" :class="part.kind">{{ part.text }}</span></pre>
+              </div>
+              <div>
+                <strong>Notion changes</strong>
+                <pre class="sync-conflict-diff"><span v-for="(part, index) in diffParts(row.base, row.notion)" :key="index" :class="part.kind">{{ part.text }}</span></pre>
+              </div>
+            </div>
             <div class="sync-conflict-diff-legend"><span class="removed">− Jottathing</span><span class="added">+ Notion</span></div>
             <pre class="sync-conflict-diff"><span v-for="(part, index) in diffParts(row.local, row.notion)" :key="index" :class="part.kind">{{ part.text }}</span></pre>
           </div>
           <p v-else-if="row.duplicate" class="sync-conflict-duplicate">
             These new blocks have identical content. Keep one copy or keep both.
           </p>
-          <fieldset v-if="row.local && row.notion && row.changed && !row.duplicate && !row.internal" class="sync-conflict-choices">
+          <fieldset v-if="row.localDeleted && row.notion && row.notionChanged && !row.internal" class="sync-conflict-choices">
+            <legend>Choose how to resolve the deletion</legend>
+            <label><input v-model="row.choice" type="radio" value="local" /> Keep Jottathing deletion</label>
+            <label><input v-model="row.choice" type="radio" value="notion" /> Keep Notion block</label>
+          </fieldset>
+          <fieldset v-else-if="row.notionDeleted && row.local && row.localChanged && !row.internal" class="sync-conflict-choices">
+            <legend>Choose how to resolve the deletion</legend>
+            <label><input v-model="row.choice" type="radio" value="local" /> Keep Jottathing block</label>
+            <label><input v-model="row.choice" type="radio" value="notion" /> Keep Notion deletion</label>
+          </fieldset>
+          <fieldset v-else-if="row.local && row.notion && row.bothEdited && !row.duplicate && !row.internal" class="sync-conflict-choices">
             <legend>Choose this block’s version</legend>
             <label><input v-model="row.choice" type="radio" value="local" /> Keep Jottathing</label>
             <label><input v-model="row.choice" type="radio" value="notion" /> Keep Notion</label>
@@ -343,7 +410,7 @@ function markBlock(block: DocumentContent, notionBlockId?: string): DocumentCont
             <label><input v-model="row.choice" type="radio" value="notion" /> Keep Notion copy</label>
             <label><input v-model="row.choice" type="radio" value="both" /> Keep both</label>
           </fieldset>
-          <p v-else-if="row.notion && !row.local && !row.internal" class="sync-conflict-keep-remote">
+          <p v-else-if="row.notion && !row.local && !row.localDeleted && !row.internal" class="sync-conflict-keep-remote">
             This new Notion block will be preserved separately.
           </p>
         </article>
@@ -361,7 +428,7 @@ function markBlock(block: DocumentContent, notionBlockId?: string): DocumentCont
           @click="resolve"
         >
           <font-awesome-icon :icon="['fas', 'check']" fixed-width />
-          <span>{{ busy ? 'Syncing merge...' : 'Apply merge' }}</span>
+          <span>{{ busy ? 'Syncing...' : conflict.reason === 'duplicates' ? 'Apply choices' : 'Apply merge' }}</span>
         </button>
       </div>
     </section>

@@ -83,6 +83,7 @@ export function mappingFromDesired(
     localPageId: entry.localPageId,
     jottathingBlockId: entry.jottathingBlockId,
     localNodeId: entry.localNodeId,
+    localBaselineAcknowledged: previous.localBaselineAcknowledged ?? false,
     notionBlockId,
     kind: entry.kind,
     order: entry.order,

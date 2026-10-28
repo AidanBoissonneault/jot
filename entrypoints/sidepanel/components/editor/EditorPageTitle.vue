@@ -108,6 +108,18 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', handleOutsideP
         >
           {{ pageTitleDraft || store.currentPage?.title || 'Untitled Page' }}
         </button>
+        <span
+          v-if="store.currentPage && store.syncConfig.authenticated"
+          class="page-header-sync-dot"
+          role="img"
+          :class="[
+            store.currentWorkspace?.kind,
+            store.currentPage.syncState,
+            { authenticated: true },
+          ]"
+          :title="store.currentPage.syncMessage || (store.currentWorkspace?.kind === 'notion' ? 'Page synced with Notion' : 'Local only')"
+          :aria-label="store.currentPage.syncMessage || (store.currentWorkspace?.kind === 'notion' ? 'Page synced with Notion' : 'Local only')"
+        />
         <button
           type="button"
           class="title-menu-trigger"
@@ -126,23 +138,12 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', handleOutsideP
           <PageMenuList
             :pages="store.pages"
             :selected-page-id="store.currentPage?.id"
+            :workspace-kind="store.currentWorkspace?.kind ?? 'local'"
+            :authenticated="Boolean(store.syncConfig.authenticated)"
             @select="selectPage"
+            @archive="archivePage"
+            @create="createPage"
           />
-          <div class="title-dropdown-actions">
-            <button type="button" :disabled="!store.currentProjectId" @click="createPage">
-              <font-awesome-icon :icon="['fas', 'file-circle-plus']" fixed-width />
-              New page
-            </button>
-            <button
-              type="button"
-              class="danger-button"
-              :disabled="!store.currentPage"
-              @click="archivePage"
-            >
-              <font-awesome-icon :icon="['fas', 'trash-can']" fixed-width />
-              Delete page
-            </button>
-          </div>
         </div>
       </Transition>
     </div>

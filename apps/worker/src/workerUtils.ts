@@ -101,17 +101,22 @@ export function hash(value: string): string {
 /** Returns only bounded, non-message error metadata for persistent server logs. */
 export function safeErrorMetadata(error: unknown): Record<string, string | number> {
   if (!error || typeof error !== 'object') return { type: typeof error };
-  const record = error as { code?: unknown; name?: unknown; status?: unknown };
+  const record = error as { cause?: unknown; code?: unknown; name?: unknown; status?: unknown };
+  const cause = record.cause && typeof record.cause === 'object'
+    ? record.cause as { code?: unknown; status?: unknown }
+    : undefined;
   const result: Record<string, string | number> = {
     type: typeof record.name === 'string' && /^[A-Za-z0-9_.-]{1,64}$/.test(record.name)
       ? record.name
       : 'Error',
   };
-  if (typeof record.status === 'number' && Number.isInteger(record.status)) {
-    result.status = record.status;
+  const status = typeof record.status === 'number' ? record.status : cause?.status;
+  const code = typeof record.code === 'string' ? record.code : cause?.code;
+  if (typeof status === 'number' && Number.isInteger(status)) {
+    result.status = status;
   }
-  if (typeof record.code === 'string' && /^[A-Za-z0-9_.-]{1,64}$/.test(record.code)) {
-    result.code = record.code;
+  if (typeof code === 'string' && /^[A-Za-z0-9_.-]{1,64}$/.test(code)) {
+    result.code = code;
   }
   return result;
 }

@@ -52,6 +52,7 @@ interface PageSyncDependencies {
     localPageId: string,
     notionPageId: string,
     content: DocumentContent,
+    baselineContent?: DocumentContent,
   ) => Promise<ManagedBlockResult>;
   requireConnectedStore: (request: unknown) => Promise<WorkerStore>;
   updateChildNotePage: (store: WorkerStore, pageId: string, page: ProjectPage) => Promise<unknown>;
@@ -143,6 +144,7 @@ export async function pushPageToNotionCore({
 
   if (
     !isUserReviewedReplacement &&
+    !page.syncBaselineContent &&
     notePage?.last_edited_time &&
     page.remoteRevision &&
     notePage.last_edited_time !== page.remoteRevision
@@ -170,15 +172,22 @@ export async function pushPageToNotionCore({
     await updateChildNotePage(store, notePage.id, page);
   }
 
-  const replacement = await replaceManagedBlocks(store, page.id, notePage.id, page.content);
+  const replacement = await replaceManagedBlocks(
+    store,
+    page.id,
+    notePage.id,
+    page.content,
+    page.syncBaselineContent,
+  );
   const refreshedPage = await notionRequest(store, `/pages/${notePage.id}`);
   const syncedContent = normalizeSyncedMediaContent(
-    page.content,
+    replacement?.content ?? page.content,
     replacement?.createdBlocks ?? [],
   );
   const syncedPage = {
     ...page,
     content: syncedContent,
+    syncBaselineContent: syncedContent,
     notionPageId: notePage.id,
     notionDatabaseId: undefined,
     notionDataSourceId: undefined,
@@ -265,6 +274,7 @@ async function pushPageToProjectDatabase({
 
   if (
     !isUserReviewedReplacement &&
+    !page.syncBaselineContent &&
     toggle?.last_edited_time &&
     page.remoteRevision &&
     toggle.last_edited_time !== page.remoteRevision
@@ -288,15 +298,22 @@ async function pushPageToProjectDatabase({
   }
 
   await updateThreadToggleTitle?.(store, page);
-  const replacement = await replaceManagedBlocks(store, page.id, toggle.id, page.content);
+  const replacement = await replaceManagedBlocks(
+    store,
+    page.id,
+    toggle.id,
+    page.content,
+    page.syncBaselineContent,
+  );
   const refreshedBlock = await notionRequest(store, `/blocks/${toggle.id}`).catch(() => toggle);
   const syncedContent = normalizeSyncedMediaContent(
-    page.content,
+    replacement?.content ?? page.content,
     replacement?.createdBlocks ?? [],
   );
   const syncedPage = {
     ...page,
     content: syncedContent,
+    syncBaselineContent: syncedContent,
     notionPageId: toggle.id,
     notionDatabaseId: undefined,
     notionDataSourceId: undefined,

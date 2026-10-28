@@ -17,5 +17,5 @@ export interface EditorPageTitleContext {
   toggleTitleMenu: (menu: 'project' | 'page' | 'category') => void;
   selectPage: (pageId: string) => Promise<void>;
   createPage: () => Promise<void>;
-  archivePage: () => Promise<void>;
+  archivePage: (pageId?: string) => Promise<void>;
 }

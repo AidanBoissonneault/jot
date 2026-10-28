@@ -79,9 +79,6 @@ const {
   canUseEditor,
   contextLabel,
   saveLabel,
-  syncBadgeClass,
-  syncBadgeTitle,
-  workspaceLabel,
 } = useTopBarStatus(store);
 const activeTitleMenu = ref<'project' | 'page' | 'category' | null>(null);
 const {
@@ -557,11 +554,11 @@ async function resync() {
       syncConflictError.value = '';
       if (autoMergeError) syncConflictError.value = autoMergeError;
       uiMessage.value = autoMergeError ||
-        `${conflictsNeedingInlineReview.length ? 'Page conflicts are ready inside their documents. ' : ''}Review ${conflictsNeedingModalReview.length} project ${conflictsNeedingModalReview.length === 1 ? 'conflict' : 'conflicts'} to merge project state.`;
+        `${conflictsNeedingInlineReview.length ? 'Page sync reviews are ready inside their documents. ' : ''}Review ${conflictsNeedingModalReview.length} project sync ${conflictsNeedingModalReview.length === 1 ? 'item' : 'items'}.`;
     } else if (conflictsNeedingInlineReview.length) {
       syncConflictError.value = '';
       uiMessage.value = autoMergeError ||
-        `${conflictsNeedingInlineReview.length} page ${conflictsNeedingInlineReview.length === 1 ? 'conflict is' : 'conflicts are'} ready to review inside ${conflictsNeedingInlineReview.length === 1 ? 'the affected document' : 'their affected documents'}.`;
+        `${conflictsNeedingInlineReview.length} page sync ${conflictsNeedingInlineReview.length === 1 ? 'review is' : 'reviews are'} ready inside ${conflictsNeedingInlineReview.length === 1 ? 'the affected document' : 'their affected documents'}.`;
     } else if (autoMergedAdditions) {
       syncConflictError.value = '';
       uiMessage.value = 'New Notion blocks were merged with local content and synced.';
@@ -590,7 +587,7 @@ async function resync() {
 function cancelSyncConflict() {
   syncConflicts.value = [];
   syncConflictError.value = '';
-  uiMessage.value = 'Sync conflict review paused. Your local changes remain saved.';
+  uiMessage.value = 'Sync review paused. Your local changes remain saved.';
 }
 
 async function resolveInlinePageSyncConflict(
@@ -607,7 +604,9 @@ async function resolveInlinePageSyncConflict(
   try {
     await notionClient.resolveSyncConflict('page', conflict.targetId, content);
     await store.refreshWorkspaceFromStorage();
-    uiMessage.value = 'Page conflict resolved and synced.';
+    uiMessage.value = conflict.reason === 'duplicates'
+      ? 'Duplicate blocks resolved and synced.'
+      : 'Page conflict resolved and synced.';
     return store.currentPage?.id === conflict.targetId
       ? store.currentPage.content
       : null;
@@ -628,8 +627,10 @@ async function resolveSyncConflict(content: DocumentContent) {
     syncConflicts.value = syncConflicts.value.slice(1);
     syncConflictError.value = '';
     uiMessage.value = syncConflicts.value.length
-      ? 'Merge saved. Review the next sync conflict.'
-      : 'Local and Notion blocks were merged and synced.';
+      ? 'Review saved. Open the next sync item.'
+      : conflict.reason === 'duplicates'
+        ? 'Duplicate blocks resolved and synced.'
+        : 'Local and Notion blocks were merged and synced.';
     try {
       await store.refreshWorkspaceFromStorage();
     } catch (error) {
@@ -691,16 +692,8 @@ function handlePanelExit() {
   editorPersistence?.handlePanelExit();
 }
 
-const syncBadgeHoverTitle = computed(() => {
-  const feedback = store.errorMessage || uiMessage.value;
-  return [...new Set([saveLabel.value, syncBadgeTitle.value, feedback].filter(Boolean))].join(' · ');
-});
-
 const topBarContext: TopBarContext = {
   store,
-  syncBadgeClass,
-  syncBadgeHoverTitle,
-  saveLabel,
   isProjectNameEditing,
   projectNameInputRef,
   projectNameDraft,
@@ -721,16 +714,27 @@ const topBarContext: TopBarContext = {
   currentCategoryColor,
   chooseCategoryColor,
   colorForCategory,
-  accountLabel,
-  workspaceLabel,
+  flushEditorContent,
   canUseEditor,
   isResyncing,
   activeTab,
   createProject,
   createPage,
+  createWorkspace: async (name) => {
+    await flushEditorContent();
+    await store.createLocalWorkspace(name);
+    activeTab.value = 'editor';
+  },
+  selectWorkspace: async (workspaceId) => {
+    await saveEditorContentInBackground();
+    await notionClient.flushPendingSyncOps({ force: true }).catch(() => undefined);
+    await store.selectWorkspace(workspaceId);
+    activeTab.value = 'editor';
+  },
   resync,
   logout,
   selectProject,
+  selectPage,
   archiveProject,
 };
 

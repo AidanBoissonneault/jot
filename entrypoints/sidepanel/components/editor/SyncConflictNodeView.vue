@@ -61,9 +61,12 @@ async function applyChoices() {
 <template>
   <NodeViewWrapper class="jottathing-sync-conflict" contenteditable="false">
     <div class="jottathing-sync-conflict__title">
-      <strong>Merge conflict</strong>
+      <strong>{{ conflict.reason === 'duplicates' ? 'Duplicate blocks' : 'Merge conflict' }}</strong>
       <span>{{ conflict.targetTitle }}</span>
     </div>
+    <p v-if="conflict.reason === 'duplicates'" class="jottathing-sync-conflict__warning">
+      These identical new blocks were added on both sides. Choose whether to keep the Jottathing copy, the Notion copy, or both.
+    </p>
     <p v-if="conflict.remoteContent === null" class="jottathing-sync-conflict__warning">
       Notion has blocks Jottathing cannot represent. Applying this review replaces those blocks with the local version.
       <label><input v-model="remoteAcknowledged" type="checkbox" /> I reviewed the local version.</label>
@@ -127,6 +130,20 @@ async function applyChoices() {
           </button>
         </div>
       </div>
+      <div v-if="row.needsChoice && row.base && row.local && row.notion && !row.duplicate" class="jottathing-sync-conflict__three-way">
+        <div>
+          <strong>Last synced</strong>
+          <pre>{{ syncConflictBlockText(row.base) }}</pre>
+        </div>
+        <div>
+          <strong>Jottathing changes</strong>
+          <pre><span v-for="(part, index) in syncConflictDiffParts(row.base, row.local)" :key="index" :class="part.kind">{{ part.text }}</span></pre>
+        </div>
+        <div>
+          <strong>Notion changes</strong>
+          <pre><span v-for="(part, index) in syncConflictDiffParts(row.base, row.notion)" :key="index" :class="part.kind">{{ part.text }}</span></pre>
+        </div>
+      </div>
       <p v-if="row.duplicate" class="jottathing-sync-conflict__duplicate">These added blocks match. Choose which copy to keep.</p>
     </div>
 
@@ -136,7 +153,7 @@ async function applyChoices() {
       <span v-else>Choices are ready to apply.</span>
       <button type="button" :disabled="isApplying || hasUnresolved || (conflict.remoteContent === null && !remoteAcknowledged)" @click="applyChoices">
         <font-awesome-icon :icon="['fas', 'check']" fixed-width />
-        {{ isApplying ? 'Applying…' : 'Apply merge' }}
+        {{ isApplying ? 'Applying…' : conflict.reason === 'duplicates' ? 'Apply choices' : 'Apply merge' }}
       </button>
     </footer>
   </NodeViewWrapper>

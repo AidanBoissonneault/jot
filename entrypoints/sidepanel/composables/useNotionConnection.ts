@@ -38,6 +38,7 @@ export function useNotionConnection(
         if (store.syncConfig.connected || attempts >= 30) {
           window.clearInterval(sessionPollTimer);
           isSigningIn.value = false;
+          if (store.syncConfig.connected) activeTab.value = 'editor';
         }
       });
     }, 2000);
@@ -70,7 +71,7 @@ export function useNotionConnection(
   async function logout() {
     stopSessionPolling();
     isSigningIn.value = false;
-    if (await store.logout()) activeTab.value = 'settings';
+    if (await store.logout()) activeTab.value = 'editor';
   }
 
   async function deleteConnection() {

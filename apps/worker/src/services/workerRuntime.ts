@@ -304,8 +304,15 @@ function replaceManagedBlocks(
   localPageId: string,
   notionPageId: string,
   content: DocumentContent,
+  baselineContent?: DocumentContent,
 ) {
-  return workerNotionOperations.replaceManagedBlocks(store, localPageId, notionPageId, content);
+  return workerNotionOperations.replaceManagedBlocks(
+    store,
+    localPageId,
+    notionPageId,
+    content,
+    baselineContent,
+  );
 }
 
 /** Applies incremental managed-block changes. */
@@ -315,6 +322,7 @@ function applyManagedBlockOps(
   notionPageId: string,
   ops: ManagedBlockOperation[],
   content: DocumentContent,
+  baselineContent?: DocumentContent,
 ) {
   return workerNotionOperations.applyManagedBlockOps(
     store,
@@ -322,6 +330,7 @@ function applyManagedBlockOps(
     notionPageId,
     ops,
     content,
+    baselineContent,
   );
 }
 

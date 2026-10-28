@@ -113,6 +113,7 @@ export interface BlockMapping {
   lastSyncedHash: string;
   localNodeId: string;
   localPageId: string;
+  localBaselineAcknowledged?: boolean;
   newState: NotionBlockPayload | null;
   notionBlockId: string | undefined;
   oldState: NotionBlockPayload | null;
@@ -268,6 +269,8 @@ export interface WorkerEnv {
 /** Describes created remote blocks returned by a managed mutation. */
 export interface ManagedBlockResult {
   createdBlocks: Array<NotionObject | undefined>;
+  content?: DocumentContent;
+  baselineContent?: DocumentContent;
 }
 
 /** Describes the dependency signature for recording a worker diagnostic. */
@@ -282,4 +285,5 @@ export type ReplaceManagedBlocks = (
   localPageId: string,
   notionPageId: string,
   content: DocumentContent,
+  baselineContent?: DocumentContent,
 ) => Promise<ManagedBlockResult>;

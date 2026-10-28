@@ -493,6 +493,37 @@
   border-top-style: dashed;
 }
 
+.jottathing-sync-conflict__three-way {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+  gap: 7px;
+  margin-top: 8px;
+}
+
+.jottathing-sync-conflict__three-way > div {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid rgb(98 77 34 / 15%);
+  border-radius: 5px;
+  background: rgb(255 255 255 / 44%);
+}
+
+.jottathing-sync-conflict__three-way strong {
+  display: block;
+  padding: 6px 8px 0;
+  font-size: 0.72rem;
+}
+
+.jottathing-sync-conflict__three-way pre {
+  max-height: 120px;
+  overflow: auto;
+  margin: 0;
+  padding: 6px 8px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: 0.76rem/1.4 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+}
+
 .jottathing-sync-conflict__duplicate,
 .jottathing-sync-conflict__warning,
 .jottathing-sync-conflict__error {

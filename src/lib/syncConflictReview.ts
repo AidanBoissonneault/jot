@@ -106,7 +106,7 @@ export function createSyncConflictRows(conflict: SyncContentConflict): SyncConfl
       notion,
       changed,
       needsChoice: changed
-        ? !base || Boolean(localChanged && notionChanged)
+        ? Boolean(base && localChanged && notionChanged)
         : Boolean(hasRemoteContent && base && !notion && localChanged),
       localChanged,
       notionChanged,
@@ -158,6 +158,7 @@ export function buildSyncConflictMerge(
   choices: Record<string, SyncConflictChoice>,
 ): DocumentContent {
   const chosen: DocumentContent[] = [];
+  const deleteNotionBlockIds: string[] = [];
   for (const row of rows) {
     const choice = choices[row.id];
     if (row.duplicate && row.local && row.notion) {
@@ -170,6 +171,10 @@ export function buildSyncConflictMerge(
     }
     if (row.localDeleted) {
       if (choice === 'notion' && row.notion) chosen.push(row.notion);
+      else if (choice === 'local' && row.notion) {
+        const notionId = remoteBlockId(row.notion);
+        if (notionId) deleteNotionBlockIds.push(notionId);
+      }
       continue;
     }
     if (row.notionDeleted) {
@@ -191,6 +196,7 @@ export function buildSyncConflictMerge(
     attrs: {
       jottathingConflictResolution: true,
       jottathingPreserveRemoteBlocks: Boolean(conflict.remoteContent),
+      ...(deleteNotionBlockIds.length ? { jottathingDeleteNotionBlockIds: deleteNotionBlockIds } : {}),
     },
     content: chosen.map((block) => ({
       ...block,

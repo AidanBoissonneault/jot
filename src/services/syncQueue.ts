@@ -1,5 +1,5 @@
 import type { DocumentContent, Project, ProjectPage } from '@/src/types/capture';
-import { idbGet, idbSet } from '@/src/services/idbStore';
+import { idbGet, idbSet, idbSetMany } from '@/src/services/idbStore';
 import { normalizeJottathingBlockIds } from '@/src/extensions/jottathingBlockIds';
 import type {
   SyncBlockOperation as BlockSyncOp,
@@ -13,6 +13,14 @@ const PENDING_PROJECT_SYNC_EVENTS_KEY = 'pending_project_sync_events';
 const PROJECT_SYNC_CONFLICT_BACKUPS_KEY = 'project_sync_conflict_backups';
 const SYNC_SEQUENCE_KEY = 'pending_sync_sequence';
 const LOCAL_SYNC_VERSIONS_KEY = 'local_sync_versions';
+const SYNC_QUEUES_BY_ACCOUNT_KEY = 'sync_queues_by_account';
+const ACCOUNT_SCOPED_QUEUE_KEYS = [
+  PENDING_SYNC_OPS_KEY,
+  PENDING_PROJECT_SYNC_EVENTS_KEY,
+  PROJECT_SYNC_CONFLICT_BACKUPS_KEY,
+  SYNC_SEQUENCE_KEY,
+  LOCAL_SYNC_VERSIONS_KEY,
+] as const;
 const JOTTATHING_BLOCK_ID_ATTR = 'jottathingBlockId';
 const queueChangeListeners = new Set<() => void>();
 let queueMutation = Promise.resolve();
@@ -115,6 +123,40 @@ export async function compactStoredPendingSyncOps(): Promise<BlockSyncOp[]> {
     await idbSet(PENDING_SYNC_OPS_KEY, compacted);
     notifyQueueChanged();
     return compacted;
+  });
+}
+
+/** Parks one account's durable queue and restores the next account's queue. */
+export async function switchPendingSyncQueueAccount(
+  previousAccountId: string,
+  nextAccountId: string,
+): Promise<void> {
+  if (!previousAccountId || !nextAccountId || previousAccountId === nextAccountId) return;
+
+  await mutateQueue(async () => {
+    const accounts = (await idbGet<Record<string, Record<string, unknown>>>(
+      SYNC_QUEUES_BY_ACCOUNT_KEY,
+    )) ?? {};
+    const current = Object.fromEntries(await Promise.all(
+      ACCOUNT_SCOPED_QUEUE_KEYS.map(async (key) => [key, await idbGet(key)] as const),
+    ));
+    accounts[previousAccountId] = current;
+    const nextUserId = nextAccountId.split('::')[0];
+    const fallbackKey = [`${nextUserId}::connected-workspace`, nextUserId]
+      .find((key) => key !== nextAccountId && key in accounts);
+    const next = accounts[nextAccountId] ?? (fallbackKey ? accounts[fallbackKey] : undefined) ?? {};
+    delete accounts[nextAccountId];
+    if (fallbackKey) delete accounts[fallbackKey];
+
+    await idbSetMany({
+      [SYNC_QUEUES_BY_ACCOUNT_KEY]: accounts,
+      [PENDING_SYNC_OPS_KEY]: next[PENDING_SYNC_OPS_KEY] ?? [],
+      [PENDING_PROJECT_SYNC_EVENTS_KEY]: next[PENDING_PROJECT_SYNC_EVENTS_KEY] ?? [],
+      [PROJECT_SYNC_CONFLICT_BACKUPS_KEY]: next[PROJECT_SYNC_CONFLICT_BACKUPS_KEY] ?? [],
+      [SYNC_SEQUENCE_KEY]: next[SYNC_SEQUENCE_KEY] ?? 0,
+      [LOCAL_SYNC_VERSIONS_KEY]: next[LOCAL_SYNC_VERSIONS_KEY] ?? {},
+    });
+    notifyQueueChanged();
   });
 }
 

@@ -28,7 +28,6 @@ const {
 
 const statusItems = computed(() => [
   { label: 'Account', value: accountLabel.value },
-  { label: 'Workspace', value: store.syncConfig.workspaceName || 'Not connected' },
   { label: 'Parent page', value: parentPageLabel.value },
   { label: 'Status', value: saveLabel.value },
   { label: 'Connection', value: store.isOnline ? 'Online' : 'Offline' },
@@ -39,8 +38,10 @@ const statusItems = computed(() => [
 ]);
 const queueAccountMismatch = computed(() =>
   store.syncConfig.connected &&
-  store.syncConfig.syncQueueOwnerUserId !== undefined &&
-  store.syncConfig.syncQueueOwnerUserId !== store.syncConfig.userId,
+  ((store.syncConfig.syncQueueOwnerUserId !== undefined &&
+    store.syncConfig.syncQueueOwnerUserId !== store.syncConfig.userId) ||
+    (Boolean(store.syncConfig.syncQueueOwnerWorkspaceId) &&
+      store.syncConfig.syncQueueOwnerWorkspaceId !== store.syncConfig.workspaceId)),
 );
 const queueOwnerUnknown = computed(() => queueAccountMismatch.value && store.syncConfig.syncQueueOwnerUserId === null);
 
@@ -81,7 +82,7 @@ async function assignUnknownQueueToCurrentAccount() {
           Use this account for local data
         </button>
       </template>
-      <span v-else>Local documents and queued changes are locked to their original Notion account. Reconnect that account to sync them. Your documents remain on this device.</span>
+      <span v-else>Queued changes are locked to their original Notion account and workspace. Reconnect that connection to sync them. Your documents remain on this device.</span>
     </div>
 
     <LegalConsent

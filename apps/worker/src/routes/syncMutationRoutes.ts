@@ -259,7 +259,7 @@ export function registerSyncMutationRoutes(app: Hono<{ Bindings: WorkerEnv }>): 
           projectPage.id,
           project.id,
         );
-        await applyManagedBlockOps(
+        const replacement = await applyManagedBlockOps(
           freshStore,
           projectStateKey(project.id),
           container.id,
@@ -270,6 +270,7 @@ export function registerSyncMutationRoutes(app: Hono<{ Bindings: WorkerEnv }>): 
             payload: { block },
           }],
           { type: 'doc', content: [block] },
+          project.stateSyncBaselineContent,
         );
         const refreshed = await notionRequest(freshStore, `/blocks/${container.id}`)
           .catch(() => container);
@@ -281,7 +282,13 @@ export function registerSyncMutationRoutes(app: Hono<{ Bindings: WorkerEnv }>): 
           title: 'Project State',
         };
         await writeStore(freshStore);
-        return { status: 'saved', project };
+        return {
+          status: 'saved',
+          project: {
+            ...project,
+            stateSyncBaselineContent: replacement?.baselineContent ?? project.stateSyncBaselineContent,
+          },
+        };
       }));
     } catch (error) {
       if (error instanceof HTTPException) {

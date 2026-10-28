@@ -90,13 +90,14 @@ export function useWorkspaceActions(options: WorkspaceActionOptions) {
     };
   }
 
-  async function archivePage() {
-    if (!store.currentPage) return;
+  async function archivePage(pageId = store.currentPage?.id) {
+    const page = store.pages.find((entry) => entry.id === pageId);
+    if (!page) return;
     activeTitleMenu.value = null;
     archiveTarget.value = {
       kind: 'page',
-      id: store.currentPage.id,
-      title: store.currentPage.title,
+      id: page.id,
+      title: page.title,
     };
   }
 
@@ -110,8 +111,9 @@ export function useWorkspaceActions(options: WorkspaceActionOptions) {
       await store.archiveCurrentProject();
       return;
     }
-    if (target.kind === 'page' && store.currentPage?.id === target.id) {
-      await store.archiveCurrentPage();
+    if (target.kind === 'page') {
+      if (store.currentPage?.id === target.id) await store.archiveCurrentPage();
+      else await store.archivePageById(target.id);
     }
   }
 

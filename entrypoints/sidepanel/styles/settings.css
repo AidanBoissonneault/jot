@@ -352,6 +352,7 @@
 
 .sync-conflict-internal,
 .sync-conflict-duplicate,
+.sync-conflict-deletion,
 .sync-conflict-diff-wrap > p {
   margin: 0;
   color: var(--jottathing-text-muted);
@@ -361,6 +362,20 @@
 .sync-conflict-diff-wrap {
   display: grid;
   gap: 6px;
+}
+
+.sync-conflict-three-way {
+  display: grid;
+  gap: 7px;
+}
+
+.sync-conflict-three-way > div {
+  display: grid;
+  gap: 4px;
+}
+
+.sync-conflict-three-way strong {
+  font-size: 0.75rem;
 }
 
 .sync-conflict-diff-legend {

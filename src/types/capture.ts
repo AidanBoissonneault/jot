@@ -40,21 +40,27 @@ export type Capture = {
   createdAt: string;
 };
 
-/** Describes a local project and its synchronized project-level state. */
+/** Describes a project and its workspace-derived synchronization state. */
 export type Project = {
   id: string;
   name: string;
+  /** Workspace that contains this project. */
+  workspaceId?: string;
+  /** Kept aligned with the containing workspace for existing sync operations. */
+  syncMode?: 'local' | 'notion';
   status: 'active' | 'archived';
   category?: string;
   createdAt: string;
   updatedAt: string;
   stateContent: DocumentContent;
+  /** Last synced project-state snapshot, retained in local IndexedDB for three-way merges. */
+  stateSyncBaselineContent?: DocumentContent;
   /** Page merge reviews retained locally until the user resolves them. */
   syncConflicts?: SyncContentConflict[];
   stateRemoteRevision?: string;
   tags: string[];
   syncMessage?: string;
-  syncState?: OptimisticStatus;
+  syncState?: SaveStatus;
 };
 
 /** Describes a serializable Tiptap document node. */
@@ -69,17 +75,29 @@ export type DocumentContent = {
   text?: string;
 };
 
-/** Describes a local page plus its Notion synchronization metadata. */
+/** Describes a page plus its workspace-derived Notion synchronization metadata. */
 export type ProjectPage = {
   id: string;
   projectId: string;
+  /** Workspace that contains this page; kept aligned with its project. */
+  workspaceId?: string;
   kind?: 'page' | 'project';
   title: string;
   status?: 'active' | 'archived';
   content: DocumentContent;
+  /** Last synced page snapshot, retained locally while edits are made offline. */
+  syncBaselineContent?: DocumentContent;
+  /** Local ordering within the page list for this project. */
+  pageOrder?: number;
   createdAt: string;
   updatedAt: string;
   notionPageId?: string;
+  /** Inherited from its workspace; all pages in a project share the same mode. */
+  syncMode?: 'local' | 'notion';
+  /** Account that owns this page's local copy. Notion pages are bound to this account. */
+  syncAccountId?: string;
+  /** Notion workspace that owns this page after it has been synced. */
+  syncWorkspaceId?: string;
   notionDatabaseId?: string;
   notionDataSourceId?: string;
   notionParentPageId?: string;
@@ -93,6 +111,21 @@ export type ProjectPage = {
   syncState?: SaveStatus;
 };
 
+/** A selectable local collection or the signed-in user's Notion workspace. */
+export type Workspace = {
+  id: string;
+  name: string;
+  kind: 'local' | 'notion';
+  /** Account that owns a local workspace or the Notion workspace. */
+  accountId?: string;
+  /** Actual Notion workspace id for a Notion-backed workspace. */
+  notionWorkspaceId?: string;
+  createdAt: string;
+  updatedAt: string;
+  syncState?: SaveStatus;
+  syncMessage?: string;
+};
+
 
 /** Describes persisted client configuration for Notion synchronization. */
 export type SyncConfig = {
@@ -102,6 +135,8 @@ export type SyncConfig = {
   userId?: string;
   /** Account that owns local documents and sync work; null means legacy data needs explicit assignment. */
   syncQueueOwnerUserId?: string | null;
+  /** Workspace that owns the active durable sync queue. */
+  syncQueueOwnerWorkspaceId?: string;
   userName?: string;
   userEmail?: string;
   workspaceId?: string;

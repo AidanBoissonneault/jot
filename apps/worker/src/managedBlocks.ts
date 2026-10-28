@@ -33,6 +33,7 @@ export const UNMAPPED_NOTION_CONTENT_MESSAGE =
 
 export type UnmappedNotionContentDiff = {
   baseContent?: DocumentContent | null;
+  reason?: 'merge' | 'duplicates';
   localChangedBlockIds?: string[];
   remoteChangedBlockIds?: string[];
   localContent: DocumentContent;
@@ -45,7 +46,9 @@ export class UnmappedNotionContentError extends Error {
   readonly diff: UnmappedNotionContentDiff;
 
   constructor(diff: UnmappedNotionContentDiff) {
-    super(UNMAPPED_NOTION_CONTENT_MESSAGE);
+    super(diff.reason === 'duplicates'
+      ? 'Identical new blocks were added in Jottathing and Notion. Choose which copies to keep.'
+      : UNMAPPED_NOTION_CONTENT_MESSAGE);
     this.name = 'UnmappedNotionContentError';
     this.diff = diff;
   }
@@ -92,6 +95,7 @@ interface ManagedBlockDependencies {
 
 /** Describes the replace managed blocks options contract used by this API feature. */
 interface ReplaceManagedBlocksOptions extends ManagedBlockDependencies {
+  baselineContent?: DocumentContent;
   content: DocumentContent;
   listAllBlockChildren: ListAllBlockChildren;
   localPageId: string;
@@ -109,6 +113,7 @@ export async function replaceManagedBlocks({
   localPageId,
   notionPageId,
   content,
+  baselineContent,
   listAllBlockChildren,
   deleteManagedBlock,
   appendManagedBlocks,
@@ -117,8 +122,8 @@ export async function replaceManagedBlocks({
   kindFromNotionBlock,
   hash,
 }: ReplaceManagedBlocksOptions) {
-  const notionBlocks = tiptapDocumentToNotionBlocks(content);
-  const desiredBlocks = desiredManagedBlocks({
+  let notionBlocks = tiptapDocumentToNotionBlocks(content);
+  let desiredBlocks = desiredManagedBlocks({
     content,
     hash,
     kindFromNotionBlock,
@@ -126,16 +131,24 @@ export async function replaceManagedBlocks({
     notionBlocks,
   });
   const existingMappings = store.blockMappings[localPageId] ?? [];
+  restoreLocalBlockBaseline(
+    existingMappings,
+    baselineContent,
+    hash,
+    kindFromNotionBlock,
+    localPageId,
+    tiptapDocumentToNotionBlocks,
+  );
   const isUserReviewedReplacement = content.attrs?.jottathingConflictResolution === true;
 
   // An empty document may be a partial queue envelope. Never interpret it as
   // permission to erase the remote note.
   if (!desiredBlocks.length && !isUserReviewedReplacement) {
-    return { createdBlocks: [], notionBlocks };
+    return { createdBlocks: [], content, baselineContent: baselineContent ?? content, notionBlocks };
   }
 
   if (isUserReviewedReplacement) {
-    return replaceAfterUserConflictResolution({
+    const result = await replaceAfterUserConflictResolution({
       appendManagedBlocks,
       deleteManagedBlock,
       desiredBlocks,
@@ -147,10 +160,36 @@ export async function replaceManagedBlocks({
       store,
       updateManagedBlock,
     });
+    return { ...result, content, baselineContent: content };
   }
 
   if (!existingMappings.length) {
-    return replaceAllManagedBlocks({
+    const remoteBlocks = await listAllBlockChildren(store, notionPageId);
+    if (
+      hasUnresolvedExactDuplicates(existingMappings, desiredBlocks, remoteBlocks) &&
+      notionBlocksToTiptapDocumentStrict(remoteBlocks)
+    ) {
+      throw createContentConflict(content, remoteBlocks, existingMappings, desiredBlocks, 'duplicates');
+    }
+    const mergedContent = appendRemoteOnlyAdditions(
+      content,
+      desiredBlocks,
+      remoteBlocks,
+      new Set(),
+    );
+    if (mergedContent !== content) {
+      content = mergedContent;
+      notionBlocks = tiptapDocumentToNotionBlocks(content);
+      desiredBlocks = desiredManagedBlocks({
+        content,
+        hash,
+        kindFromNotionBlock,
+        localPageId,
+        notionBlocks,
+      });
+    }
+
+    const result = await replaceAllManagedBlocks({
       appendManagedBlocks,
       desiredBlocks,
       listAllBlockChildren,
@@ -158,18 +197,57 @@ export async function replaceManagedBlocks({
       notionBlocks,
       notionPageId,
       store,
-      content,
     });
+    await pruneExactRemoteDuplicates({
+      deleteManagedBlock,
+      desiredBlocks,
+      listAllBlockChildren,
+      localPageId,
+      notionPageId,
+      store,
+    });
+    return { ...result, content, baselineContent: content };
   }
 
   const remoteBlocks = await listAllBlockChildren(store, notionPageId);
   repairMappingsByContent(existingMappings, desiredBlocks, remoteBlocks, content);
   if (hasUnresolvedRemoteChanges(existingMappings, desiredBlocks, remoteBlocks)) {
-    throw createContentConflict(content, remoteBlocks, existingMappings, desiredBlocks);
+    throw createContentConflict(content, remoteBlocks, existingMappings, desiredBlocks, 'merge');
+  }
+  if (hasUnresolvedExactDuplicates(existingMappings, desiredBlocks, remoteBlocks)) {
+    if (notionBlocksToTiptapDocumentStrict(remoteBlocks)) {
+      throw createContentConflict(content, remoteBlocks, existingMappings, desiredBlocks, 'duplicates');
+    }
   }
 
+  let mergedContent = mergeRemoteOnlyChangesIntoContent(
+    content,
+    existingMappings,
+    desiredBlocks,
+    remoteBlocks,
+  );
+  mergedContent = appendRemoteOnlyAdditions(
+    mergedContent,
+    desiredBlocks,
+    remoteBlocks,
+    new Set(existingMappings.map((mapping) => mapping.notionBlockId).filter(isPresent)),
+  );
+  if (mergedContent !== content) {
+    content = mergedContent;
+    notionBlocks = tiptapDocumentToNotionBlocks(content);
+    desiredBlocks = desiredManagedBlocks({
+      content,
+      hash,
+      kindFromNotionBlock,
+      localPageId,
+      notionBlocks,
+    });
+    repairMappingsByContent(existingMappings, desiredBlocks, remoteBlocks, content);
+  }
+
+  let result: ManagedBlockResult;
   if (hasReorderedManagedBlocks(existingMappings, desiredBlocks)) {
-    return rebuildReorderedRange({
+    result = await rebuildReorderedRange({
       appendManagedBlocks,
       deleteManagedBlock,
       desiredBlocks,
@@ -180,20 +258,206 @@ export async function replaceManagedBlocks({
       notionPageId,
       store,
     });
+  } else {
+    result = await reconcileManagedBlocks({
+      appendManagedBlocks,
+      deleteManagedBlock,
+      desiredBlocks,
+      existingMappings,
+      listAllBlockChildren,
+      localPageId,
+      notionBlocks,
+      notionPageId,
+      store,
+      updateManagedBlock,
+    });
   }
 
-  return reconcileManagedBlocks({
-    appendManagedBlocks,
+  await pruneExactRemoteDuplicates({
     deleteManagedBlock,
     desiredBlocks,
-    existingMappings,
     listAllBlockChildren,
     localPageId,
-    notionBlocks,
     notionPageId,
     store,
-    updateManagedBlock,
   });
+
+  return { ...result, content, baselineContent: content };
+}
+
+/** Rehydrates comparison baselines from the locally stored last synced snapshot. */
+export function restoreLocalBlockBaseline(
+  mappings: BlockMapping[],
+  baselineContent: DocumentContent | undefined,
+  hash: HashValue,
+  kindFromNotionBlock: ClassifyBlock,
+  localPageId: string,
+  tiptapDocumentToNotionBlocks: ConvertDocument,
+): void {
+  if (!baselineContent) return;
+  const baselineBlocks = tiptapDocumentToNotionBlocks(baselineContent);
+  const desired = desiredManagedBlocks({
+    content: baselineContent,
+    hash,
+    kindFromNotionBlock,
+    localPageId,
+    notionBlocks: baselineBlocks,
+  });
+  const baselineById = new Map(desired.map((entry) => [entry.jottathingBlockId, entry]));
+  for (const mapping of mappings) {
+    const id = mapping.jottathingBlockId ?? mapping.localNodeId;
+    const baseline = baselineById.get(id);
+    if (!baseline) continue;
+    mapping.localBaselineAcknowledged = true;
+    mapping.newState = baseline.notionBlock;
+    mapping.lastSyncedHash = baseline.lastSyncedHash;
+  }
+}
+
+/** Adds remote-only children while leaving exact local/remote additions for deduplication. */
+function appendRemoteOnlyAdditions(
+  content: DocumentContent,
+  desiredBlocks: DesiredManagedBlock[],
+  remoteBlocks: NotionBlock[],
+  mappedRemoteIds: Set<string>,
+): DocumentContent {
+  const localSignatures = new Set(desiredBlocks.map((desired) =>
+    managedBlockSignature(desired.notionBlock),
+  ));
+  const additions = remoteBlocks.flatMap((remote) => {
+    if (
+      mappedRemoteIds.has(remote.id) ||
+      localSignatures.has(managedBlockSignature(remote))
+    ) return [];
+
+    const imported = notionBlocksToTiptapDocumentStrict([remote])?.content?.[0];
+    if (!imported) return [];
+    const uploadId = fileUploadIdFromBlock(remote);
+    return [{
+      ...imported,
+      attrs: {
+        ...imported.attrs,
+        jottathingBlockId: `notion-${remote.id}`,
+        notionBlockId: remote.id,
+        ...(uploadId ? { notionFileUploadId: uploadId, uploadState: 'done' } : {}),
+      },
+    }];
+  });
+
+  return additions.length
+    ? { ...content, type: content.type ?? 'doc', content: [...(content.content ?? []), ...additions] }
+    : content;
+}
+
+/** Removes redundant remote copies after a conflict-free reconciliation. */
+async function pruneExactRemoteDuplicates({
+  deleteManagedBlock,
+  desiredBlocks,
+  listAllBlockChildren,
+  localPageId,
+  notionPageId,
+  store,
+}: {
+  deleteManagedBlock: DeleteManagedBlock;
+  desiredBlocks: DesiredManagedBlock[];
+  listAllBlockChildren: ListAllBlockChildren;
+  localPageId: string;
+  notionPageId: string;
+  store: WorkerStore;
+}): Promise<void> {
+  const remoteBlocks = await listAllBlockChildren(store, notionPageId);
+  const mappings = store.blockMappings[localPageId] ?? [];
+  const mappedRemoteIds = new Set(mappings.map((mapping) => mapping.notionBlockId).filter(isPresent));
+  const desiredCapacity = new Map<string, number>();
+  for (const desired of desiredBlocks) {
+    const signature = managedBlockSignature(desired.notionBlock);
+    desiredCapacity.set(signature, (desiredCapacity.get(signature) ?? 0) + 1);
+  }
+  const mappedCapacity = new Map<string, number>();
+  for (const mapping of mappings) {
+    const remote = remoteBlocks.find((block) => block.id === mapping.notionBlockId);
+    if (!remote) continue;
+    const signature = managedBlockSignature(remote);
+    if (!desiredCapacity.has(signature)) continue;
+    mappedCapacity.set(signature, (mappedCapacity.get(signature) ?? 0) + 1);
+  }
+
+  for (const remote of remoteBlocks) {
+    if (mappedRemoteIds.has(remote.id)) continue;
+    const signature = managedBlockSignature(remote);
+    const capacity = desiredCapacity.get(signature) ?? 0;
+    if (capacity && (mappedCapacity.get(signature) ?? 0) >= capacity) {
+      await deleteManagedBlock(store, remote.id);
+    }
+  }
+}
+
+/** Imports remote-only edits into the local snapshot after the three-way check. */
+function mergeRemoteOnlyChangesIntoContent(
+  content: DocumentContent,
+  mappings: BlockMapping[],
+  desiredBlocks: DesiredManagedBlock[],
+  remoteBlocks: NotionBlock[],
+): DocumentContent {
+  const localNodes = content.content ?? [];
+  const desiredById = new Map(desiredBlocks.map((desired) => [desired.jottathingBlockId, desired]));
+  const remoteById = new Map(remoteBlocks.map((block) => [block.id, block]));
+  const removedNodeIndexes = new Set<number>();
+  const replacementsByIndex = new Map<number, DocumentContent>();
+  let changed = false;
+
+  for (const mapping of mappings) {
+    if (!mapping.newState) continue;
+    const blockId = mapping.jottathingBlockId ?? mapping.localNodeId;
+    const desired = desiredById.get(blockId);
+    const nodeIndex = desired?.order;
+    const local = nodeIndex === undefined ? undefined : localNodes[nodeIndex];
+    if (!desired || nodeIndex === undefined || !local) continue;
+
+    const remote = mapping.notionBlockId ? remoteById.get(mapping.notionBlockId) : undefined;
+    const baseSignature = managedBlockSignature(mapping.newState);
+    const localMatchesBase = localMediaMatchesBaseline(mapping, desired) ??
+      managedBlockSignature(desired.notionBlock) === baseSignature;
+
+    if (!remote && localMatchesBase) {
+      removedNodeIndexes.add(nodeIndex);
+      changed = true;
+      continue;
+    }
+    if (!remote || !localMatchesBase) continue;
+
+    const remoteMatchesBase = remoteMediaMatchesBaseline(mapping, desired, remote) ??
+      managedBlockSignature(remote) === baseSignature;
+    if (remoteMatchesBase) continue;
+
+    const imported = notionBlocksToTiptapDocumentStrict([remote])?.content?.[0];
+    if (!imported) continue;
+    const isMedia = imported.type === 'image' || imported.type === 'audio';
+    const uploadId = fileUploadIdFromBlock(remote) ?? fileUploadIdFromState(mapping.newState);
+    replacementsByIndex.set(nodeIndex, {
+      ...imported,
+      attrs: {
+        ...(isMedia ? local?.attrs : {}),
+        ...imported.attrs,
+        jottathingBlockId: blockId,
+        notionBlockId: remote.id,
+        ...(uploadId ? { notionFileUploadId: uploadId, uploadState: 'done' } : {}),
+      },
+    });
+    changed = true;
+  }
+
+  return changed
+    ? {
+        ...content,
+        type: content.type ?? 'doc',
+        content: localNodes.flatMap((node, index) =>
+          removedNodeIndexes.has(index)
+            ? []
+            : [replacementsByIndex.get(index) ?? node],
+        ),
+      }
+    : content;
 }
 
 /** Replaces all managed children after the user reviews and confirms the merged document. */
@@ -406,6 +670,17 @@ async function preserveRemoteBlocksAfterUserConflictResolution({
     previousBlockId = remote.id;
   }
 
+  const explicitlyDeletedIds = new Set(
+    Array.isArray(content.attrs?.jottathingDeleteNotionBlockIds)
+      ? content.attrs.jottathingDeleteNotionBlockIds.filter((id): id is string => typeof id === 'string')
+      : [],
+  );
+  for (const blockId of explicitlyDeletedIds) {
+    if (remoteById.has(blockId) && !usedRemoteIds.has(blockId)) {
+      await deleteManagedBlock(store, blockId);
+    }
+  }
+
   store.blockMappings[localPageId] = nextMappings.filter((mapping) => mapping.notionBlockId);
   return { createdBlocks, notionBlocks };
 }
@@ -498,6 +773,14 @@ function repairMappingsByContent(
       continue;
     }
 
+    // An existing Notion ID is the block's identity. Do not reassign a
+    // changed block to another equal-looking child; that can hide a real
+    // two-sided edit when a duplicate happens to exist nearby.
+    if (current) {
+      usedRemoteIds.add(current.id);
+      continue;
+    }
+
     const match = findUnclaimedRemoteBlock(
       remoteBlocks,
       usedRemoteIds,
@@ -515,31 +798,31 @@ function repairMappingsByContent(
     }
   }
 
+  // Remote-only additions imported into local content carry their Notion ID.
+  // Adopt those by identity, but do not pair unbased local additions by equal
+  // content here; the duplicate review pool must see those as separate blocks.
   for (const desired of desiredBlocks) {
     if (existingMappings.some((entry) =>
       (entry.jottathingBlockId ?? entry.localNodeId) === desired.jottathingBlockId,
     )) continue;
-
-    const match = findUnclaimedRemoteBlock(
-      remoteBlocks,
-      usedRemoteIds,
-      [managedBlockSignature(desired.notionBlock)],
-      desired.order,
-    );
-    if (!match) continue;
+    const node = content.content?.[desired.order];
+    const notionId = stringValue(node?.attrs?.notionBlockId);
+    const remote = notionId ? remoteById.get(notionId) : undefined;
+    if (!remote || usedRemoteIds.has(remote.id)) continue;
     existingMappings.push({
       localPageId: desired.localPageId,
       jottathingBlockId: desired.jottathingBlockId,
       localNodeId: desired.localNodeId,
-      notionBlockId: match.id,
+      notionBlockId: remote.id,
       kind: desired.kind,
       order: desired.order,
       lastSyncedHash: desired.lastSyncedHash,
       oldState: null,
-      newState: desired.notionBlock,
+      newState: remote as unknown as NotionBlockPayload,
     });
-    usedRemoteIds.add(match.id);
+    usedRemoteIds.add(remote.id);
   }
+
 }
 
 function findUnclaimedRemoteBlock(
@@ -561,47 +844,65 @@ function hasUnresolvedRemoteChanges(
 ): boolean {
   const desiredById = new Map(desiredBlocks.map((entry) => [entry.jottathingBlockId, entry]));
   const remoteById = new Map(remoteBlocks.map((block) => [block.id, block]));
-  const mappedIds = new Set<string>();
-  const desiredCapacity = new Map<string, number>();
-  for (const desired of desiredBlocks) {
-    const signature = managedBlockSignature(desired.notionBlock);
-    desiredCapacity.set(signature, (desiredCapacity.get(signature) ?? 0) + 1);
-  }
-  const alreadyMatchedDesired = new Map<string, number>();
 
   for (const mapping of mappings) {
-    if (!mapping.notionBlockId) continue;
-    const remote = remoteById.get(mapping.notionBlockId);
-    if (!remote) continue;
-    mappedIds.add(remote.id);
     const desired = desiredById.get(mapping.jottathingBlockId ?? mapping.localNodeId);
-    const baseSignature = mapping.newState ? managedBlockSignature(mapping.newState) : undefined;
-    const remoteSignature = managedBlockSignature(remote);
-    const desiredSignature = desired ? managedBlockSignature(desired.notionBlock) : undefined;
-    if (
-      !mappedMediaMatches(mapping, desired, remote) &&
-      remoteSignature !== baseSignature &&
-      remoteSignature !== desiredSignature
-    ) return true;
-    if (desiredSignature && remoteSignature === desiredSignature) {
-      alreadyMatchedDesired.set(desiredSignature, (alreadyMatchedDesired.get(desiredSignature) ?? 0) + 1);
-    }
-  }
+    const remote = mapping.notionBlockId
+      ? remoteById.get(mapping.notionBlockId)
+      : undefined;
+    const baseState = mapping.newState;
 
-  const availableDesired = new Map(
-    [...desiredCapacity].map(([signature, count]) => [
-      signature,
-      Math.max(0, count - (alreadyMatchedDesired.get(signature) ?? 0)),
-    ]),
-  );
-  for (const block of remoteBlocks) {
-    if (mappedIds.has(block.id)) continue;
-    const signature = managedBlockSignature(block);
-    const available = availableDesired.get(signature) ?? 0;
-    if (!available) return true;
-    availableDesired.set(signature, available - 1);
+    // Without a shared baseline we cannot say both sides edited the same
+    // block. Treat an unmatched new remote block as an addition; the merge
+    // pool handles exact duplicate additions separately.
+    if (!baseState) continue;
+
+    const baseSignature = managedBlockSignature(baseState);
+    const desiredSignature = desired ? managedBlockSignature(desired.notionBlock) : undefined;
+    const remoteSignature = remote ? managedBlockSignature(remote) : undefined;
+    const localMatchesBase = localMediaMatchesBaseline(mapping, desired);
+    const remoteMatchesBase = remote
+      ? remoteMediaMatchesBaseline(mapping, desired, remote)
+      : undefined;
+    const localChanged = !desired || localMatchesBase === false || (
+      localMatchesBase === undefined && desiredSignature !== baseSignature
+    );
+    const remoteChanged = !remote || remoteMatchesBase === false || (
+      remoteMatchesBase === undefined && remoteSignature !== baseSignature
+    );
+    const bothSidesAgree = (!desired && !remote) || Boolean(
+      desired && remote && (
+        mappedMediaMatches(mapping, desired, remote) || desiredSignature === remoteSignature
+      ),
+    );
+
+    if (localChanged && remoteChanged && !bothSidesAgree) return true;
   }
   return false;
+}
+
+/** Detects identical independent additions so the review pool can ask separately. */
+function hasUnresolvedExactDuplicates(
+  mappings: BlockMapping[],
+  desiredBlocks: DesiredManagedBlock[],
+  remoteBlocks: NotionBlock[],
+): boolean {
+  const mappingByLocalId = new Map(mappings.map((mapping) => [
+    mapping.jottathingBlockId ?? mapping.localNodeId,
+    mapping,
+  ]));
+  const mappedRemoteIds = new Set(
+    mappings.map((mapping) => mapping.notionBlockId).filter(isPresent),
+  );
+  const unbasedLocalSignatures = new Set(desiredBlocks.flatMap((desired) => {
+    const mapping = mappingByLocalId.get(desired.jottathingBlockId);
+    return !mapping?.newState ? [managedBlockSignature(desired.notionBlock)] : [];
+  }));
+
+  return remoteBlocks.some((remote) =>
+    !mappedRemoteIds.has(remote.id) &&
+    unbasedLocalSignatures.has(managedBlockSignature(remote)),
+  );
 }
 
 /** Matches imported Notion files whose temporary URL shape differs from the upload payload. */
@@ -674,6 +975,7 @@ function createContentConflict(
   remoteBlocks: NotionBlock[],
   mappings: BlockMapping[] = [],
   desiredBlocks: DesiredManagedBlock[] = [],
+  reason: 'merge' | 'duplicates' = 'merge',
 ): UnmappedNotionContentError {
   const remoteContent = notionBlocksToTiptapDocumentStrict(remoteBlocks);
   const localById = new Map(
@@ -742,15 +1044,15 @@ function createContentConflict(
     const remote = mapping.notionBlockId ? remoteByNotionId.get(mapping.notionBlockId) : undefined;
     const baseSignature = managedBlockSignature(mapping.newState);
     const localMatchesBase = localMediaMatchesBaseline(mapping, desired);
-    if (desired && (localMatchesBase === false || (
+    if (!desired || localMatchesBase === false || (
       localMatchesBase === undefined && managedBlockSignature(desired.notionBlock) !== baseSignature
-    ))) {
+    )) {
       localChangedBlockIds.push(blockId);
     }
     const remoteMatchesBase = remote ? remoteMediaMatchesBaseline(mapping, desired, remote) : undefined;
-    if (remote && (remoteMatchesBase === false || (
+    if (!remote || remoteMatchesBase === false || (
       remoteMatchesBase === undefined && managedBlockSignature(remote) !== baseSignature
-    ))) {
+    )) {
       remoteChangedBlockIds.push(blockId);
     }
   }
@@ -760,22 +1062,15 @@ function createContentConflict(
         .filter((mapping) => mapping.notionBlockId)
         .map((mapping) => [mapping.notionBlockId!, mapping.jottathingBlockId ?? mapping.localNodeId]),
     );
-    const desiredBySignature = new Map<string, string[]>();
-    for (const desired of desiredBlocks) {
-      const signature = managedBlockSignature(desired.notionBlock);
-      desiredBySignature.set(signature, [
-        ...(desiredBySignature.get(signature) ?? []),
-        desired.jottathingBlockId,
-      ]);
-    }
     remoteContent.content = remoteContent.content?.map((node, index) => {
       const notionId = remoteBlocks[index]?.id;
-      const signature = remoteBlocks[index] ? managedBlockSignature(remoteBlocks[index]) : '';
       const mapping = notionId ? mappingByRemoteId.get(notionId) : undefined;
       const blockId = notionId ? mappedIdByNotionId.get(notionId) : undefined;
-      const contentMatchedId = desiredBySignature.get(signature)?.shift();
       const fallbackState = mapping?.newState;
-      const nextId = blockId ?? contentMatchedId;
+      // Equal content is not identity. Keeping unmatched Notion blocks
+      // unpaired lets the conflict pool classify exact new duplicates as a
+      // separate duplicate choice instead of hiding them as shared blocks.
+      const nextId = blockId;
       const desired = nextId ? desiredByLocalId.get(nextId) : undefined;
       const remoteBlock = remoteBlocks[index];
       const baselineUploadId = mapping && remoteBlock &&
@@ -799,6 +1094,7 @@ function createContentConflict(
   }
   return new UnmappedNotionContentError({
     baseContent,
+    reason,
     localChangedBlockIds,
     remoteChangedBlockIds,
     localContent: normalizedLocalContent,
@@ -903,8 +1199,13 @@ function stringValue(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined;
 }
 
+function isPresent(value: string | undefined): value is string {
+  return Boolean(value);
+}
+
 /**
- * Reconciles an unmapped page without deleting untracked remote children.
+ * Adopts matching blocks and preserves unmatched remote additions when no
+ * last-synced baseline exists for a three-way conflict check.
  * @param options - Prepared desired state and Notion mutation dependencies.
  * @returns Newly created and outbound blocks.
  */
@@ -916,7 +1217,6 @@ async function replaceAllManagedBlocks({
   notionBlocks,
   notionPageId,
   store,
-  content,
 }: Pick<
   ReplaceManagedBlocksOptions,
   | 'appendManagedBlocks'
@@ -924,7 +1224,7 @@ async function replaceAllManagedBlocks({
   | 'localPageId'
   | 'notionPageId'
   | 'store'
-> & { content: DocumentContent; desiredBlocks: DesiredManagedBlock[]; notionBlocks: NotionBlockPayload[] }) {
+> & { desiredBlocks: DesiredManagedBlock[]; notionBlocks: NotionBlockPayload[] }) {
   const existingBlocks = await listAllBlockChildren(store, notionPageId);
 
   if (existingBlocks.length) {
@@ -936,7 +1236,6 @@ async function replaceAllManagedBlocks({
       notionBlocks,
       notionPageId,
       store,
-      content,
     });
   }
 
@@ -961,9 +1260,8 @@ async function replaceAllManagedBlocks({
 }
 
 /**
- * Adopts a matching remote snapshot without deleting untracked children.
- * If a remote child cannot be paired with the requested snapshot in order,
- * synchronization stops so the note can be reloaded or reviewed safely.
+ * Adopts blocks with matching content while preserving unmatched remote additions.
+ * With no saved baseline, those additions cannot be classified as conflicts.
  */
 async function reconcileUnmappedChildren({
   appendManagedBlocks,
@@ -973,7 +1271,6 @@ async function reconcileUnmappedChildren({
   notionBlocks,
   notionPageId,
   store,
-  content,
 }: {
   appendManagedBlocks: AppendManagedBlocks;
   desiredBlocks: DesiredManagedBlock[];
@@ -982,23 +1279,21 @@ async function reconcileUnmappedChildren({
   notionBlocks: NotionBlockPayload[];
   notionPageId: string;
   store: WorkerStore;
-  content: DocumentContent;
 }) {
   const matchedByOrder = new Map<number, NotionBlock>();
-  let nextDesiredIndex = 0;
 
   for (const existingBlock of existingBlocks) {
     const signature = managedBlockSignature(existingBlock);
     const matchIndex = desiredBlocks.findIndex((desired, index) =>
-      index >= nextDesiredIndex && managedBlockSignature(desired.notionBlock) === signature,
+      !matchedByOrder.has(index) && managedBlockSignature(desired.notionBlock) === signature,
     );
 
-    if (matchIndex < 0) {
-      throw createContentConflict(content, existingBlocks, [], desiredBlocks);
-    }
+    // Without a saved block baseline, an unmatched remote child is an
+    // independent addition. Keep it in Notion and sync the local blocks
+    // alongside it instead of claiming both sides edited the same block.
+    if (matchIndex < 0) continue;
 
     matchedByOrder.set(matchIndex, existingBlock);
-    nextDesiredIndex = matchIndex + 1;
   }
 
   const createdByOrder: Array<NotionBlock | undefined> = [];

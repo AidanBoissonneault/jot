@@ -216,6 +216,7 @@ export function createProjectDatabaseHelpers({
           ? {
               ...project,
               stateContent: stateSync.content,
+              stateSyncBaselineContent: stateSync.baselineContent ?? stateSync.content,
               stateRemoteRevision: stateSync.lastEditedTime,
             }
           : {

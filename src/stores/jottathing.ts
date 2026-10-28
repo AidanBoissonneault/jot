@@ -23,6 +23,7 @@ import type {
   ProjectPage,
   SaveStatus,
   SyncConfig,
+  Workspace,
 } from '@/src/types/capture';
 import type {
   CaptureSelectionPayload,
@@ -41,6 +42,11 @@ export const useJottathingStore = defineStore('jottathing', () => {
   const pages = ref<ProjectPage[]>([]);
   const currentPage = ref<ProjectPage>();
   const currentProjectId = ref<string>('');
+  const currentWorkspaceId = ref<string>('');
+  const workspaces = ref<Workspace[]>([]);
+  const workspaceMenuProjects = ref<Project[]>([]);
+  const workspaceMenuPagesByProject = ref<Record<string, ProjectPage[]>>({});
+  const workspaceMenuPageLoads = ref<string[]>([]);
   const errorMessage = ref<string>('');
   const isLoading = ref(true);
   const isCheckingSync = ref(false);
@@ -68,10 +74,72 @@ export const useJottathingStore = defineStore('jottathing', () => {
   let syncEventsSource: EventSource | undefined;
   let stopQueueListener: (() => void) | undefined;
   let remoteReloadPending = false;
+  let remoteReloadInFlight: Promise<boolean> | undefined;
+  let remoteReloadRetryAfter = 0;
+  let remoteReloadFailureAccountKey = '';
+  let workspaceMenuAccountKey = '';
 
   const currentProject = computed(() =>
     projects.value.find((project) => project.id === currentProjectId.value),
   );
+  const currentWorkspace = computed(() =>
+    workspaces.value.find((workspace) => workspace.id === currentWorkspaceId.value),
+  );
+
+  function getWorkspaceMenuAccountKey() {
+    return `${syncConfig.value.userId ?? ''}::${syncConfig.value.workspaceId ?? ''}::${Boolean(syncConfig.value.authenticated)}`;
+  }
+
+  async function refreshWorkspaceMenuTree() {
+    const requestAccountKey = getWorkspaceMenuAccountKey();
+    const [nextWorkspaces, nextProjects, nextWorkspaceId] = await Promise.all([
+      notionClient.listWorkspaces(),
+      notionClient.listWorkspaceProjects(),
+      notionClient.getCurrentWorkspaceId(),
+    ]);
+    if (getWorkspaceMenuAccountKey() !== requestAccountKey) return;
+
+    const accountChanged = workspaceMenuAccountKey !== requestAccountKey;
+    if (accountChanged) workspaceMenuPageLoads.value = [];
+    const cachedProjectIds = !accountChanged
+      ? Object.keys(workspaceMenuPagesByProject.value)
+      : [];
+    const nextPages: Record<string, ProjectPage[]> = {};
+    await Promise.all(cachedProjectIds.map(async (projectId) => {
+      if (!nextProjects.some((project) => project.id === projectId)) return;
+      nextPages[projectId] = await notionClient.listProjectPages(projectId);
+    }));
+    if (getWorkspaceMenuAccountKey() !== requestAccountKey) return;
+
+    workspaceMenuAccountKey = requestAccountKey;
+    workspaces.value = nextWorkspaces;
+    currentWorkspaceId.value = nextWorkspaceId;
+    workspaceMenuProjects.value = nextProjects;
+    workspaceMenuPagesByProject.value = nextPages;
+    projects.value = nextProjects.filter((project) => project.workspaceId === nextWorkspaceId);
+  }
+
+  async function loadWorkspaceMenuPages(projectId: string) {
+    if (workspaceMenuPagesByProject.value[projectId]) return;
+    if (workspaceMenuPageLoads.value.includes(projectId)) return;
+
+    const requestAccountKey = getWorkspaceMenuAccountKey();
+    workspaceMenuPageLoads.value = [...workspaceMenuPageLoads.value, projectId];
+    try {
+      const projectPages = await notionClient.listProjectPages(projectId);
+      if (
+        getWorkspaceMenuAccountKey() === requestAccountKey &&
+        workspaceMenuProjects.value.some((project) => project.id === projectId)
+      ) {
+        workspaceMenuPagesByProject.value = {
+          ...workspaceMenuPagesByProject.value,
+          [projectId]: projectPages,
+        };
+      }
+    } finally {
+      workspaceMenuPageLoads.value = workspaceMenuPageLoads.value.filter((id) => id !== projectId);
+    }
+  }
 
   async function initialize() {
     if (initializationPromise) return initializationPromise;
@@ -96,9 +164,11 @@ export const useJottathingStore = defineStore('jottathing', () => {
 
     try {
       syncConfig.value = await notionClient.getSyncConfig();
+      await refreshWorkspaceMenuTree();
       isOnline.value = typeof navigator === 'undefined' || navigator.onLine !== false;
       stopQueueListener ??= onSyncQueueChange(() => {
         void refreshPendingSyncCount();
+        void refreshWorkspaceMenuTree().catch(() => undefined);
       });
       const [pendingCount, localProjects, storedProjectId] = await Promise.all([
         notionClient.pendingSyncEventCount(),
@@ -139,8 +209,18 @@ export const useJottathingStore = defineStore('jottathing', () => {
   async function initializeRemoteWorkspace() {
     let reloadDiscoveredPagesAfterQueueDrain = false;
     let sessionVerified = true;
+    const previousAccountId = syncConfig.value.userId;
+    const previousWorkspaceId = syncConfig.value.workspaceId;
+    const previousAuthenticated = syncConfig.value.authenticated;
     try {
       syncConfig.value = await notionClient.refreshSyncSession();
+      if (
+        syncConfig.value.userId !== previousAccountId ||
+        syncConfig.value.workspaceId !== previousWorkspaceId ||
+        syncConfig.value.authenticated !== previousAuthenticated
+      ) {
+        await refreshWorkspaceFromStorage();
+      }
     } catch (error) {
       sessionVerified = false;
       syncCheckError.value = error instanceof Error
@@ -188,18 +268,7 @@ export const useJottathingStore = defineStore('jottathing', () => {
       if (isOnline.value && syncConfig.value.connected) {
         pendingSyncCount.value = await notionClient.pendingSyncEventCount();
         if (pendingSyncCount.value === 0) {
-          try {
-            const reloaded = await notionClient.reloadFromNotion({ force: true });
-            applyReloadedSnapshot(reloaded);
-            stalePageIds.value = [];
-            aheadPageIds.value = [];
-            refreshedFromRemoteSnapshot = true;
-          } catch (error) {
-            remoteReloadPending = true;
-            errorMessage.value = error instanceof Error
-              ? `Couldn't refresh the Notion workspace. ${error.message}`
-              : "Couldn't refresh the Notion workspace.";
-          }
+          refreshedFromRemoteSnapshot = await reloadRemoteWorkspaceWhenSafe();
         } else {
           // Keep remote inventory refresh pending while local edits finish syncing.
           reloadDiscoveredPagesAfterQueueDrain = true;
@@ -241,13 +310,149 @@ export const useJottathingStore = defineStore('jottathing', () => {
   }
 
   async function selectProject(projectId: string) {
-    if (projectId === currentProjectId.value) {
-      return;
+    const targetProject = workspaceMenuProjects.value.find((project) => project.id === projectId);
+    const targetWorkspaceId = targetProject?.workspaceId;
+    if (targetWorkspaceId && targetWorkspaceId !== currentWorkspaceId.value) {
+      await notionClient.setCurrentWorkspaceId(targetWorkspaceId);
+      currentWorkspaceId.value = targetWorkspaceId;
+      projects.value = await notionClient.listProjects();
     }
+    if (projectId === currentProjectId.value) return;
 
     currentProjectId.value = projectId;
     await notionClient.setCurrentProjectId(projectId);
     await loadCurrentPage();
+  }
+
+  async function selectWorkspace(workspaceId: string) {
+    if (!workspaceId || workspaceId === currentWorkspaceId.value) return;
+    await notionClient.setCurrentWorkspaceId(workspaceId);
+    currentWorkspaceId.value = workspaceId;
+    projects.value = await notionClient.listProjects();
+    currentProjectId.value = await notionClient.getCurrentProjectId();
+    await loadCurrentPage();
+  }
+
+  async function createLocalWorkspace(name: string) {
+    const workspace = await notionClient.createLocalWorkspace(name);
+    await refreshWorkspaceMenuTree();
+    currentWorkspaceId.value = workspace.id;
+    currentProjectId.value = await notionClient.getCurrentProjectId();
+    await loadCurrentPage();
+    return workspace;
+  }
+
+  async function renameLocalWorkspace(workspaceId: string, name: string) {
+    saveStatus.value = 'saving';
+    errorMessage.value = '';
+    try {
+      await notionClient.renameLocalWorkspace(workspaceId, name);
+      await refreshWorkspaceMenuTree();
+      saveStatus.value = 'saved';
+    } catch (error) {
+      errorMessage.value = error instanceof Error ? error.message : 'Unable to rename this workspace.';
+      saveStatus.value = 'error';
+      throw error;
+    }
+  }
+
+  async function moveProjectToWorkspace(projectId: string, destinationWorkspaceId: string) {
+    if (!projectId || !destinationWorkspaceId) return;
+    saveStatus.value = 'saving';
+    errorMessage.value = '';
+    try {
+      await notionClient.moveProjectToWorkspace(projectId, destinationWorkspaceId);
+      await refreshWorkspaceFromStorage();
+      saveStatus.value = 'saved';
+    } catch (error) {
+      await refreshWorkspaceFromStorage().catch(() => undefined);
+      errorMessage.value = error instanceof Error ? error.message : 'Unable to move this project.';
+      saveStatus.value = 'error';
+    }
+  }
+
+  async function moveCurrentProjectToWorkspace(destinationWorkspaceId: string) {
+    if (!currentProjectId.value) return;
+    await moveProjectToWorkspace(currentProjectId.value, destinationWorkspaceId);
+  }
+
+  async function movePageToProject(
+    pageId: string,
+    projectId: string,
+    targetPageId?: string,
+    position: 'before' | 'after' = 'after',
+  ) {
+    if (!pageId || !projectId) return;
+    saveStatus.value = 'saving';
+    errorMessage.value = '';
+    try {
+      await notionClient.movePageToProject(pageId, projectId, targetPageId, position);
+      await refreshWorkspaceFromStorage();
+      saveStatus.value = 'saved';
+    } catch (error) {
+      await refreshWorkspaceFromStorage().catch(() => undefined);
+      errorMessage.value = error instanceof Error ? error.message : 'Unable to move this page.';
+      saveStatus.value = 'error';
+    }
+  }
+
+  async function deleteLocalWorkspace(workspaceId: string) {
+    saveStatus.value = 'saving';
+    errorMessage.value = '';
+    try {
+      await notionClient.deleteLocalWorkspace(workspaceId);
+      await refreshWorkspaceFromStorage();
+      saveStatus.value = 'saved';
+    } catch (error) {
+      errorMessage.value = error instanceof Error ? error.message : 'Unable to delete this workspace.';
+      saveStatus.value = 'error';
+    }
+  }
+
+  async function archiveProjectById(projectId: string) {
+    const targetProject = workspaceMenuProjects.value.find((project) => project.id === projectId);
+    if (!targetProject) return;
+    saveStatus.value = 'saving';
+    errorMessage.value = '';
+    try {
+      const result = await notionClient.archiveProject(projectId);
+      await refreshWorkspaceMenuTree();
+      if (targetProject.workspaceId === currentWorkspaceId.value && projectId === currentProjectId.value) {
+        currentProjectId.value = result.currentProjectId;
+        projects.value = await notionClient.listProjects();
+        await loadCurrentPage();
+      }
+      saveStatus.value = 'saved';
+    } catch (error) {
+      await refreshWorkspaceMenuTree().catch(() => undefined);
+      errorMessage.value = error instanceof Error ? error.message : 'Unable to delete this project.';
+      saveStatus.value = 'error';
+    }
+  }
+
+  async function archivePageById(pageId: string) {
+    const targetPage = Object.values(workspaceMenuPagesByProject.value)
+      .flat()
+      .find((page) => page.id === pageId);
+    if (!targetPage) return;
+    saveStatus.value = 'saving';
+    errorMessage.value = '';
+    try {
+      const replacementPage = await notionClient.archiveProjectPage(pageId);
+      await refreshWorkspaceMenuTree();
+      if (targetPage.projectId === currentProjectId.value) {
+        pages.value = await notionClient.listProjectPages(targetPage.projectId);
+        if (currentPage.value?.id === pageId) {
+          currentPage.value = replacementPage;
+          applyPageSyncState(replacementPage);
+        }
+      }
+      saveStatus.value = 'saved';
+    } catch (error) {
+      await refreshWorkspaceMenuTree().catch(() => undefined);
+      errorMessage.value = error instanceof Error ? error.message : 'Unable to delete this page.';
+      saveStatus.value = 'error';
+    }
   }
 
   async function createProject(name: string) {
@@ -255,6 +460,7 @@ export const useJottathingStore = defineStore('jottathing', () => {
 
     try {
       const creation = await notionClient.createProject(name);
+      void refreshWorkspaceMenuTree().catch(() => undefined);
       projects.value = [...projects.value, creation.project];
       pages.value = [creation.page];
       currentProjectId.value = creation.project.id;
@@ -266,6 +472,7 @@ export const useJottathingStore = defineStore('jottathing', () => {
         const wasViewingPage = currentPage.value?.id === creation.page.id;
 
         projects.value = await notionClient.listProjects();
+        void refreshWorkspaceMenuTree().catch(() => undefined);
         if (wasViewingProject) {
           currentProjectId.value = project.id;
         }
@@ -620,9 +827,11 @@ export const useJottathingStore = defineStore('jottathing', () => {
 
     try {
       currentPage.value = await notionClient.archiveProjectPage(currentPage.value.id);
+      await refreshWorkspaceMenuTree();
       await loadProjectPages();
       applyPageSyncState(currentPage.value);
     } catch (error) {
+      await refreshWorkspaceFromStorage().catch(() => undefined);
       errorMessage.value =
         error instanceof Error ? error.message : 'Unable to archive this page.';
       saveStatus.value = 'error';
@@ -774,26 +983,51 @@ export const useJottathingStore = defineStore('jottathing', () => {
     return nextPage;
   }
 
-  async function reloadRemoteWorkspaceWhenSafe(): Promise<void> {
-    if (!syncConfig.value.connected || !isOnline.value) return;
-    if (await notionClient.pendingSyncEventCount() > 0) {
+  async function reloadRemoteWorkspaceWhenSafe(): Promise<boolean> {
+    if (!syncConfig.value.connected || !isOnline.value) return false;
+    const accountKey = getWorkspaceMenuAccountKey();
+    if (remoteReloadFailureAccountKey !== accountKey) {
+      remoteReloadFailureAccountKey = accountKey;
+      remoteReloadRetryAfter = 0;
+    }
+    if (remoteReloadInFlight) return remoteReloadInFlight;
+    if (Date.now() < remoteReloadRetryAfter) {
       remoteReloadPending = true;
-      return;
+      return false;
     }
 
-    remoteReloadPending = false;
+    const reloadPromise = (async () => {
+      try {
+        if (await notionClient.pendingSyncEventCount() > 0) {
+          remoteReloadPending = true;
+          return false;
+        }
+
+        remoteReloadPending = false;
+        const reloaded = await notionClient.reloadFromNotion({ force: true });
+        applyReloadedSnapshot(reloaded);
+        stalePageIds.value = [];
+        aheadPageIds.value = [];
+        syncCheckError.value = '';
+        remoteReloadRetryAfter = 0;
+        await loadCurrentPage();
+        return true;
+      } catch (error) {
+        remoteReloadPending = true;
+        remoteReloadFailureAccountKey = getWorkspaceMenuAccountKey();
+        remoteReloadRetryAfter = Date.now() + 30_000;
+        syncCheckError.value = error instanceof Error
+          ? error.message
+          : 'Unable to load the latest Notion content.';
+        return false;
+      }
+    })();
+    remoteReloadInFlight = reloadPromise;
+
     try {
-      const reloaded = await notionClient.reloadFromNotion({ force: true });
-      applyReloadedSnapshot(reloaded);
-      stalePageIds.value = [];
-      aheadPageIds.value = [];
-      syncCheckError.value = '';
-      await loadCurrentPage();
-    } catch (error) {
-      remoteReloadPending = true;
-      syncCheckError.value = error instanceof Error
-        ? error.message
-        : 'Unable to load the latest Notion content.';
+      return await reloadPromise;
+    } finally {
+      if (remoteReloadInFlight === reloadPromise) remoteReloadInFlight = undefined;
     }
   }
 
@@ -835,7 +1069,17 @@ export const useJottathingStore = defineStore('jottathing', () => {
 
   async function refreshSyncSession(allowSignedOut = false, syncAfterRefresh = true) {
     try {
+      const previousAccountId = syncConfig.value.userId;
+      const previousWorkspaceId = syncConfig.value.workspaceId;
+      const previousAuthenticated = syncConfig.value.authenticated;
       syncConfig.value = await notionClient.refreshSyncSession(allowSignedOut);
+      if (
+        syncConfig.value.userId !== previousAccountId ||
+        syncConfig.value.workspaceId !== previousWorkspaceId ||
+        syncConfig.value.authenticated !== previousAuthenticated
+      ) {
+        await refreshWorkspaceFromStorage();
+      }
       syncCheckError.value = '';
       if (syncConfig.value.connected && syncAfterRefresh) {
         const preparedLocalWorkspace = await notionClient.prepareLocalWorkspaceForFirstSync();
@@ -915,7 +1159,7 @@ export const useJottathingStore = defineStore('jottathing', () => {
   }
 
   async function refreshWorkspaceFromStorage() {
-    projects.value = await notionClient.listProjects();
+    await refreshWorkspaceMenuTree();
     const storedProjectId = await notionClient.getCurrentProjectId();
     const nextProjectId = projects.value.some((project) => project.id === storedProjectId)
       ? storedProjectId
@@ -934,7 +1178,17 @@ export const useJottathingStore = defineStore('jottathing', () => {
     isOnline.value = true;
 
     try {
+      const previousAccountId = syncConfig.value.userId;
+      const previousWorkspaceId = syncConfig.value.workspaceId;
+      const previousAuthenticated = syncConfig.value.authenticated;
       syncConfig.value = await notionClient.refreshSyncSession();
+      if (
+        syncConfig.value.userId !== previousAccountId ||
+        syncConfig.value.workspaceId !== previousWorkspaceId ||
+        syncConfig.value.authenticated !== previousAuthenticated
+      ) {
+        await refreshWorkspaceFromStorage();
+      }
       syncCheckError.value = '';
       if (syncConfig.value.connected) {
         await notionClient.prepareLocalWorkspaceForFirstSync();
@@ -957,6 +1211,11 @@ export const useJottathingStore = defineStore('jottathing', () => {
   }
 
   async function logout(): Promise<boolean> {
+    isLoading.value = false;
+    isCheckingSync.value = false;
+    isLoadingNotionParentPages.value = false;
+    syncCheckError.value = '';
+    remoteReloadPending = false;
     syncConfig.value = stripStoredSyncCredentials({
       ...syncConfig.value,
       authenticated: false,
@@ -998,7 +1257,10 @@ export const useJottathingStore = defineStore('jottathing', () => {
       selectedDatabaseTitle: undefined,
       selectedDataSourceId: undefined,
     };
-    saveStatus.value = 'stale';
+    await refreshWorkspaceFromStorage();
+    isLoading.value = false;
+    isCheckingSync.value = false;
+    saveStatus.value = 'idle';
     errorMessage.value = !logoutResult.serverDataCleanupComplete
       ? logoutResult.syncConfig.logoutCleanupPending
         ? 'You are signed out on this device, but server logout is still pending. Retry logout cleanup when the server is available.'
@@ -1031,7 +1293,10 @@ export const useJottathingStore = defineStore('jottathing', () => {
         selectedDatabaseTitle: undefined,
         selectedDataSourceId: undefined,
       };
-      saveStatus.value = 'stale';
+      await refreshWorkspaceFromStorage();
+      isLoading.value = false;
+      isCheckingSync.value = false;
+      saveStatus.value = 'idle';
       errorMessage.value = !result.serverDataCleanupComplete
         ? result.syncConfig.logoutCleanupPending
           ? 'Server logout is still pending. Keep your documents on this device and retry when online.'
@@ -1138,11 +1403,71 @@ export const useJottathingStore = defineStore('jottathing', () => {
   }
 
   function applyPageSyncState(page: ProjectPage) {
-    const project = currentProject.value;
-    if (project?.syncState === 'error') {
-      saveStatus.value = 'error';
-      errorMessage.value = project.syncMessage ?? '';
-      return;
+    const syncStateRank: Record<string, number> = {
+      error: 5,
+      stale: 4,
+      saving: 3,
+      creating: 2,
+      saved: 1,
+      idle: 0,
+    };
+    const cachedProjectPages = workspaceMenuPagesByProject.value[page.projectId];
+    const knownProjectPages = page.projectId === currentProjectId.value
+      ? pages.value
+      : cachedProjectPages ?? [];
+    const projectPages = [
+      ...knownProjectPages.filter((storedPage) => storedPage.id !== page.id),
+      page,
+    ].filter((storedPage) => storedPage.status !== 'archived');
+    const worstPage = projectPages.slice().sort((first, second) =>
+      (syncStateRank[second.syncState ?? 'saved'] ?? 0) -
+      (syncStateRank[first.syncState ?? 'saved'] ?? 0),
+    )[0];
+    const pageProject = workspaceMenuProjects.value.find((entry) => entry.id === page.projectId) ??
+      projects.value.find((entry) => entry.id === page.projectId);
+    if (pageProject) {
+      let projectSyncState = worstPage?.syncState;
+      let projectSyncMessage = worstPage?.syncMessage;
+      const hasCompletePageList = page.projectId === currentProjectId.value || cachedProjectPages !== undefined;
+      if (!hasCompletePageList &&
+        (syncStateRank[pageProject.syncState ?? 'saved'] ?? 0) >
+          (syncStateRank[page.syncState ?? 'saved'] ?? 0)) {
+        projectSyncState = pageProject.syncState;
+        projectSyncMessage = pageProject.syncMessage;
+      }
+      const updatedProject = {
+        ...pageProject,
+        syncState: projectSyncState ?? pageProject.syncState,
+        syncMessage: projectSyncMessage,
+      };
+      workspaceMenuProjects.value = workspaceMenuProjects.value.map((entry) =>
+        entry.id === updatedProject.id ? updatedProject : entry,
+      );
+      projects.value = projects.value.map((entry) =>
+        entry.id === updatedProject.id ? updatedProject : entry,
+      );
+      const workspaceProjects = workspaceMenuProjects.value.filter((entry) =>
+        entry.workspaceId === pageProject.workspaceId && entry.status !== 'archived',
+      );
+      const worstProject = workspaceProjects.slice().sort((first, second) =>
+        (syncStateRank[second.syncState ?? 'saved'] ?? 0) -
+        (syncStateRank[first.syncState ?? 'saved'] ?? 0),
+      )[0];
+      workspaces.value = workspaces.value.map((workspace) => workspace.id === pageProject.workspaceId
+        ? {
+            ...workspace,
+            syncState: worstProject?.syncState,
+            syncMessage: worstProject?.syncMessage,
+          }
+        : workspace);
+    }
+    if (cachedProjectPages) {
+      workspaceMenuPagesByProject.value = {
+        ...workspaceMenuPagesByProject.value,
+        [page.projectId]: cachedProjectPages.map((storedPage) =>
+          storedPage.id === page.id ? page : storedPage,
+        ),
+      };
     }
 
     saveStatus.value = page.syncState ?? 'saved';
@@ -1153,15 +1478,26 @@ export const useJottathingStore = defineStore('jottathing', () => {
   }
 
   function applyProjectOrPageSyncState(project: Project, page?: ProjectPage) {
-    const status = project.syncState === 'error'
-      ? 'error'
-      : page?.syncState ?? project.syncState ?? 'saved';
+    const menuProject = workspaceMenuProjects.value.find((entry) => entry.id === project.id);
+    const projectStatus = menuProject?.syncState ?? 'saved';
+    const projectMessage = menuProject?.syncMessage;
+    const pageScopedProject = {
+      ...project,
+      syncState: projectStatus,
+      syncMessage: projectMessage,
+    };
+    projects.value = projects.value.map((entry) =>
+      entry.id === project.id ? pageScopedProject : entry,
+    );
+    workspaceMenuProjects.value = workspaceMenuProjects.value.map((entry) =>
+      entry.id === project.id ? pageScopedProject : entry,
+    );
+    const status = page?.syncState ?? projectStatus;
+    const message = page?.syncMessage ?? projectMessage;
     saveStatus.value = status;
     errorMessage.value =
       status === 'error' || status === 'stale'
-        ? project.syncState === 'error'
-          ? project.syncMessage ?? ''
-          : page?.syncMessage ?? project.syncMessage ?? ''
+        ? message ?? ''
         : '';
   }
 
@@ -1221,8 +1557,12 @@ export const useJottathingStore = defineStore('jottathing', () => {
 
   function applyReloadedSnapshot(reloaded: Awaited<ReturnType<typeof notionClient.reloadFromNotion>>) {
     syncConfig.value = reloaded.syncConfig;
-    projects.value = reloaded.projects;
-    currentProjectId.value = reloaded.currentProjectId;
+    projects.value = reloaded.projects.filter((project) => project.workspaceId === currentWorkspaceId.value);
+    currentProjectId.value = projects.value.some((project) => project.id === currentProjectId.value)
+      ? currentProjectId.value
+      : projects.value.some((project) => project.id === reloaded.currentProjectId)
+        ? reloaded.currentProjectId
+        : projects.value[0]?.id ?? '';
     pages.value = reloaded.pages.filter(
       (page) => page.projectId === currentProjectId.value && page.status !== 'archived',
     );
@@ -1296,11 +1636,25 @@ export const useJottathingStore = defineStore('jottathing', () => {
   return {
     archiveCurrentProject,
     archiveCurrentPage,
+    archiveProjectById,
+    archivePageById,
     createProject,
     createPage,
+    createLocalWorkspace,
+    renameLocalWorkspace,
+    deleteLocalWorkspace,
+    selectWorkspace,
+    moveCurrentProjectToWorkspace,
+    moveProjectToWorkspace,
+    movePageToProject,
     currentPage,
     currentProject,
     currentProjectId,
+    currentWorkspace,
+    currentWorkspaceId,
+    workspaceMenuProjects,
+    workspaceMenuPagesByProject,
+    workspaceMenuPageLoads,
     createNotionParentPage,
     errorMessage,
     initialize,
@@ -1320,7 +1674,10 @@ export const useJottathingStore = defineStore('jottathing', () => {
     pages,
     pendingSyncCount,
     refreshWorkspaceFromStorage,
+    refreshWorkspaceMenuTree,
+    loadWorkspaceMenuPages,
     projects,
+    workspaces,
     registerCaptureInsertHandler,
     registerCurrentProjectSource,
     renameCurrentProject,
@@ -1340,8 +1697,8 @@ export const useJottathingStore = defineStore('jottathing', () => {
     confirmReloadPage,
     dismissStalePage,
     selectPage,
-    selectNotionParentPage,
     selectProject,
+    selectNotionParentPage,
     startRuntimeListener,
     syncConfig,
     syncCheckError,

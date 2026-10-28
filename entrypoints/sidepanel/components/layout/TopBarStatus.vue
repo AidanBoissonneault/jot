@@ -1,14 +1,12 @@
 <script setup lang="ts">
-/** Shows synchronization status and account/workspace identity. */
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+/** Shows workspace identity and compact shortcuts to pages with conflicts. */
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import type { TopBarContext } from './topBarContext';
 import ProjectHeaderControls from './ProjectHeaderControls.vue';
 
 const props = defineProps<{ context: TopBarContext }>();
 const context = props.context;
-const { syncBadgeClass, syncBadgeHoverTitle, saveLabel, accountLabel, workspaceLabel } = context;
 const statusRoot = ref<HTMLElement | null>(null);
-const conflictMenu = ref<HTMLElement | null>(null);
 const isConflictMenuOpen = ref(false);
 
 type PageConflictLink = {
@@ -37,16 +35,9 @@ const pageConflicts = computed(() => {
   }
   return [...unique.values()];
 });
-const statusTitle = computed(() => pageConflicts.value.length
-  ? `${syncBadgeHoverTitle.value} · Right-click for conflict shortcuts.`
-  : syncBadgeHoverTitle.value);
 
-async function openConflictMenu(event: MouseEvent | KeyboardEvent) {
-  if (!pageConflicts.value.length) return;
-  event.preventDefault();
-  isConflictMenuOpen.value = true;
-  await nextTick();
-  conflictMenu.value?.querySelector<HTMLButtonElement>('button')?.focus();
+function toggleConflictMenu() {
+  isConflictMenuOpen.value = !isConflictMenuOpen.value;
 }
 
 function closeConflictMenu() {
@@ -64,7 +55,7 @@ function handleOutsidePointerDown(event: PointerEvent) {
 function handleDocumentKeyDown(event: KeyboardEvent) {
   if (event.key === 'Escape' && isConflictMenuOpen.value) {
     closeConflictMenu();
-    statusRoot.value?.querySelector<HTMLElement>('.sync-badge')?.focus();
+    statusRoot.value?.querySelector<HTMLButtonElement>('.topbar-conflicts-button')?.focus();
   }
 }
 
@@ -94,30 +85,25 @@ onBeforeUnmount(() => {
 
 <template>
   <div ref="statusRoot" class="topbar-status">
-    <div
-      :class="syncBadgeClass"
-      :title="statusTitle"
-      role="status"
-      tabindex="0"
-      :aria-busy="context.store.isLoading || context.store.isCheckingSync"
-      :aria-haspopup="pageConflicts.length ? 'menu' : undefined"
-      :aria-expanded="pageConflicts.length ? isConflictMenuOpen : undefined"
-      :aria-controls="pageConflicts.length ? 'sync-conflict-menu' : undefined"
-      :aria-label="statusTitle"
-      @contextmenu="openConflictMenu"
-      @keydown.enter.space="openConflictMenu"
-    >
-      <span class="sync-dot" aria-hidden="true" />
-      <span class="sync-label">{{ saveLabel }}</span>
+    <div class="topbar-meta">
+      <ProjectHeaderControls :context="context" />
     </div>
+    <button
+      v-if="pageConflicts.length"
+      type="button"
+      class="topbar-conflicts-button"
+      :aria-expanded="isConflictMenuOpen"
+      aria-controls="sync-conflict-menu"
+      @click="toggleConflictMenu"
+    >
+      Conflicts ({{ pageConflicts.length }})
+    </button>
     <div
       v-if="isConflictMenuOpen"
       id="sync-conflict-menu"
-      ref="conflictMenu"
       class="sync-conflict-menu"
       role="menu"
       aria-label="Pages with merge conflicts"
-      @contextmenu.stop.prevent
     >
       <div class="sync-conflict-menu-heading" role="presentation">
         Pages with merge conflicts
@@ -132,26 +118,14 @@ onBeforeUnmount(() => {
         <div class="sync-conflict-menu-page">{{ conflict.pageTitle }}</div>
         <div class="sync-conflict-menu-project">{{ conflict.projectName }}</div>
         <div class="sync-conflict-menu-actions">
-          <button
-            type="button"
-            role="menuitem"
-            @click="openConflictProject(conflict)"
-          >
+          <button type="button" role="menuitem" @click="openConflictProject(conflict)">
             Open project
           </button>
-          <button
-            type="button"
-            role="menuitem"
-            @click="openConflictPage(conflict)"
-          >
+          <button type="button" role="menuitem" @click="openConflictPage(conflict)">
             Open page
           </button>
         </div>
       </div>
-    </div>
-    <div class="topbar-meta">
-      <ProjectHeaderControls :context="context" />
-      <small>{{ accountLabel }} / {{ workspaceLabel }}</small>
     </div>
   </div>
 </template>
