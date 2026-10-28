@@ -48,11 +48,152 @@ export const JottathingImage = Image.extend({
       const uploadState = String(node.attrs.uploadState ?? 'idle');
       let currentNode = node;
       let isRefreshing = false;
+      let imageElement: HTMLImageElement | null = null;
+      let previewOverlay: HTMLElement | null = null;
+      let closePreview: (restoreFocus?: boolean) => void = () => undefined;
+
+      const controls = document.createElement('div');
+      controls.className = 'jottathing-image-controls';
+      controls.setAttribute('role', 'group');
+      controls.setAttribute('aria-label', 'Image actions');
+      const title = document.createElement('span');
+      title.className = 'jottathing-image-title';
+      const deleteButton = document.createElement('button');
+      deleteButton.className = 'jottathing-image-delete';
+      deleteButton.type = 'button';
+      deleteButton.textContent = 'Delete';
+      deleteButton.setAttribute('aria-label', 'Delete image');
+      deleteButton.title = 'Delete image';
+      controls.append(title, deleteButton);
+      applyImageTitle(wrapper, title, currentNode.attrs);
+      applyImageBlockId(wrapper, currentNode.attrs.jottathingBlockId);
+
+      const selectImage = (event?: Event) => {
+        const pos = typeof getPos === 'function' ? getPos() : undefined;
+
+        if (typeof pos !== 'number') return;
+        event?.preventDefault();
+        editor.view.focus();
+        editor.view.dispatch(
+          editor.view.state.tr.setSelection(NodeSelection.create(editor.view.state.doc, pos)),
+        );
+      };
+
+      const onDeleteImage = (event: MouseEvent) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const pos = typeof getPos === 'function' ? getPos() : undefined;
+        if (typeof pos !== 'number') return;
+        editor.view.dispatch(editor.view.state.tr.delete(pos, pos + currentNode.nodeSize));
+        editor.view.focus();
+      };
+
+      const onPreviewKeyDown = (event: KeyboardEvent) => {
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          closePreview();
+        } else if (event.key === 'Tab') {
+          event.preventDefault();
+          previewOverlay?.querySelector<HTMLButtonElement>('.jottathing-image-preview-close')?.focus();
+        }
+      };
+
+      const onPreviewDocumentKeyDown = (event: KeyboardEvent) => {
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          closePreview();
+        } else if (event.key === 'Tab' && previewOverlay) {
+          event.preventDefault();
+          previewOverlay.querySelector<HTMLButtonElement>('.jottathing-image-preview-close')?.focus();
+        }
+      };
+
+      const openImagePreview = () => {
+        if (!imageElement || previewOverlay || !imageElement.src) return;
+        const ownerDocument = wrapper.ownerDocument;
+        const overlay = ownerDocument.createElement('div');
+        overlay.className = 'jottathing-image-preview-overlay';
+        overlay.setAttribute('role', 'dialog');
+        overlay.setAttribute('aria-modal', 'true');
+        overlay.setAttribute('aria-label', `Image preview: ${imageDisplayTitle(currentNode.attrs)}`);
+
+        const preview = ownerDocument.createElement('img');
+        preview.className = 'jottathing-image-preview';
+        preview.src = imageElement.currentSrc || imageElement.src;
+        preview.alt = String(currentNode.attrs.alt ?? imageDisplayTitle(currentNode.attrs));
+        preview.draggable = false;
+
+        const caption = ownerDocument.createElement('div');
+        caption.className = 'jottathing-image-preview-caption';
+        caption.textContent = imageDisplayTitle(currentNode.attrs);
+
+        const closeButton = ownerDocument.createElement('button');
+        closeButton.className = 'jottathing-image-preview-close';
+        closeButton.type = 'button';
+        closeButton.textContent = 'Close';
+        closeButton.setAttribute('aria-label', 'Close image preview');
+        const finishPreview = (_restoreFocus = true) => {
+          ownerDocument.removeEventListener('keydown', onPreviewDocumentKeyDown);
+          overlay.removeEventListener('keydown', onPreviewKeyDown);
+          overlay.remove();
+          previewOverlay = null;
+          if (_restoreFocus && imageElement?.isConnected) imageElement.focus();
+        };
+        closePreview = finishPreview;
+        closeButton.addEventListener('click', () => finishPreview());
+        overlay.addEventListener('click', (event) => {
+          if (event.target === overlay) finishPreview();
+        });
+        overlay.addEventListener('keydown', onPreviewKeyDown);
+        ownerDocument.addEventListener('keydown', onPreviewDocumentKeyDown);
+        overlay.append(closeButton, preview, caption);
+        ownerDocument.body.appendChild(overlay);
+        previewOverlay = overlay;
+        closeButton.focus();
+      };
+
+      const onClick = (event: MouseEvent) => {
+        const target = event.target;
+        if (target instanceof Element && target.closest('.jottathing-image-controls')) return;
+        selectImage(event);
+        if (imageElement && target === imageElement) openImagePreview();
+      };
+
+      const onImageKeyDown = (event: KeyboardEvent) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
+        event.stopPropagation();
+        selectImage();
+        openImagePreview();
+      };
+
+      const onDeleteClick = (event: MouseEvent) => onDeleteImage(event);
+      deleteButton.addEventListener('click', onDeleteClick);
+
+      const stopNodeViewEvent = (event: Event) => {
+        const target = event.target;
+        return target instanceof Element && Boolean(
+          target.closest('.jottathing-image-resize-handle, .jottathing-image-controls'),
+        );
+      };
 
       if (uploadState === 'error') {
         wrapper.classList.add('is-error');
-        wrapper.textContent = 'Image was not synced. Drop it again to upload it to Notion.';
-        return { dom: wrapper };
+        const error = document.createElement('span');
+        error.className = 'jottathing-image-error-message';
+        error.textContent = 'Image was not synced. Drop it again to upload it to Notion.';
+        wrapper.append(error, controls);
+        wrapper.addEventListener('click', onClick);
+        return {
+          dom: wrapper,
+          selectNode() { wrapper.classList.add('is-selected'); },
+          deselectNode() { wrapper.classList.remove('is-selected'); },
+          stopEvent: stopNodeViewEvent,
+          destroy() {
+            wrapper.removeEventListener('click', onClick);
+            deleteButton.removeEventListener('click', onDeleteClick);
+          },
+        };
       }
 
       if (uploadState === 'uploading') {
@@ -60,7 +201,13 @@ export const JottathingImage = Image.extend({
       }
 
       const img = document.createElement('img');
+      imageElement = img;
       img.draggable = false;
+      img.tabIndex = 0;
+      img.setAttribute('role', 'button');
+      img.setAttribute('aria-haspopup', 'dialog');
+      img.setAttribute('aria-label', `Preview image: ${imageDisplayTitle(currentNode.attrs)}`);
+      img.addEventListener('keydown', onImageKeyDown);
       img.src = String(node.attrs.src ?? '');
       if (node.attrs.alt) img.alt = node.attrs.alt;
       if (node.attrs.title) img.title = node.attrs.title;
@@ -142,28 +289,11 @@ export const JottathingImage = Image.extend({
       img.addEventListener('error', onImageError);
 
       wrapper.appendChild(img);
+      wrapper.appendChild(controls);
       const resizeHandle = document.createElement('span');
       resizeHandle.className = 'jottathing-image-resize-handle';
       resizeHandle.setAttribute('aria-hidden', 'true');
       wrapper.appendChild(resizeHandle);
-
-      const selectImage = (event?: Event) => {
-        const pos = typeof getPos === 'function' ? getPos() : undefined;
-
-        if (typeof pos !== 'number') {
-          return;
-        }
-
-        event?.preventDefault();
-        editor.view.focus();
-        editor.view.dispatch(
-          editor.view.state.tr.setSelection(NodeSelection.create(editor.view.state.doc, pos)),
-        );
-      };
-
-      const onClick = (event: MouseEvent) => {
-        selectImage(event);
-      };
 
       const onDragStart = (event: DragEvent) => {
         const pos = typeof getPos === 'function' ? getPos() : undefined;
@@ -233,7 +363,6 @@ export const JottathingImage = Image.extend({
       wrapper.addEventListener('dragstart', onDragStart, true);
       img.addEventListener('dragstart', onDragStart, true);
       resizeHandle.addEventListener('pointerdown', onResizePointerDown);
-      applyImageBlockId(wrapper, currentNode.attrs.jottathingBlockId);
 
       return {
         dom: wrapper,
@@ -253,26 +382,34 @@ export const JottathingImage = Image.extend({
 
           currentNode = nextNode;
           applyImageBlockId(wrapper, nextNode.attrs.jottathingBlockId);
+          applyImageTitle(wrapper, title, nextNode.attrs);
           applyImageUploadState(wrapper, String(nextNode.attrs.uploadState ?? 'idle'));
           restoreImageElement(wrapper, img);
           const nextSrc = String(nextNode.attrs.src ?? '');
           if (img.getAttribute('src') !== nextSrc) img.src = nextSrc;
           img.alt = String(nextNode.attrs.alt ?? '');
           img.title = String(nextNode.attrs.title ?? '');
+          img.setAttribute('aria-label', `Preview image: ${imageDisplayTitle(nextNode.attrs)}`);
+          const preview = previewOverlay?.querySelector<HTMLImageElement>('.jottathing-image-preview');
+          if (preview && preview.src !== nextSrc) preview.src = nextSrc;
+          const caption = previewOverlay?.querySelector<HTMLElement>('.jottathing-image-preview-caption');
+          if (caption) caption.textContent = imageDisplayTitle(nextNode.attrs);
+          previewOverlay?.setAttribute(
+            'aria-label',
+            `Image preview: ${imageDisplayTitle(nextNode.attrs)}`,
+          );
           applyImageWidth(wrapper, img, nextNode.attrs.width);
           return true;
         },
-        stopEvent(event) {
-          return (
-            event.target instanceof Element &&
-            event.target.closest('.jottathing-image-resize-handle') !== null
-          );
-        },
+        stopEvent: stopNodeViewEvent,
         destroy() {
+          closePreview(false);
           wrapper.removeEventListener('click', onClick);
           wrapper.removeEventListener('dragstart', onDragStart, true);
           img.removeEventListener('error', onImageError);
+          img.removeEventListener('keydown', onImageKeyDown);
           img.removeEventListener('dragstart', onDragStart, true);
+          deleteButton.removeEventListener('click', onDeleteClick);
           resizeHandle.removeEventListener('pointerdown', onResizePointerDown);
         },
       };
@@ -501,12 +638,29 @@ function applyImageBlockId(wrapper: HTMLElement, value: unknown) {
   if (blockId) {
     wrapper.setAttribute('data-jottathing-block-id', blockId);
     wrapper.setAttribute('data-jottathing-image-block-id', blockId);
-    wrapper.title = blockId;
   } else {
     wrapper.removeAttribute('data-jottathing-block-id');
     wrapper.removeAttribute('data-jottathing-image-block-id');
-    wrapper.removeAttribute('title');
   }
+}
+
+function imageDisplayTitle(attrs: Record<string, unknown>): string {
+  const value = [attrs.title, attrs.alt, attrs.filename]
+    .find((candidate) => typeof candidate === 'string' && candidate.trim());
+  if (typeof value !== 'string') return 'Image';
+  const filename = value.split(/[\\/]/).pop()?.trim() ?? value.trim();
+  return filename || 'Image';
+}
+
+function applyImageTitle(
+  wrapper: HTMLElement,
+  label: HTMLElement,
+  attrs: Record<string, unknown>,
+) {
+  const displayTitle = imageDisplayTitle(attrs);
+  wrapper.dataset.jottathingImageTitle = displayTitle;
+  wrapper.title = displayTitle;
+  label.textContent = displayTitle;
 }
 
 function clamp(value: number, min: number, max: number) {

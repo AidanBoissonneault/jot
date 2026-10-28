@@ -288,6 +288,15 @@
   border-radius: 4px;
 }
 
+.editor .tiptap .jottathing-image-wrapper > img {
+  cursor: zoom-in;
+}
+
+.editor .tiptap .jottathing-image-wrapper > img:focus-visible {
+  outline: 2px solid var(--jottathing-accent);
+  outline-offset: 3px;
+}
+
 .editor .tiptap .jottathing-image-wrapper {
   margin: 0 0 0.85rem;
   max-width: 100%;
@@ -304,7 +313,7 @@
   background: var(--jottathing-accent);
   border-radius: 4px;
   color: var(--jottathing-surface);
-  content: attr(data-jottathing-block-id);
+  content: attr(data-jottathing-image-title);
   font-size: 0.68rem;
   left: 0;
   line-height: 1.25;
@@ -315,6 +324,124 @@
   text-overflow: ellipsis;
   top: -1.45rem;
   white-space: nowrap;
+}
+
+.editor .tiptap .jottathing-image-wrapper .jottathing-image-controls {
+  align-items: center;
+  background: var(--jottathing-surface);
+  border: 1px solid var(--jottathing-border-strong);
+  border-radius: 8px;
+  box-shadow: 0 3px 12px rgba(15, 23, 42, 0.2);
+  display: flex;
+  gap: 8px;
+  max-width: calc(100% - 12px);
+  opacity: 0;
+  padding: 4px 5px 4px 9px;
+  pointer-events: none;
+  position: absolute;
+  right: 6px;
+  top: 6px;
+  transform: translateY(-3px);
+  transition: opacity 120ms ease, transform 120ms ease;
+  z-index: 2;
+}
+
+.editor .tiptap .jottathing-image-wrapper:hover .jottathing-image-controls,
+.editor .tiptap .jottathing-image-wrapper.is-selected .jottathing-image-controls,
+.editor .tiptap .jottathing-image-wrapper:focus-within .jottathing-image-controls {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
+}
+
+.editor .tiptap .jottathing-image-title {
+  color: var(--jottathing-text);
+  font-size: 0.76rem;
+  font-weight: 650;
+  max-width: min(32ch, 42vw);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.editor .tiptap .jottathing-image-delete {
+  align-items: center;
+  background: #fff1f2;
+  border: 1px solid #fecdd3;
+  border-radius: 6px;
+  color: #be123c;
+  cursor: pointer;
+  display: inline-flex;
+  font: inherit;
+  font-size: 0.76rem;
+  font-weight: 700;
+  justify-content: center;
+  min-height: 28px;
+  padding: 0 8px;
+}
+
+.editor .tiptap .jottathing-image-delete:hover,
+.editor .tiptap .jottathing-image-delete:focus-visible {
+  background: #ffe4e6;
+  border-color: #fb7185;
+  outline: 2px solid #fb7185;
+  outline-offset: 1px;
+}
+
+.jottathing-image-preview-overlay {
+  align-items: center;
+  background: rgba(15, 23, 42, 0.88);
+  display: flex;
+  flex-direction: column;
+  inset: 0;
+  justify-content: center;
+  padding: 56px 24px 24px;
+  position: fixed;
+  z-index: 2147483647;
+}
+
+.jottathing-image-preview {
+  border-radius: 6px;
+  box-shadow: 0 12px 44px rgba(0, 0, 0, 0.38);
+  height: auto;
+  max-height: calc(100vh - 132px);
+  max-width: min(94vw, 1500px);
+  object-fit: contain;
+  width: auto;
+}
+
+.jottathing-image-preview-caption {
+  color: white;
+  font-size: 0.9rem;
+  margin-top: 10px;
+  max-width: min(80vw, 48rem);
+  overflow-wrap: anywhere;
+  text-align: center;
+}
+
+.jottathing-image-preview-close {
+  background: var(--jottathing-surface);
+  border: 1px solid var(--jottathing-border-strong);
+  border-radius: 8px;
+  color: var(--jottathing-text);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+  min-height: 38px;
+  padding: 0 12px;
+  position: absolute;
+  right: 16px;
+  top: 16px;
+}
+
+.jottathing-image-preview-close:focus-visible {
+  outline: 2px solid white;
+  outline-offset: 3px;
+}
+
+.editor .tiptap .jottathing-image-error-message {
+  display: block;
+  padding: 5px 4px;
 }
 
 .editor .tiptap .jottathing-image-wrapper .jottathing-image-resize-handle {
@@ -343,6 +470,18 @@
   color: var(--jottathing-muted);
   padding: 10px;
   font-size: 0.86rem;
+}
+
+.editor .tiptap .jottathing-image-wrapper.is-error .jottathing-image-controls {
+  bottom: 6px;
+  max-width: calc(100% - 12px);
+  top: auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .editor .tiptap .jottathing-image-controls {
+    transition: none;
+  }
 }
 
 .editor .tiptap .jottathing-image-wrapper a {
