@@ -9,6 +9,18 @@ function jsonResponse(payload: unknown, status = 200): Response {
 }
 
 describe('Notion request retry policy', () => {
+  test('preserves the Notion HTTP method on API errors for safe diagnostics', async () => {
+    const request = createNotionRequester({
+      fetchImpl: vi.fn(async () => jsonResponse({ code: 'validation_error' }, 400)) as typeof fetch,
+      sleep: vi.fn(async () => undefined),
+    });
+
+    await expect(request(store, '/pages/page-id'))
+      .rejects.toMatchObject({ method: 'GET', endpoint: '/pages/page-id', status: 400 });
+    await expect(request(store, '/pages/page-id', { method: 'PATCH', body: { properties: {} } }))
+      .rejects.toMatchObject({ method: 'PATCH', endpoint: '/pages/page-id', status: 400 });
+  });
+
   test('does not replay a block-create PATCH after an ambiguous server error', async () => {
     const fetchImpl = vi.fn(async () => jsonResponse({ code: 'internal_server_error' }, 500));
     const request = createNotionRequester({

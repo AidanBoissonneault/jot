@@ -62,6 +62,7 @@ export class NotionApiError extends Error {
   readonly code: string | undefined;
   readonly endpoint: string;
   readonly isNotionApiError = true;
+  readonly method: string;
   readonly retryAfter: number | undefined;
   readonly status: number;
 
@@ -79,6 +80,7 @@ export class NotionApiError extends Error {
     code: string | undefined,
     retryAfter: number | undefined,
     endpoint: string,
+    method: string,
   ) {
     super(message);
     this.name = 'NotionApiError';
@@ -86,6 +88,7 @@ export class NotionApiError extends Error {
     this.code = code;
     this.retryAfter = retryAfter;
     this.endpoint = endpoint;
+    this.method = method;
   }
 }
 
@@ -204,7 +207,7 @@ export function createNotionRequester({
           return notionObject(payload);
         }
 
-        const error = createNotionError(response, payload, endpoint);
+        const error = createNotionError(response, payload, endpoint, method);
 
         const rateLimited = error.status === 429 && error.code === 'rate_limited';
         if (
@@ -419,13 +422,19 @@ function createRateLimiter({
  * @param payload - Untrusted JSON response body.
  * @returns A normalized Notion API error.
  */
-function createNotionError(response: Response, payload: unknown, endpoint: string): NotionApiError {
+function createNotionError(
+  response: Response,
+  payload: unknown,
+  endpoint: string,
+  method: string,
+): NotionApiError {
   return new NotionApiError(
     stringProperty(payload, 'message') ?? `Notion returned ${response.status}.`,
     response.status,
     stringProperty(payload, 'code'),
     retryAfterHeader(response),
     endpoint,
+    method,
   );
 }
 

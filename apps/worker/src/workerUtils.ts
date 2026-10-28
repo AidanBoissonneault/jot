@@ -131,6 +131,7 @@ export function notionApiErrorResponse(
   const notionError = error as {
     code?: unknown;
     endpoint?: unknown;
+    method?: unknown;
     status?: unknown;
   };
   const endpoint = typeof notionError.endpoint === 'string'
@@ -139,9 +140,13 @@ export function notionApiErrorResponse(
         .replace(/[0-9a-f]{32}/gi, ':id')
         .slice(0, 160)
     : 'unknown';
+  const method = typeof notionError.method === 'string' && /^[A-Z]{3,7}$/.test(notionError.method)
+    ? notionError.method
+    : 'unknown';
   console.error(JSON.stringify({
     event: 'notion_api_request_failed',
     workerRoute: context.req.path,
+    method,
     endpoint,
     status: notionError.status,
     code: notionError.code,
