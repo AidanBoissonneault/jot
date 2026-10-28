@@ -8,7 +8,7 @@ import {
   listPendingSyncOps,
 } from '@/src/services/syncQueue';
 import { useJottathingStore } from '@/src/stores/jottathing';
-import type { DocumentContent, Project, ProjectPage, SyncConfig } from '@/src/types/capture';
+import type { DocumentContent, Project, ProjectPage, SyncConfig, Workspace } from '@/src/types/capture';
 import type { SyncBlockOperation } from '@/src/types/sync';
 import { readBrowserStorage, resetBrowserStorage } from './setup';
 import { doc, paragraph, image } from './helpers/docBuilders';
@@ -122,6 +122,57 @@ describe('optimistic project creation', () => {
     expect(store.currentPage?.id).toMatch(/^temp-page-/);
     expect(store.projects.at(-1)?.name).toBe('Roadmap');
     expect(store.saveStatus).toBe('creating');
+  });
+
+  test('applies an immediate rename to the durable project ID after creation settles', async () => {
+    const projectSync = deferred<Response>();
+    const fetchMock = vi.fn(() => projectSync.promise);
+    vi.stubGlobal('fetch', fetchMock);
+    const workspace: Workspace = {
+      id: 'workspace-notion-notion%3Atest-user-unknown',
+      name: 'Notion',
+      kind: 'notion',
+      accountId: 'notion:test-user',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    };
+    resetBrowserStorage({
+      activePageIdsByProject: { [baseProject.id]: basePage.id },
+      currentProjectId: baseProject.id,
+      currentWorkspaceId: workspace.id,
+      hasMigratedCapturesToPages: true,
+      pages: [basePage],
+      projects: [baseProject],
+      syncConfig: connectedConfig,
+      workspaces: [workspace],
+    });
+    const store = useJottathingStore();
+    await seedStore(store);
+    await notionClient.setCurrentWorkspaceId(workspace.id);
+    store.currentWorkspaceId = workspace.id;
+    store.workspaces = [workspace];
+    await store.createProject('Untitled Project');
+    const temporaryProjectId = store.currentProjectId;
+    const rename = store.renameCurrentProject('My Project');
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    await flushPromises(5);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    projectSync.resolve(jsonResponse({ status: 'saved', queued: true, versions: {} }));
+    await rename;
+    await waitFor(() => {
+      const requests = fetchMock.mock.calls as unknown as Array<[string, RequestInit]>;
+      expect(requests.filter(([url]) => url.endsWith('/sync/project'))).toHaveLength(2);
+    });
+
+    const requests = fetchMock.mock.calls as unknown as Array<[string, RequestInit]>;
+    const projectBodies = requests
+      .filter(([url]) => url.endsWith('/sync/project'))
+      .map(([, init]) => JSON.parse(String(init.body)) as { project: Project });
+    expect(projectBodies[0]?.project.id).not.toBe(temporaryProjectId);
+    expect(projectBodies[1]?.project.id).toBe(projectBodies[0]?.project.id);
+    expect(projectBodies[1]?.project.name).toBe('My Project');
   });
 
   test('reconciles temp ids and preserves a project switch during sync', async () => {

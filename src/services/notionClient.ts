@@ -1954,7 +1954,29 @@ function requireActiveProject(projects: Project[], projectId: string): Project {
   return project;
 }
 
-async function saveProjectUpdate(projects: Project[], projectId: string, updatedProject: Project): Promise<Project> {
+async function saveProjectUpdate(
+  projects: Project[],
+  projectId: string,
+  updates: Partial<Project>,
+): Promise<Project> {
+  const inFlightReconciliation = projectReconciliations.get(projectId);
+  let resolvedProjectId = projectIdAliases.get(projectId) ?? projectId;
+  if (inFlightReconciliation) {
+    resolvedProjectId = await inFlightReconciliation;
+  }
+
+  if (resolvedProjectId !== projectId || inFlightReconciliation) {
+    // Project edits can arrive while the optimistic project is being assigned
+    // its durable ID. Wait for that migration, then apply only the user's
+    // changed fields to the latest stored project to avoid creating a second
+    // Notion row with the temporary ID or overwriting freshly synced state.
+    const latest = await readStorage();
+    projects = latest.projects;
+    projectId = resolvedProjectId;
+  }
+
+  const currentProject = requireActiveProject(projects, projectId);
+  const updatedProject = touchProject(currentProject, updates);
   await writeStorage({
     projects: projects
       .map((project) => (project.id === projectId ? updatedProject : project))
@@ -1976,6 +1998,24 @@ async function saveProjectUpdate(projects: Project[], projectId: string, updated
       .sort(sortProjectsByUpdatedDesc),
   });
   return savedProject;
+}
+
+/** Resolves optimistic project IDs before applying user edits. */
+async function projectForUpdate(projectId: string): Promise<{
+  projectId: string;
+  projects: Project[];
+}> {
+  const reconciliation = projectReconciliations.get(projectId);
+  const aliasedProjectId = projectIdAliases.get(projectId);
+  if (!reconciliation && !aliasedProjectId) {
+    return { projectId, projects: (await readStorage()).projects };
+  }
+
+  const resolvedProjectId = reconciliation
+    ? await reconciliation
+    : aliasedProjectId!;
+  const { projects } = await readStorage();
+  return { projectId: resolvedProjectId, projects };
 }
 
 async function saveProjectSourceUpdate(
@@ -3844,10 +3884,11 @@ export const notionClient = {
   },
 
   async renameProject(projectId: string, name: string): Promise<Project> {
-    const { projects } = await readStorage();
-    const project = requireActiveProject(projects, projectId);
-    const updatedProject = touchProject(project, { name: name.trim() || 'Untitled Project' });
-    return saveProjectUpdate(projects, projectId, updatedProject);
+    const resolved = await projectForUpdate(projectId);
+    requireActiveProject(resolved.projects, resolved.projectId);
+    return saveProjectUpdate(resolved.projects, resolved.projectId, {
+      name: name.trim() || 'Untitled Project',
+    });
   },
 
   async archiveProject(projectId: string): Promise<{ currentProjectId: string; project: Project }> {
@@ -3929,13 +3970,12 @@ export const notionClient = {
     projectId: string,
     metadata: { category?: string; stateContent?: DocumentContent },
   ): Promise<Project> {
-    const { projects } = await readStorage();
-    const project = requireActiveProject(projects, projectId);
-    const updatedProject = touchProject(project, {
-      category: metadata.category?.trim() ?? project.category,
-      stateContent: metadata.stateContent ?? project.stateContent,
+    const resolved = await projectForUpdate(projectId);
+    requireActiveProject(resolved.projects, resolved.projectId);
+    return saveProjectUpdate(resolved.projects, resolved.projectId, {
+      ...(metadata.category !== undefined ? { category: metadata.category.trim() } : {}),
+      ...(metadata.stateContent !== undefined ? { stateContent: metadata.stateContent } : {}),
     });
-    return saveProjectUpdate(projects, projectId, updatedProject);
   },
 
   async addProjectSource(
