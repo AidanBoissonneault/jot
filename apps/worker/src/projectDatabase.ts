@@ -6,6 +6,7 @@
 
 import {
   isArchivedAncestorError,
+  isArchivedBlockEditError,
   isArchivedObject,
   pageSummaryFromNotionPage,
   projectStateKey,
@@ -228,10 +229,15 @@ export function createProjectDatabaseHelpers({
         }
         if (page.is_archived === true) restoreBody.is_archived = false;
         if (Object.keys(restoreBody).length) {
-          page = await notionRequest(store, `/pages/${page.id}`, {
-            method: 'PATCH',
-            body: restoreBody,
-          });
+          try {
+            page = await notionRequest(store, `/pages/${page.id}`, {
+              method: 'PATCH',
+              body: restoreBody,
+            });
+          } catch (error) {
+            if (!isArchivedBlockEditError(error)) throw error;
+            page = await recreateArchivedProjectRow(store, database, project, page);
+          }
         }
       }
 
@@ -239,7 +245,12 @@ export function createProjectDatabaseHelpers({
         page = await createProjectDatabasePage(store, database.dataSourceId, project);
         appendLog(store, 'project_database_page_created', project.name || 'Untitled Project');
       } else {
-        page = await updateProjectDatabasePage(store, page.id, database.dataSourceId, project);
+        try {
+          page = await updateProjectDatabasePage(store, page.id, database.dataSourceId, project);
+        } catch (error) {
+          if (!isArchivedBlockEditError(error) || project.status === 'archived') throw error;
+          page = await recreateArchivedProjectRow(store, database, project, page);
+        }
       }
 
       const stateSync = syncState && project.status !== 'archived'
@@ -274,6 +285,26 @@ export function createProjectDatabaseHelpers({
         isForcedMerge,
       });
     }
+  }
+
+  /** Creates an active replacement when a mapped Notion project row cannot be edited. */
+  async function recreateArchivedProjectRow(
+    store: WorkerStore,
+    database: JottathingDatabase,
+    project: Project,
+    archivedPage: NotionObject,
+  ): Promise<NotionObject> {
+    if (store.projectPages?.[project.id]?.notionPageId === archivedPage.id) {
+      delete store.projectPages[project.id];
+    }
+    appendLog(
+      store,
+      'project_database_archived_row_repaired',
+      'Created a new active project row after Notion rejected the archived row.',
+    );
+    const replacement = await createProjectDatabasePage(store, database.dataSourceId, project);
+    appendLog(store, 'project_database_page_created', project.name || 'Untitled Project');
+    return replacement;
   }
 
   /** Rebuilds local state from Notion. @param store - Worker state. @param options - Parent selection. @returns Imported state. */

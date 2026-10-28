@@ -51,8 +51,11 @@ export function registerSyncQueryRoutes(app: Hono<{ Bindings: WorkerEnv }>): voi
 
     if (!pageId) {
       try {
-        const pendingCount = await pendingSyncQueuePayloadCount(store.installationId);
-        return c.json({ hasPending: pendingCount > 0, pendingCount });
+        const [pendingCount, failedCount] = await Promise.all([
+          pendingSyncQueuePayloadCount(store.installationId),
+          failedSyncQueuePayloadCount(store.installationId),
+        ]);
+        return c.json({ hasPending: pendingCount > 0, pendingCount, failedCount });
       } catch {
         return c.json({ error: 'Unable to read queued synchronization status.' }, 500);
       }
@@ -326,6 +329,7 @@ export async function hasPendingSyncQueuePayload(installationId: string | number
     .select('id')
     .eq('installation_id', installationId)
     .eq('status', 'pending')
+    .is('payload->>deadLetteredAt', null)
     .limit(1);
   if (error) throw new Error('Unable to read queued synchronization status.');
   return Boolean(data?.length);
@@ -337,7 +341,20 @@ export async function pendingSyncQueuePayloadCount(installationId: string | numb
     .from('jottathing_sync_queue_payloads')
     .select('id', { count: 'exact', head: true })
     .eq('installation_id', installationId)
-    .eq('status', 'pending');
+    .eq('status', 'pending')
+    .is('payload->>deadLetteredAt', null);
   if (error) throw new Error('Unable to read queued synchronization status.');
+  return count ?? 0;
+}
+
+/** Counts retained permanent failures separately from work still being processed. */
+export async function failedSyncQueuePayloadCount(installationId: string | number): Promise<number> {
+  const { count, error } = await supabase
+    .from('jottathing_sync_queue_payloads')
+    .select('id', { count: 'exact', head: true })
+    .eq('installation_id', installationId)
+    .eq('status', 'pending')
+    .not('payload->>deadLetteredAt', 'is', null);
+  if (error) throw new Error('Unable to read failed synchronization status.');
   return count ?? 0;
 }

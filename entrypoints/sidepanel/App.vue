@@ -618,6 +618,10 @@ async function resync() {
     } else {
       uiMessage.value = 'Up to date with Notion.';
     }
+    if (result.failedUploadCount > 0) {
+      const uploadWarning = `${result.failedUploadCount} Notion upload${result.failedUploadCount === 1 ? ' needs' : 's need'} attention. Other sync work continued; your local notes remain saved.`;
+      uiMessage.value = [uiMessage.value, uploadWarning].filter(Boolean).join(' ');
+    }
   } catch (error) {
     uiMessage.value = error instanceof Error
       ? error.message

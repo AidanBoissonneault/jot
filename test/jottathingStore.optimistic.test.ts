@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { nextTick } from 'vue';
 import { applySyncResult, notionClient } from '@/src/services/notionClient';
 import {
+  addPendingProjectSyncEvent,
   compactPendingSyncOps,
   listPendingProjectSyncEvents,
   listPendingSyncOps,
@@ -771,6 +772,7 @@ describe('project metadata', () => {
       notionPageId: 'notion-page-server-only',
     };
     const fetchMock = vi.fn(async (url: string) => {
+      if (String(url).endsWith('/sync/retry')) return jsonResponse({ requeuedCount: 0 });
       if (String(url).endsWith('/sync/validate')) {
         return jsonResponse({
           aheadPageIds: [],
@@ -813,6 +815,7 @@ describe('project metadata', () => {
 
   test('manual resync reloads the Notion workspace even when validation reports no changes', async () => {
     const fetchMock = vi.fn(async (url: string) => {
+      if (String(url).endsWith('/sync/retry')) return jsonResponse({ requeuedCount: 0 });
       if (String(url).endsWith('/sync/validate')) {
         return jsonResponse({
           aheadPageIds: [],
@@ -841,10 +844,47 @@ describe('project metadata', () => {
     expect(result.reloadedFromNotion).toBe(true);
     expect(result.remoteReloadPending).toBe(false);
     expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
+      'http://localhost:8787/sync/retry',
+      'http://localhost:8787/sync/status',
       'http://localhost:8787/sync/validate',
+      'http://localhost:8787/sync/status',
       'http://localhost:8787/sync/status',
       'http://localhost:8787/sync/reload',
     ]);
+  });
+
+  test('manual resync continues project state delivery when a parked upload exists', async () => {
+    await addPendingProjectSyncEvent(baseProject);
+    const fetchMock = vi.fn(async (url: string) => {
+      if (String(url).endsWith('/sync/retry')) return jsonResponse({ requeuedCount: 0 });
+      if (String(url).endsWith('/sync/status')) {
+        return jsonResponse({ hasPending: false, pendingCount: 0, failedCount: 1 });
+      }
+      if (String(url).endsWith('/sync/project')) {
+        return jsonResponse({ status: 'saved', project: baseProject });
+      }
+      if (String(url).endsWith('/sync/validate')) {
+        return jsonResponse({
+          aheadPageIds: [],
+          failedPageIds: [],
+          newPageIds: [],
+          stalePageIds: [],
+          workspaceChanged: false,
+        });
+      }
+      throw new Error(`Unexpected sync request: ${String(url)}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await notionClient.resyncPendingChanges();
+
+    expect(result.failedUploadCount).toBe(1);
+    expect(result.remoteReloadPending).toBe(true);
+    expect(await listPendingProjectSyncEvents()).toEqual([]);
+    const calls = fetchMock.mock.calls.map(([url]) => String(url));
+    expect(calls.indexOf('http://localhost:8787/sync/project'))
+      .toBeLessThan(calls.indexOf('http://localhost:8787/sync/validate'));
+    expect(calls).not.toContain('http://localhost:8787/sync/reload');
   });
 
   test('manual resync refreshes the session without running a second sync validation', async () => {
@@ -881,6 +921,7 @@ describe('project metadata', () => {
       syncConfig: connectedConfig,
     });
     const fetchMock = vi.fn(async (url: string) => {
+      if (String(url).endsWith('/sync/retry')) return jsonResponse({ requeuedCount: 0 });
       if (String(url).endsWith('/sync/validate')) {
         return jsonResponse({
           aheadPageIds: [],
@@ -931,6 +972,7 @@ describe('project metadata', () => {
       syncConfig: connectedConfig,
     });
     const fetchMock = vi.fn(async (url: string) => {
+      if (String(url).endsWith('/sync/retry')) return jsonResponse({ requeuedCount: 0 });
       if (String(url).endsWith('/sync/validate')) {
         return jsonResponse({
           aheadPageIds: [],
@@ -2300,6 +2342,7 @@ describe('cross-instance workspace refresh', () => {
         conflicts: [],
         reloadedFromNotion: true,
         remoteReloadPending: false,
+        failedUploadCount: 0,
         remainingCount: 0,
       };
     });
@@ -2341,6 +2384,7 @@ describe('cross-instance workspace refresh', () => {
         conflicts: [],
         reloadedFromNotion: true,
         remoteReloadPending: false,
+        failedUploadCount: 0,
         remainingCount: 0,
       };
     });

@@ -295,6 +295,7 @@ export async function processSyncQueue(
           // this durable payload is accepted. Retain permanent failures in the
           // server outbox so an explicit Sync retry can replay the exact edits.
           await retainFailedQueuePayload(jobId, job);
+          await notifyQueueIdleIfDrained(env, String(job.installationId));
           message.ack();
         } catch (retentionError) {
           console.error('[queue] failed sync payload could not be retained', safeErrorMetadata(retentionError));
@@ -465,6 +466,7 @@ async function notifyQueueIdleIfDrained(env: WorkerEnv, installationId: string):
       .select('id')
       .eq('installation_id', installationId)
       .eq('status', 'pending')
+      .is('payload->>deadLetteredAt', null)
       .limit(1);
     if (error) throw new Error('Unable to check remaining sync queue work.');
     if (pending?.length) return;

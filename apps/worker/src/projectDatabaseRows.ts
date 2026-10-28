@@ -174,7 +174,10 @@ export function createProjectDatabaseRows(notionRequest: NotionRequester) {
       const response = await notionRequest(store, `/data_sources/${dataSourceId}/query`, {
         method: 'POST',
         body: {
-          page_size: 1,
+          // Several archived rows can share a Jottathing ID after a project
+          // has been recreated. Prefer an active row if one exists; callers
+          // can create a fresh row when the only match lives in the trash.
+          page_size: 100,
           filter: {
             property: idProperty,
             rich_text: { equals: projectId },
@@ -184,7 +187,7 @@ export function createProjectDatabaseRows(notionRequest: NotionRequester) {
       if (!Array.isArray(response.results)) {
         throw new Error('Notion returned an invalid project lookup result.');
       }
-      return response.results[0];
+      return response.results.find((row) => !isArchivedObject(row));
     }
 
     // Adopted legacy databases may have had their ID field removed or changed
@@ -203,6 +206,7 @@ export function createProjectDatabaseRows(notionRequest: NotionRequester) {
         throw new Error('Notion returned an invalid project lookup result.');
       }
       const match = response.results.find((row) => {
+        if (isArchivedObject(row)) return false;
         const rowProperties = row.properties ?? {};
         return [
           PROJECT_PROPERTIES.jottathingId,

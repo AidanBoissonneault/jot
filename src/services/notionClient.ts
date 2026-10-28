@@ -1415,8 +1415,9 @@ async function waitForRemoteSyncQueueToSettle(
   syncConfig: SyncConfig,
   onProgress?: (progress: SyncProgressUpdate) => void,
   timeoutMs = REMOTE_QUEUE_SETTLE_TIMEOUT_MS,
-): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
+  allowParkedFailures = false,
+): Promise<number> {
+  return new Promise<number>((resolve, reject) => {
     let eventSource: EventSource | undefined;
     let timeout: ReturnType<typeof setTimeout> | undefined;
     let poller: ReturnType<typeof setInterval> | undefined;
@@ -1425,14 +1426,14 @@ async function waitForRemoteSyncQueueToSettle(
     let finished = false;
     let totalPending: number | undefined;
 
-    const finish = (error?: unknown): void => {
+    const finish = (error?: unknown, failedCount = 0): void => {
       if (finished) return;
       finished = true;
       if (timeout) clearTimeout(timeout);
       if (poller) clearInterval(poller);
       eventSource?.close();
       if (error) reject(error);
-      else resolve();
+      else resolve(failedCount);
     };
 
     const checkQueue = async (): Promise<void> => {
@@ -1456,6 +1457,9 @@ async function waitForRemoteSyncQueueToSettle(
           const pending = Number.isSafeInteger(status.pendingCount)
             ? Math.max(0, status.pendingCount ?? 0)
             : Number(status.hasPending);
+          const failed = Number.isSafeInteger(status.failedCount)
+            ? Math.max(0, status.failedCount ?? 0)
+            : 0;
           totalPending = Math.max(totalPending ?? 0, pending);
           onProgress?.({
             phase: 'waiting_for_server',
@@ -1464,7 +1468,9 @@ async function waitForRemoteSyncQueueToSettle(
             pending,
           });
           if (!status.hasPending) {
-            finish();
+            finish(failed > 0 && !allowParkedFailures
+              ? new Error(`${failed} Notion upload${failed === 1 ? '' : 's'} failed. Your local notes remain saved; retry Sync to send them again.`)
+              : undefined, failed);
             return;
           }
         } while (statusRecheckRequested && !finished);
@@ -1479,9 +1485,11 @@ async function waitForRemoteSyncQueueToSettle(
       eventSource = connectSyncEvents(syncConfig, (event) => {
         // Recheck after a push event so a late or duplicated idle notification
         // cannot make the snapshot race with newly queued work.
-        if (event.status === 'queue_idle') void checkQueue();
-        if (event.status === 'failed' && event.deadLettered) {
-          finish(new Error(event.message ?? 'A saved Notion upload needs attention. Your local note remains saved.'));
+        if (event.status === 'queue_idle' || (event.status === 'failed' && event.deadLettered)) {
+          // Queue events can arrive before the durable payload has been marked
+          // parked. Re-read status and let the queue table decide whether work
+          // remains active or needs a user-visible retry.
+          void checkQueue();
         }
       });
       eventSource.onopen = () => { void checkQueue(); };
@@ -2800,6 +2808,7 @@ export const notionClient = {
     conflicts: SyncContentConflict[];
     reloadedFromNotion: boolean;
     remoteReloadPending: boolean;
+    failedUploadCount: number;
     remainingCount: number;
   }> {
     const { syncConfig } = await readStorage();
@@ -2812,6 +2821,7 @@ export const notionClient = {
 
     let reloadedFromNotion = false;
     let remoteReloadPending = false;
+    let failedUploadCount = 0;
     const pageConflicts: SyncContentConflict[] = [];
 
     // Retry blocked snapshots only from this explicit user action.
@@ -2840,9 +2850,22 @@ export const notionClient = {
       undefined,
       syncConfig,
     );
+    failedUploadCount = Number.isSafeInteger(remoteQueue.failedCount)
+      ? Math.max(0, remoteQueue.failedCount ?? 0)
+      : 0;
+
+    // Project state uses a separate durable client outbox. Deliver it before
+    // waiting for accepted page jobs so a slow or parked page cannot block a
+    // newly created Notion project from receiving its state.
+    if (remoteQueue.hasPending || failedUploadCount > 0) {
+      await deliverPendingProjectSyncEvents(syncConfig);
+    }
     if (remoteQueue.hasPending) {
       onProgress?.({ phase: 'waiting_for_server', pending: remoteQueue.pendingCount ?? requeuedCount });
-      await waitForRemoteSyncQueueToSettle(syncConfig, onProgress);
+      failedUploadCount = Math.max(
+        failedUploadCount,
+        await waitForRemoteSyncQueueToSettle(syncConfig, onProgress, undefined, true),
+      );
     }
 
     const workspace = await readStorage();
@@ -2864,7 +2887,7 @@ export const notionClient = {
     for (const pageId of pageIdsToReconcile) {
       const page = workspace.pages.find((entry) => entry.id === pageId);
       const project = page && workspace.projects.find((entry) => entry.id === page.projectId);
-      if (!page || !project) {
+      if (!page || !project || page.status === 'archived' || project.status === 'archived') {
         reconciledPageCount += 1;
         onProgress?.({ phase: 'syncing_pages', completed: reconciledPageCount, total: pageIdsToReconcile.size });
         continue;
@@ -2938,6 +2961,27 @@ export const notionClient = {
 
     onProgress?.({ phase: 'uploading', pending: await pendingLocalWorkCount() });
     await flushPendingSyncOps({ force: true });
+    const queueAfterLocalFlush = await requestServer<SyncQueueStatusResponse>(
+      '/sync/status',
+      undefined,
+      syncConfig,
+    );
+    failedUploadCount = Math.max(
+      failedUploadCount,
+      Number.isSafeInteger(queueAfterLocalFlush.failedCount)
+        ? Math.max(0, queueAfterLocalFlush.failedCount ?? 0)
+        : 0,
+    );
+    if (queueAfterLocalFlush.hasPending) {
+      onProgress?.({
+        phase: 'waiting_for_server',
+        pending: queueAfterLocalFlush.pendingCount ?? 0,
+      });
+      failedUploadCount = Math.max(
+        failedUploadCount,
+        await waitForRemoteSyncQueueToSettle(syncConfig, onProgress, undefined, true),
+      );
+    }
     const projectEvents = await listPendingProjectSyncEvents();
     const blockedEvents = projectEvents.filter((event) => event.deliveryBlocked);
     const { pages, projects } = await readStorage();
@@ -2993,6 +3037,7 @@ export const notionClient = {
     const canReloadRemoteWorkspace =
       !blockedEvents.length &&
       pageConflicts.length === 0 &&
+      failedUploadCount === 0 &&
       await pendingLocalWorkCount() === 0;
     if (canReloadRemoteWorkspace) {
       // A manual Sync is also the user's explicit request to reconcile the
@@ -3015,6 +3060,7 @@ export const notionClient = {
       conflicts: [...pageConflicts, ...conflicts],
       reloadedFromNotion,
       remoteReloadPending,
+      failedUploadCount,
       remainingCount: await pendingLocalWorkCount(),
     };
   },

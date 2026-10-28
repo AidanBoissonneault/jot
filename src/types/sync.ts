@@ -178,8 +178,10 @@ export type SyncValidationResponse = {
 /** Describes server-side synchronization jobs that are not yet fully applied. */
 export type SyncQueueStatusResponse = {
   hasPending: boolean;
-  /** Accepted Queue payloads still awaiting an acknowledgment. */
+  /** Accepted Queue payloads still being processed. Parked failures are excluded. */
   pendingCount?: number;
+  /** Permanently failed payloads retained for an explicit retry. */
+  failedCount?: number;
 };
 
 /** Reports a measured phase or item count during a user-requested full sync. */
