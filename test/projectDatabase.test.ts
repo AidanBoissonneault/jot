@@ -451,6 +451,16 @@ describe('Jottathing project database reload', () => {
         Name: { type: 'title', title: [{ plain_text: 'Trashed Project' }] },
       },
     };
+    const archivedProjectRow = {
+      ...externalProjectRow,
+      id: 'project-row-archived',
+      properties: {
+        ...externalProjectRow.properties,
+        'Jottathing ID': { rich_text: [{ plain_text: 'project-archived' }] },
+        Name: { type: 'title', title: [{ plain_text: 'Archived Project' }] },
+        Status: { select: { name: 'Archived' } },
+      },
+    };
     const careerPrepProjectRow = {
       ...externalProjectRow,
       id: 'project-row-career-prep',
@@ -495,7 +505,10 @@ describe('Jottathing project database reload', () => {
         ] };
       }
       if (endpoint === '/data_sources/ds-main/query') {
-        return { results: [externalProjectRow, careerPrepProjectRow, trashedProjectRow], has_more: false };
+        return {
+          results: [externalProjectRow, careerPrepProjectRow, trashedProjectRow, archivedProjectRow],
+          has_more: false,
+        };
       }
       throw new Error(`Unexpected request: ${endpoint}`);
     });
@@ -551,6 +564,7 @@ describe('Jottathing project database reload', () => {
     expect(listAllBlockChildren).toHaveBeenCalledWith(store, externalThread.id);
     expect(listAllBlockChildren).toHaveBeenCalledWith(store, linkedinThread.id);
     expect(listAllBlockChildren).not.toHaveBeenCalledWith(store, 'project-row-trashed');
+    expect(listAllBlockChildren).not.toHaveBeenCalledWith(store, archivedProjectRow.id);
     expect(store.notePages['page-project-plants-thread-external']?.notionPageId)
       .toBe(externalThread.id);
     expect(store.notePages['page-project-career-prep-thread-linkedin-demo']?.notionPageId)

@@ -4,7 +4,7 @@
  * @lastModified September 2026
  */
 
-import type { DocumentContent, NotionParentPage, Project } from '../../../src/types/capture.js';
+import type { DocumentContent, NotionParentPage, Project, ProjectPage } from '../../../src/types/capture.js';
 import type { JottathingDatabase, JsonObject, NotionObject, NotionRichText } from './types.js';
 
 export const JOTTATHING_DATABASE_TITLE = 'Jottathing';
@@ -245,6 +245,44 @@ export function parentPageIdFromObject(object: NotionObject): string | undefined
  */
 export function isArchivedObject(object: NotionObject): boolean {
   return object.archived === true || object.in_trash === true || object.is_archived === true;
+}
+
+/**
+ * Reopens a project when a local page edit is newer than its archived snapshot.
+ * @param project - Project snapshot carried by the page sync.
+ * @param page - Page being synchronized.
+ * @param operationTimestamps - Creation times of durable local page operations.
+ * @returns The active project snapshot when the edit postdates the archive; otherwise the input snapshot.
+ */
+export function reactivateProjectForNewerPageEdit(
+  project: Project,
+  page: ProjectPage,
+  operationTimestamps: readonly (string | undefined)[] = [],
+): { project: Project; reactivated: boolean } {
+  if (project.status !== 'archived' || page.status === 'archived') {
+    return { project, reactivated: false };
+  }
+
+  const archivedAt = Date.parse(project.updatedAt);
+  if (!Number.isFinite(archivedAt)) return { project, reactivated: false };
+
+  const editTimestamps = [page.updatedAt, ...operationTimestamps]
+    .map((timestamp) => typeof timestamp === 'string' ? Date.parse(timestamp) : Number.NaN)
+    .filter(Number.isFinite);
+  const latestEditAt = Math.max(...editTimestamps);
+  if (!Number.isFinite(latestEditAt) || latestEditAt <= archivedAt) {
+    return { project, reactivated: false };
+  }
+
+  return {
+    project: {
+      ...project,
+      status: 'active',
+      updatedAt: new Date(latestEditAt).toISOString(),
+      syncMessage: undefined,
+    },
+    reactivated: true,
+  };
 }
 
 /**

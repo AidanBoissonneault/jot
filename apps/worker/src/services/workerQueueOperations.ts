@@ -18,7 +18,11 @@ import type {
   WorkerStore,
 } from '../types.js';
 import type { DocumentContent } from '../../../../src/types/capture.js';
-import { isArchivedBlockEditError, threadKey } from '../projectDatabaseValues.js';
+import {
+  isArchivedBlockEditError,
+  reactivateProjectForNewerPageEdit,
+  threadKey,
+} from '../projectDatabaseValues.js';
 import { notionBlockIdFromError, safeNotionErrorMetadata } from '../workerUtils.js';
 
 /** Queue job before the server assigns its persisted version. */
@@ -225,10 +229,24 @@ export function createWorkerQueueOperations(dependencies: WorkerQueueDependencie
       let parentPageId: string;
       let refreshed: NotionObject;
 
+      const projectRecovery = reactivateProjectForNewerPageEdit(
+        project,
+        page,
+        ops.filter((op) => op.type !== 'page_archive').map((op) => op.createdAt),
+      );
+      const projectForPageSync = projectRecovery.project;
+      if (projectRecovery.reactivated) {
+        appendLog(
+          freshStore,
+          'sync_project_restored_after_page_edit',
+          'Restored an archived project after a newer local page edit.',
+        );
+      }
+
       if (ensureProjectPage && ensureThreadToggle) {
         let projectPage: Awaited<ReturnType<typeof ensureProjectPage>>;
         try {
-          projectPage = await ensureProjectPage(freshStore, project, {
+          projectPage = await ensureProjectPage(freshStore, projectForPageSync, {
             isForcedMerge: page.content.attrs?.jottathingConflictResolution === true,
             selectedParentPageId,
             syncState: false,
@@ -238,7 +256,7 @@ export function createWorkerQueueOperations(dependencies: WorkerQueueDependencie
             failureTarget: knownArchivedWriteTarget(
               error,
               freshStore,
-              project.id,
+              projectForPageSync.id,
               page.id,
               selectedParentPageId,
             ),
@@ -271,10 +289,11 @@ export function createWorkerQueueOperations(dependencies: WorkerQueueDependencie
           const isArchivedWrite = isArchivedBlockEditError(error);
           console.log('[queue] block operation write failed', {
             classifiedArchivedBlock: isArchivedWrite,
-            projectArchived: project.status === 'archived',
+            projectArchived: projectForPageSync.status === 'archived',
+            restoredAfterNewerPageEdit: projectRecovery.reactivated,
             error: safeNotionErrorMetadata(error),
           });
-          if (!isArchivedWrite || project.status === 'archived') throw error;
+          if (!isArchivedWrite || projectForPageSync.status === 'archived') throw error;
           const mappedToggleId = freshStore.threadBlocks?.[threadKey(page.id)]?.blockId;
           const failedBlockId = notionBlockIdFromError(error);
           const excludedBlockIds = failedBlockId && failedBlockId === mappedToggleId
@@ -296,7 +315,7 @@ export function createWorkerQueueOperations(dependencies: WorkerQueueDependencie
           let recoveryProjectPageId = projectPage.id;
           let recoveryThreadToggleId: string | undefined;
           try {
-            projectPage = await ensureProjectPage(freshStore, project, {
+            projectPage = await ensureProjectPage(freshStore, projectForPageSync, {
               selectedParentPageId,
               syncState: false,
             });

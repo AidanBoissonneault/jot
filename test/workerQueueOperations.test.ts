@@ -1,10 +1,143 @@
 import { describe, expect, test, vi } from 'vitest';
 import { createWorkerQueueOperations } from '@/apps/worker/src/services/workerQueueOperations';
-import { threadKey } from '@/apps/worker/src/projectDatabaseValues';
+import {
+  reactivateProjectForNewerPageEdit,
+  threadKey,
+} from '@/apps/worker/src/projectDatabaseValues';
 import type { Project, ProjectPage } from '@/src/types/capture';
 import type { ManagedBlockOperation, NotionObject, WorkerStore } from '@/apps/worker/src/types';
 
 describe('queued Notion block operations', () => {
+  test('restores an archived project when a durable page edit is newer than the archive', async () => {
+    const installationId = 15;
+    const archivedAt = '2026-10-28T21:07:25.066Z';
+    const pageEditedAt = '2026-10-28T21:07:30.537Z';
+    const operationCreatedAt = '2026-10-28T21:07:30.644Z';
+    const project = {
+      id: 'project-1',
+      name: 'My Project',
+      status: 'archived',
+      createdAt: '2026-10-27T12:00:00.000Z',
+      updatedAt: archivedAt,
+      stateContent: { type: 'doc', content: [] },
+    } as Project;
+    const content = {
+      type: 'doc',
+      content: [{ type: 'paragraph', content: [{ type: 'text', text: 'newer local edit' }] }],
+    } as const;
+    const page = {
+      id: 'page-1',
+      projectId: project.id,
+      title: 'Hello World',
+      status: 'active',
+      createdAt: '2026-10-27T12:00:00.000Z',
+      updatedAt: pageEditedAt,
+      content,
+      syncBaselineContent: content,
+    } as ProjectPage;
+    const store = {
+      blockMappings: {},
+      installationId,
+      notePages: {},
+      projectPages: {},
+      threadBlocks: {},
+      tokens: { access_token: 'token' },
+    } as unknown as WorkerStore;
+    const ensureProjectPage = vi.fn(async (_syncStore: WorkerStore, syncedProject: Project) => ({
+      id: 'project-row',
+      project: syncedProject,
+      title: syncedProject.name,
+    }));
+    const appendLog = vi.fn();
+    const applyManagedBlockOps = vi.fn(async () => ({
+      content,
+      baselineContent: content,
+      createdBlocks: [],
+      notionBlocks: [],
+    }));
+    const supabase = {
+      from: vi.fn((table: string) => {
+        const query: Record<string, ReturnType<typeof vi.fn>> = {};
+        query.select = vi.fn(() => query);
+        query.eq = vi.fn(() => query);
+        query.limit = vi.fn(() => query);
+        query.maybeSingle = vi.fn(async () => ({
+          data: table === 'notion_installations'
+            ? { id: installationId, user_id: 'notion:user' }
+            : { accessToken: 'token' },
+          error: null,
+        }));
+        return query;
+      }),
+    };
+    const operations = createWorkerQueueOperations({
+      appendLog,
+      applyManagedBlockOps,
+      archiveThreadToggle: vi.fn(),
+      createChildPage: vi.fn(),
+      ensureJottathingRootPage: vi.fn(),
+      ensureProjectPage,
+      ensureProjectRootPage: vi.fn(),
+      ensureThreadToggle: vi.fn(async () => ({ id: 'thread-toggle' } as NotionObject)),
+      notionRequest: vi.fn(async () => ({ last_edited_time: operationCreatedAt })),
+      pushPageToNotionCore: vi.fn(),
+      readStore: () => store,
+      replaceManagedBlocks: vi.fn(),
+      supabase,
+      updateChildNotePage: vi.fn(),
+      updateThreadToggleTitle: vi.fn(),
+      withFreshInstallationStore: async (_syncStore: WorkerStore, operation: (freshStore: WorkerStore) => Promise<unknown>) => operation(store),
+      writeStore: vi.fn(),
+      freshConnectedStore: async (syncStore: WorkerStore) => syncStore,
+      performSyncProjectFolder: vi.fn(),
+    } as never);
+    const ops = [{
+      type: 'block_create',
+      createdAt: operationCreatedAt,
+      payload: { block: content.content[0] },
+    }] as unknown as ManagedBlockOperation[];
+
+    const result = await operations.applyBlockOpsToNotionForInstallation(installationId, {
+      ops,
+      page,
+      project,
+      selectedParentPageId: undefined,
+    });
+
+    expect(result.page?.notionPageId).toBe('thread-toggle');
+    expect(ensureProjectPage.mock.calls[0]?.[1].status).toBe('active');
+    expect(Date.parse(ensureProjectPage.mock.calls[0]![1].updatedAt)).toBeGreaterThan(Date.parse(archivedAt));
+    expect(applyManagedBlockOps).toHaveBeenCalledOnce();
+    expect(appendLog).toHaveBeenCalledWith(
+      store,
+      'sync_project_restored_after_page_edit',
+      'Restored an archived project after a newer local page edit.',
+    );
+  });
+
+  test('keeps an archived project archived when its page edit predates the archive', () => {
+    const archivedAt = '2026-10-28T21:07:25.066Z';
+    const editAt = '2026-10-28T21:07:20.000Z';
+    const project = {
+      id: 'project-1',
+      name: 'My Project',
+      status: 'archived',
+      updatedAt: archivedAt,
+    } as Project;
+    const page = {
+      id: 'page-1',
+      projectId: project.id,
+      title: 'Hello World',
+      status: 'active',
+      updatedAt: editAt,
+    } as ProjectPage;
+
+    expect(reactivateProjectForNewerPageEdit(project, page, [editAt])).toEqual({
+      project,
+      reactivated: false,
+    });
+  });
+
   test('rebuilds an archived thread from the durable local page snapshot', async () => {
     const installationId = 15;
     const project = {

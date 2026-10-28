@@ -182,6 +182,8 @@ export interface ConnectedWorkerStore extends WorkerStore {
 
 /** Describes the normalized subset of a local block operation consumed by the worker. */
 export interface ManagedBlockOperation {
+  /** Local edit time used to decide whether an archived project should be restored. */
+  createdAt?: string;
   jottathingBlockId: string | undefined;
   /** Preserved in the durable payload so a retry can reconcile local operation IDs. */
   opId?: string;

@@ -5,7 +5,11 @@
  */
 
 import type { DocumentContent, NotionParentPage, Project, ProjectPage } from '../../../src/types/capture.js';
-import { isArchivedBlockEditError, threadKey } from './projectDatabaseValues.js';
+import {
+  isArchivedBlockEditError,
+  reactivateProjectForNewerPageEdit,
+  threadKey,
+} from './projectDatabaseValues.js';
 import type {
   AppendLog,
   ManagedBlockResult,
@@ -116,6 +120,15 @@ export async function pushPageToNotionCore({
     writeStore,
   } = dependencies;
   const store = await requireConnectedStore(request);
+  const projectRecovery = reactivateProjectForNewerPageEdit(project, page);
+  const projectForPageSync = projectRecovery.project;
+  if (projectRecovery.reactivated) {
+    appendLog(
+      store,
+      'sync_project_restored_after_page_edit',
+      'Restored an archived project after a newer local page edit.',
+    );
+  }
 
   if (ensureProjectPage && ensureThreadToggle) {
     return pushPageToProjectDatabase({
@@ -125,7 +138,7 @@ export async function pushPageToNotionCore({
       ensureThreadToggle,
       notionRequest,
       page,
-      project,
+      project: projectForPageSync,
       replaceManagedBlocks,
       selectedParentPageId,
       store,
@@ -135,7 +148,7 @@ export async function pushPageToNotionCore({
   }
 
   const jottathingRootPage = await ensureJottathingRootPage(store, { selectedParentPageId });
-  const projectRootPage = await ensureProjectRootPage(store, jottathingRootPage.id, project, {
+  const projectRootPage = await ensureProjectRootPage(store, jottathingRootPage.id, projectForPageSync, {
     candidateNotionPageId: page.notionParentPageId,
   });
   const notionPageId = page.notionPageId ?? store.notePages[page.id]?.notionPageId;

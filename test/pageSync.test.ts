@@ -5,6 +5,72 @@ import type { Project, ProjectPage } from '@/src/types/capture';
 import type { NotionObject, NotionRequester, WorkerStore } from '@/apps/worker/src/types';
 
 describe('Notion page sync recovery', () => {
+  test('reactivates an archived project for a newer full-page edit', async () => {
+    const archivedAt = '2026-10-28T21:07:25.066Z';
+    const editedAt = '2026-10-28T21:07:30.537Z';
+    const project = {
+      id: 'project-1',
+      name: 'Project',
+      status: 'archived',
+      createdAt: '2026-10-27T12:00:00.000Z',
+      updatedAt: archivedAt,
+      stateContent: { type: 'doc', content: [] },
+    } as Project;
+    const page = {
+      id: 'page-1',
+      projectId: project.id,
+      title: 'Page',
+      status: 'active',
+      createdAt: '2026-10-27T12:00:00.000Z',
+      updatedAt: editedAt,
+      content: { type: 'doc', content: [] },
+    } as ProjectPage;
+    const store = {
+      blockMappings: {},
+      notePages: {},
+      projectPages: {},
+      threadBlocks: {},
+    } as unknown as WorkerStore;
+    const ensureProjectPage = vi.fn(async (_syncStore: WorkerStore, syncedProject: Project) => ({
+      id: 'project-row',
+      project: syncedProject,
+      title: syncedProject.name,
+    }));
+    const appendLog = vi.fn();
+    const dependencies = {
+      appendLog,
+      archiveThreadToggle: vi.fn(),
+      createChildPage: vi.fn(),
+      ensureJottathingRootPage: vi.fn(),
+      ensureProjectPage,
+      ensureProjectRootPage: vi.fn(),
+      ensureThreadToggle: vi.fn(async () => ({ id: 'thread-toggle' } as NotionObject)),
+      notionRequest: vi.fn(async () => ({ last_edited_time: editedAt })),
+      replaceManagedBlocks: vi.fn(async () => ({ createdBlocks: [], notionBlocks: [] })),
+      requireConnectedStore: vi.fn(async () => store),
+      updateChildNotePage: vi.fn(),
+      updateThreadToggleTitle: vi.fn(),
+      writeStore: vi.fn(async () => undefined),
+    } as never;
+
+    const result = await pushPageToNotionCore({
+      dependencies,
+      page,
+      project,
+      request: {},
+      selectedParentPageId: undefined,
+    });
+
+    expect(result.status).toBe('saved');
+    expect(ensureProjectPage.mock.calls[0]?.[1].status).toBe('active');
+    expect(Date.parse(ensureProjectPage.mock.calls[0]![1].updatedAt)).toBeGreaterThan(Date.parse(archivedAt));
+    expect(appendLog).toHaveBeenCalledWith(
+      store,
+      'sync_project_restored_after_page_edit',
+      'Restored an archived project after a newer local page edit.',
+    );
+  });
+
   test('rebuilds an archived thread container from the saved local page', async () => {
     const content = {
       type: 'doc',
