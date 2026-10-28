@@ -209,7 +209,11 @@ export function registerSyncMutationRoutes(app: Hono<{ Bindings: WorkerEnv }>): 
             .from('jottathing_sync_queue_payloads')
             .update({ payload: retryPayload, updated_at: new Date().toISOString() })
             .eq('id', row.id)
-            .eq('status', 'pending');
+            .eq('status', 'pending')
+            // A retry may fail again before this request finishes. Only clear
+            // the marker that this request observed; never overwrite a newer
+            // dead-letter marker written by the Queue consumer.
+            .eq(`payload->>${retryMarker}`, job[retryMarker]);
           if (clearError) return c.json({ error: 'A saved sync job was restarted, but its retry marker could not be cleared.' }, 503);
           requeuedCount += 1;
           if (job.type === 'block_op' && requestedOpIds.size) {

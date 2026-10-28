@@ -214,7 +214,7 @@ interface SyncQueueMessageBase {
   installationId: Identifier;
   localId: string;
   queuedVersion: number;
-  /** Set after Queue retries are exhausted so a later manual Sync can redrive this durable payload. */
+  /** Set after repeated Queue or permanent Notion failures so Sync can redrive this durable payload. */
   deadLetteredAt?: string;
   /** Set when the durable payload was stored but its Queue reference could not be published. */
   deliveryPendingAt?: string;

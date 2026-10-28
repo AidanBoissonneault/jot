@@ -10,7 +10,7 @@ const expectedProperties = {
   'Created by': {},
   'Last edited by': {},
   'Jottathing ID': {},
-  'Managed by Jottathing': {},
+  'Managed by Jottathing': { type: 'checkbox' },
 };
 
 function database(id: string, dataSourceId: string, lastEditedTime: string) {
@@ -45,6 +45,10 @@ describe('Jottathing project database selection', () => {
       ...database('db-new-parent', 'ds-new-parent', '2026-10-07T12:00:00.000Z'),
       parent: { type: 'page_id', page_id: 'new-parent' },
     };
+    const selectedDataSource = {
+      id: 'ds-new-parent',
+      parent: { database_id: 'db-new-parent' },
+    };
     const notionRequest = vi.fn(async (_store, endpoint) => {
       if (endpoint === '/pages/new-parent') {
         return {
@@ -53,7 +57,8 @@ describe('Jottathing project database selection', () => {
           url: 'https://notion.so/new-parent',
         };
       }
-      if (endpoint === '/search') return { results: [selectedDatabase], has_more: false };
+      if (endpoint === '/search') return { results: [selectedDataSource], has_more: false };
+      if (endpoint === '/databases/db-new-parent') return selectedDatabase;
       if (endpoint === '/data_sources/ds-new-parent/query') {
         return { results: [], has_more: false };
       }
@@ -89,6 +94,46 @@ describe('Jottathing project database selection', () => {
     expect(selected.parentPageId).toBe('new-parent');
     expect(store.jottathingDatabase?.databaseId).toBe('db-new-parent');
     expect(notionRequest).not.toHaveBeenCalledWith(store, '/databases/db-old-parent');
+  });
+
+  test('recovers from a stale selected page and adopts the existing Jottathing database', async () => {
+    const existingDatabase = database('db-main', 'ds-main', '2026-10-20T12:00:00.000Z');
+    const existingDataSource = {
+      id: 'ds-main',
+      parent: { database_id: 'db-main' },
+      title: [{ plain_text: 'Projects' }],
+    };
+    const notionRequest = vi.fn(async (_store, endpoint) => {
+      if (endpoint === '/pages/stale-parent') {
+        throw Object.assign(new Error('Invalid page ID.'), {
+          code: 'validation_error',
+          endpoint,
+          status: 400,
+        });
+      }
+      if (endpoint === '/search') return { results: [existingDataSource], has_more: false };
+      if (endpoint === '/databases/db-main') return existingDatabase;
+      if (endpoint === '/data_sources/ds-main') return { properties: expectedProperties };
+      if (endpoint === '/data_sources/ds-main/query') return { results: [], has_more: false };
+      if (endpoint === '/views?database_id=db-main') {
+        return { results: [
+          { name: 'Active Projects' },
+          { name: 'By Category' },
+          { name: 'All Projects' },
+        ] };
+      }
+      throw new Error(`Unexpected request: ${endpoint}`);
+    });
+    const store = { logs: [] };
+
+    const selected = await helpers(notionRequest).ensureProjectDatabase(store as never, {
+      selectedParentPageId: 'stale-parent',
+    });
+
+    expect(selected.databaseId).toBe('db-main');
+    expect(store.jottathingDatabase?.databaseId).toBe('db-main');
+    expect(notionRequest).toHaveBeenCalledWith(store, '/pages/stale-parent');
+    expect(notionRequest).not.toHaveBeenCalledWith(store, '/databases', expect.anything());
   });
 
   test('keeps the saved database reference on transient lookup failures', async () => {
@@ -175,13 +220,17 @@ describe('Jottathing project database selection', () => {
   test('searches every result page and adopts the database with the most managed projects', async () => {
     const emptyDatabase = database('db-empty', 'ds-empty', '2026-09-11T12:00:00.000Z');
     const mainDatabase = database('db-main', 'ds-main', '2026-09-10T12:00:00.000Z');
+    const emptyDataSource = { id: 'ds-empty', parent: { database_id: 'db-empty' } };
+    const mainDataSource = { id: 'ds-main', parent: { database_id: 'db-main' } };
     const notionRequest = vi.fn(async (store, endpoint, init = {}) => {
       if (endpoint === '/search' && !init.body?.start_cursor) {
-        return { results: [emptyDatabase], has_more: true, next_cursor: 'next' };
+        return { results: [emptyDataSource], has_more: true, next_cursor: 'next' };
       }
       if (endpoint === '/search' && init.body?.start_cursor === 'next') {
-        return { results: [mainDatabase], has_more: false };
+        return { results: [mainDataSource], has_more: false };
       }
+      if (endpoint === '/databases/db-empty') return emptyDatabase;
+      if (endpoint === '/databases/db-main') return mainDatabase;
       if (endpoint === '/data_sources/ds-empty/query') {
         return { results: [], has_more: false };
       }
@@ -212,8 +261,9 @@ describe('Jottathing project database selection', () => {
     expect(selected.databaseId).toBe('db-main');
     expect(store.jottathingDatabase?.databaseId).toBe('db-main');
     const searchCalls = notionRequest.mock.calls.filter(([, endpoint]) => endpoint === '/search');
-    expect(searchCalls).toHaveLength(6);
+    expect(searchCalls).toHaveLength(8);
     expect(searchCalls.map(([, , init]) => init.body.query)).toEqual([
+      'Projects', 'Projects',
       'Jottathing', 'Jottathing',
       'Inkwell', 'Inkwell',
       'Jot', 'Jot',
@@ -234,6 +284,7 @@ describe('Jottathing project database reload', () => {
       in_trash: false,
       properties: {
         'Jottathing ID': { rich_text: [{ plain_text: 'project-plants' }] },
+        'Managed by Jottathing': { checkbox: true },
         Name: { type: 'title', title: [{ plain_text: 'Plants!' }] },
         Status: { select: { name: 'Active' } },
         Created: { date: { start: '2026-10-06T10:00:00.000Z' } },

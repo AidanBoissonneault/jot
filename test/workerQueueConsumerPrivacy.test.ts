@@ -20,6 +20,7 @@ function makeQuery(data: unknown) {
   query.maybeSingle = vi.fn(async () => ({ data, error: null }));
   query.delete = vi.fn(() => query);
   query.update = vi.fn(() => query);
+  query.insert = vi.fn(() => query);
   query.limit = vi.fn(() => query);
   return query;
 }
@@ -107,5 +108,53 @@ describe('content-free sync queue references', () => {
     expect(message.retry).not.toHaveBeenCalled();
     expect(runtime.supabase.from).toHaveBeenCalledWith('jottathing_sync_queue_payloads');
     expect(notify).toHaveBeenCalledOnce();
+  });
+
+  it('retains a permanent Notion failure in the durable outbox for explicit retry', async () => {
+    const jobId = '1b4f2a8a-4ed5-4d81-baaa-3d3c5d0d2e12';
+    const message = makeMessage(jobId);
+    const job = {
+      batchId: 'page-one:1',
+      batchIndex: 0,
+      batchSize: 1,
+      installationId: 42,
+      localId: 'page-one',
+      pageId: 'page-one',
+      projectId: 'project-one',
+      queuedVersion: 1,
+      type: 'block_op',
+      payload: { page: { id: 'page-one' }, project: { id: 'project-one' }, ops: [{ opId: 'op-one' }] },
+    };
+    const payloadRead = makeQuery({ installation_id: 42, payload: job, status: 'pending' });
+    const syncRead = makeQuery({ local_version: 1 });
+    const markSyncing = makeQuery(null);
+    const markFailed = makeQuery(null);
+    const retainPayload = makeQuery({ id: jobId });
+    runtime.supabase.from
+      .mockReturnValueOnce(payloadRead)
+      .mockReturnValueOnce(syncRead)
+      .mockReturnValueOnce(markSyncing)
+      .mockReturnValueOnce(markFailed)
+      .mockReturnValueOnce(retainPayload);
+    runtime.applyBlockOpsToNotionForInstallation.mockRejectedValueOnce(
+      Object.assign(new Error('Invalid Notion page ID.'), {
+        code: 'validation_error',
+        isNotionApiError: true,
+        status: 400,
+      }),
+    );
+    const notify = vi.fn(async (_request: Request) => new Response('ok'));
+
+    await processSyncQueue({ messages: [message] } as never, {
+      SYNC_EVENTS: makeSyncEventsBinding(notify),
+    } as never);
+
+    expect(markFailed.update).toHaveBeenCalledWith(expect.objectContaining({ status: 'failed' }));
+    expect(retainPayload.update).toHaveBeenCalledWith(expect.objectContaining({
+      payload: expect.objectContaining({ deadLetteredAt: expect.any(String) }),
+    }));
+    expect(retainPayload.delete).not.toHaveBeenCalled();
+    expect(message.ack).toHaveBeenCalledOnce();
+    expect(message.retry).not.toHaveBeenCalled();
   });
 });

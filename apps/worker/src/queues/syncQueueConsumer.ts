@@ -255,14 +255,17 @@ export async function processSyncQueue(
       }
 
       if (job) {
-        await Promise.resolve(supabase
+        const { error: failureStateError } = await supabase
           .from('notion_block_sync')
           .update({ status: 'failed', updated_at: new Date().toISOString() })
           .eq('installation_id', job.installationId)
           .eq('local_id', job.localId)
-          .eq('local_version', job.queuedVersion))
-          .then((): void => undefined)
-          .catch((): void => undefined);
+          .eq('local_version', job.queuedVersion);
+        if (failureStateError) {
+          console.error('[queue] failed sync state could not be persisted', safeErrorMetadata(failureStateError));
+          message.retry();
+          continue;
+        }
 
         if (!syncRow || syncRow.local_version <= job.queuedVersion) {
           const installationId = String(job.installationId);
@@ -287,7 +290,16 @@ export async function processSyncQueue(
       }
 
       if (job && (isUnmappedNotionContentError(error) || isPermanentNotionFailure(error))) {
-        await ackAfterPayloadCleanup(message, jobId, env, String(job.installationId));
+        try {
+          // The extension removes operations from its local outbox as soon as
+          // this durable payload is accepted. Retain permanent failures in the
+          // server outbox so an explicit Sync retry can replay the exact edits.
+          await retainFailedQueuePayload(jobId, job);
+          message.ack();
+        } catch (retentionError) {
+          console.error('[queue] failed sync payload could not be retained', safeErrorMetadata(retentionError));
+          message.retry();
+        }
       } else {
         message.retry();
       }
@@ -333,6 +345,51 @@ async function ackAfterPayloadCleanup(
     console.error('[queue] discarded payload cleanup failed', safeErrorMetadata(cleanupError));
     message.retry();
   }
+}
+
+/** Retains a permanently failed operation for a later explicit retry. */
+async function retainFailedQueuePayload(
+  jobId: string | undefined,
+  job: SyncQueueMessage,
+): Promise<void> {
+  const failedJob: SyncQueueMessage = {
+    ...job,
+    deadLetteredAt: new Date().toISOString(),
+  };
+  delete failedJob.deliveryPendingAt;
+
+  if (jobId) {
+    const { data: retained, error: retainError } = await supabase
+      .from('jottathing_sync_queue_payloads')
+      .update({ payload: failedJob, updated_at: new Date().toISOString() })
+      .eq('id', jobId)
+      .eq('status', 'pending')
+      .select('id')
+      .maybeSingle();
+    if (retainError) throw new Error('Unable to retain the failed sync payload.');
+    if (retained) return;
+
+    const { data: current, error: readError } = await supabase
+      .from('jottathing_sync_queue_payloads')
+      .select('status')
+      .eq('id', jobId)
+      .maybeSingle();
+    if (readError) throw new Error('Unable to verify the failed sync payload.');
+    if (current?.status === 'processed') return;
+  }
+
+  // Older Queue messages carried the job itself instead of a payload UUID. If
+  // one of those fails, move its full body into the durable outbox before ack.
+  const recoveredJobId = jobId ?? crypto.randomUUID();
+  const { error: insertError } = await supabase
+    .from('jottathing_sync_queue_payloads')
+    .insert({
+      id: recoveredJobId,
+      installation_id: job.installationId,
+      payload: failedJob,
+      status: 'pending',
+    });
+  if (insertError) throw new Error('Unable to recover the failed sync payload.');
 }
 
 /** Dead-letter references while retaining the accepted payload for a later manual retry. */
