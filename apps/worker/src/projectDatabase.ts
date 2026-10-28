@@ -23,7 +23,10 @@ import {
 } from './projectDatabaseRows.js';
 import { createProjectDatabaseStateHelpers } from './projectDatabaseState.js';
 import { createProjectDatabaseDiscoveryHelpers } from './projectDatabaseDiscovery.js';
-import { isNotionObjectForbidden } from './workerUtils.js';
+import {
+  isNotionObjectForbidden,
+  isNotionPageIdValidationError,
+} from './workerUtils.js';
 
 import type { DocumentContent, Project, ProjectPage } from '../../../src/types/capture.js';
 import type {
@@ -187,7 +190,15 @@ export function createProjectDatabaseHelpers({
     const existingPageId = stored?.notionPageId;
     let page = existingPageId
       ? await notionRequest(store, `/pages/${existingPageId}`).catch((error) => {
-          if (isNotionObjectNotFound(error) || (!isForcedMerge && isNotionObjectForbidden(error))) {
+          if (
+            isNotionObjectNotFound(error) ||
+            (!isForcedMerge && isNotionObjectForbidden(error)) ||
+            isNotionPageIdValidationError(error)
+          ) {
+            if (isNotionPageIdValidationError(error)) {
+              delete store.projectPages[project.id];
+              appendLog(store, 'project_page_mapping_repaired', 'Re-discovering the project row by Jottathing ID.');
+            }
             return undefined;
           }
           throw error;
@@ -203,7 +214,7 @@ export function createProjectDatabaseHelpers({
         page = await createProjectDatabasePage(store, database.dataSourceId, project);
         appendLog(store, 'project_database_page_created', project.name || 'Untitled Project');
       } else {
-        page = await updateProjectDatabasePage(store, page.id, project);
+        page = await updateProjectDatabasePage(store, page.id, database.dataSourceId, project);
       }
 
       const stateSync = syncState
@@ -243,7 +254,16 @@ export function createProjectDatabaseHelpers({
   /** Rebuilds local state from Notion. @param store - Worker state. @param options - Parent selection. @returns Imported state. */
   async function reloadProjectDatabaseFromNotion(
     store: WorkerStore,
-    { selectedParentPageId }: ParentSelection = { selectedParentPageId: undefined },
+    {
+      selectedParentPageId,
+      onProgress,
+    }: ParentSelection & {
+      onProgress?: (progress: {
+        stage: 'reading_projects' | 'importing_pages';
+        completed: number;
+        total: number;
+      }) => void;
+    } = { selectedParentPageId: undefined },
   ) {
     clearSyncMappings(store, { preserveBlockMappings: true });
     const requestedParentPageId = selectedParentPageId;
@@ -263,18 +283,28 @@ export function createProjectDatabaseHelpers({
       return project && project.status !== 'archived' ? [{ row, project }] : [];
     });
 
+    let readProjectCount = 0;
+    onProgress?.({ stage: 'reading_projects', completed: 0, total: projectRows.length });
+
     // Read independent project rows concurrently. Notion's shared requester
     // still enforces its global rate limit, while concurrent reads avoid adding
     // network latency on top of the required request spacing.
-    const rowsWithChildren = await mapWithConcurrency(projectRows, 3, async ({ row, project }) => ({
-      row,
-      project,
+    const rowsWithChildren = await mapWithConcurrency(projectRows, 3, async ({ row, project }) => {
       // Abort the reload if any project row cannot be read. Returning a partial
       // snapshot would make the client replace a complete workspace with an
       // incomplete one after a transient Notion failure.
-      children: await listAllBlockChildren(store, row.id),
-    }));
+      const children = await listAllBlockChildren(store, row.id);
+      readProjectCount += 1;
+      onProgress?.({
+        stage: 'reading_projects',
+        completed: readProjectCount,
+        total: projectRows.length,
+      });
+      return { row, project, children };
+    });
 
+    let importedProjectCount = 0;
+    onProgress?.({ stage: 'importing_pages', completed: 0, total: rowsWithChildren.length });
     const importedRows = await mapWithConcurrency(rowsWithChildren, 3, async ({ row, project, children }) => {
       storeProjectPage(store, database, project, row);
       const stateBlock = children.find(
@@ -290,6 +320,12 @@ export function createProjectDatabaseHelpers({
         mapWithConcurrency(threadBlocks, 3, (threadBlock) =>
           pageFromThreadBlock(store, project, row, threadBlock)),
       ]);
+      importedProjectCount += 1;
+      onProgress?.({
+        stage: 'importing_pages',
+        completed: importedProjectCount,
+        total: rowsWithChildren.length,
+      });
       return { project: importedProject, pages: importedPages };
     });
 

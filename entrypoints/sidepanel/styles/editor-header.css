@@ -346,6 +346,7 @@
 
 .workspace-tree-group,
 .workspace-tree-project-group {
+  position: relative;
   min-width: 0;
 }
 
@@ -425,6 +426,46 @@
   pointer-events: auto;
 }
 
+.workspace-tree-row.has-sync-conflicts .workspace-tree-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.workspace-tree-conflicts-button {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  min-width: 29px;
+  min-height: 24px;
+  padding: 0 5px;
+  border: 1px solid #b42318;
+  border-radius: 5px;
+  background: #b42318;
+  color: #fff;
+  cursor: pointer;
+  font-size: 0.65rem;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.workspace-tree-conflicts-button:hover,
+.workspace-tree-conflicts-button:focus-visible,
+.workspace-tree-conflicts-button[aria-expanded="true"] {
+  border-color: #7a271a;
+  background: #912018;
+  outline: 2px solid rgb(180 35 24 / 24%);
+  outline-offset: 1px;
+}
+
+.workspace-tree-conflict-menu {
+  top: calc(100% + 4px);
+  right: 0;
+  left: auto;
+  width: min(320px, calc(100vw - 24px));
+}
+
 .workspace-tree-action {
   display: grid;
   flex: 0 0 23px;
@@ -449,6 +490,12 @@
 
 .workspace-tree-delete-action:hover,
 .workspace-tree-delete-action:focus-visible {
+  border-color: #efb7b2;
+  color: #b42318;
+}
+
+.workspace-tree-logout-action:hover,
+.workspace-tree-logout-action:focus-visible {
   border-color: #efb7b2;
   color: #b42318;
 }

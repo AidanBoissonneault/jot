@@ -76,6 +76,15 @@ export function projectFromNotionPage(page: NotionObject): Project | undefined {
   };
 }
 
+/** Reads the managed checkbox across current and legacy database schemas. */
+function isManagedProjectRow(page: NotionObject): boolean {
+  const properties = page.properties ?? {};
+  const managed = properties[PROJECT_PROPERTIES.managed]
+    ?? properties['Managed by Inkwell']
+    ?? properties['Managed by Jot'];
+  return managed?.checkbox === true;
+}
+
 /** Stores the current Notion row identity for a synchronized project. */
 export function storeProjectPage(
   store: WorkerStore,
@@ -96,6 +105,19 @@ export function storeProjectPage(
 
 /** Creates query and mutation operations for project database rows. */
 export function createProjectDatabaseRows(notionRequest: NotionRequester) {
+  async function projectPropertyValues(
+    store: WorkerStore,
+    dataSourceId: string,
+    project: Project,
+  ): Promise<JsonObject> {
+    const dataSource = await notionRequest(store, `/data_sources/${dataSourceId}`);
+    const statusProperty = dataSource.properties?.[PROJECT_PROPERTIES.status];
+    const statusType = typeof statusProperty?.type === 'string'
+      ? statusProperty.type
+      : undefined;
+    return projectProperties(project, statusType);
+  }
+
   async function queryManagedProjectRows(
     store: WorkerStore,
     dataSourceId: string,
@@ -104,16 +126,12 @@ export function createProjectDatabaseRows(notionRequest: NotionRequester) {
     let cursor: string | undefined;
     const seenCursors = new Set<string>();
     do {
-      const body: JsonObject = {
-        page_size: 100,
-        filter: {
-          and: [
-            { property: PROJECT_PROPERTIES.managed, checkbox: { equals: true } },
-            { property: PROJECT_PROPERTIES.status, select: { does_not_equal: 'Archived' } },
-          ],
-        },
-        sorts: [{ property: PROJECT_PROPERTIES.updated, direction: 'descending' }],
-      };
+      // Keep the API query independent of a user's property types. A database
+      // can retain an older Status property as a Notion `status` field, while
+      // current Jottathing tables use `select`; filtering with a fixed type
+      // makes both validation and full reload fail with Notion 400 responses.
+      // The result set is paged and narrowed locally using the managed marker.
+      const body: JsonObject = { page_size: 100 };
       if (cursor) body.start_cursor = cursor;
       const response = await notionRequest(store, `/data_sources/${dataSourceId}/query`, {
         method: 'POST',
@@ -122,7 +140,9 @@ export function createProjectDatabaseRows(notionRequest: NotionRequester) {
       if (!Array.isArray(response.results)) {
         throw new Error('Notion returned an invalid managed-project page.');
       }
-      results.push(...response.results.filter((row) => !isArchivedObject(row)));
+      results.push(...response.results.filter((row) =>
+        isManagedProjectRow(row) && !isArchivedObject(row),
+      ));
       if (response.has_more) {
         const nextCursor = response.next_cursor;
         if (!nextCursor || seenCursors.has(nextCursor)) {
@@ -142,20 +162,67 @@ export function createProjectDatabaseRows(notionRequest: NotionRequester) {
     dataSourceId: string,
     projectId: string,
   ): Promise<NotionObject | undefined> {
-    const response = await notionRequest(store, `/data_sources/${dataSourceId}/query`, {
-      method: 'POST',
-      body: {
-        page_size: 1,
-        filter: {
-          property: PROJECT_PROPERTIES.jottathingId,
-          rich_text: { equals: projectId },
+    const dataSource = await notionRequest(store, `/data_sources/${dataSourceId}`);
+    const properties = dataSource.properties ?? {};
+    const idProperty = [
+      PROJECT_PROPERTIES.jottathingId,
+      'Inkwell ID',
+      'Jot ID',
+    ].find((name) => properties[name]?.type === 'rich_text');
+
+    if (idProperty) {
+      const response = await notionRequest(store, `/data_sources/${dataSourceId}/query`, {
+        method: 'POST',
+        body: {
+          page_size: 1,
+          filter: {
+            property: idProperty,
+            rich_text: { equals: projectId },
+          },
         },
-      },
-    });
-    if (!Array.isArray(response.results)) {
-      throw new Error('Notion returned an invalid project lookup result.');
+      });
+      if (!Array.isArray(response.results)) {
+        throw new Error('Notion returned an invalid project lookup result.');
+      }
+      return response.results[0];
     }
-    return response.results?.[0];
+
+    // Adopted legacy databases may have had their ID field removed or changed
+    // to a different type. In that case, scan safely rather than sending a
+    // rich_text filter that Notion rejects with HTTP 400.
+    let cursor: string | undefined;
+    const seenCursors = new Set<string>();
+    do {
+      const body: JsonObject = { page_size: 100 };
+      if (cursor) body.start_cursor = cursor;
+      const response = await notionRequest(store, `/data_sources/${dataSourceId}/query`, {
+        method: 'POST',
+        body,
+      });
+      if (!Array.isArray(response.results)) {
+        throw new Error('Notion returned an invalid project lookup result.');
+      }
+      const match = response.results.find((row) => {
+        const rowProperties = row.properties ?? {};
+        return [
+          PROJECT_PROPERTIES.jottathingId,
+          'Inkwell ID',
+          'Jot ID',
+        ].some((name) => richTextProperty(rowProperties[name]).trim() === projectId);
+      });
+      if (match) return match;
+      if (response.has_more) {
+        const nextCursor = response.next_cursor;
+        if (!nextCursor || seenCursors.has(nextCursor)) {
+          throw new Error('Notion returned an incomplete project lookup result.');
+        }
+        seenCursors.add(nextCursor);
+        cursor = nextCursor;
+      } else {
+        cursor = undefined;
+      }
+    } while (cursor);
+    return undefined;
   }
 
   async function createProjectDatabasePage(
@@ -163,11 +230,12 @@ export function createProjectDatabaseRows(notionRequest: NotionRequester) {
     dataSourceId: string,
     project: Project,
   ): Promise<NotionObject> {
+    const properties = await projectPropertyValues(store, dataSourceId, project);
     return notionRequest(store, '/pages', {
       method: 'POST',
       body: {
         parent: { type: 'data_source_id', data_source_id: dataSourceId },
-        properties: projectProperties(project),
+        properties,
       },
     });
   }
@@ -175,9 +243,11 @@ export function createProjectDatabaseRows(notionRequest: NotionRequester) {
   async function updateProjectDatabasePage(
     store: WorkerStore,
     pageId: string,
+    dataSourceId: string,
     project: Project,
   ): Promise<NotionObject> {
-    const body: JsonObject = { properties: projectProperties(project) };
+    const properties = await projectPropertyValues(store, dataSourceId, project);
+    const body: JsonObject = { properties };
     if (project.status === 'archived') body.archived = true;
     return notionRequest(store, `/pages/${pageId}`, { method: 'PATCH', body });
   }

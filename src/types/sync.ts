@@ -178,11 +178,38 @@ export type SyncValidationResponse = {
 /** Describes server-side synchronization jobs that are not yet fully applied. */
 export type SyncQueueStatusResponse = {
   hasPending: boolean;
+  /** Accepted Queue payloads still awaiting an acknowledgment. */
+  pendingCount?: number;
+};
+
+/** Reports a measured phase or item count during a user-requested full sync. */
+export type SyncProgressUpdate = {
+  phase:
+    | 'saving_edits'
+    | 'checking_notion'
+    | 'syncing_pages'
+    | 'uploading'
+    | 'waiting_for_server'
+    | 'loading_workspace'
+    | 'updating_view';
+  completed?: number;
+  total?: number;
+  pending?: number;
+  stage?: 'reading_projects' | 'importing_pages';
+};
+
+/** Describes the result of retrying accepted jobs retained after Queue exhaustion. */
+export type SyncQueueRetryResponse = {
+  requeuedCount: number;
+  requeuedOperationIds?: string[];
+  versions?: Record<string, number>;
+  opVersions?: Record<string, number>;
 };
 
 /** Describes the parent selection used while reloading remote state. */
 export type SyncReloadRequest = {
   selectedParentPageId?: string;
+  reloadId?: string;
 };
 
 /** Describes projects and pages rebuilt from remote Notion state. */
@@ -231,6 +258,20 @@ export type SyncEnqueueResponse = {
 /** Describes a real-time synchronization status notification. */
 export type SyncEventMessage =
   | { status: 'queue_idle' }
+  | {
+      status: 'reload_progress';
+      reloadId: string;
+      stage: 'reading_projects' | 'importing_pages';
+      completed: number;
+      total: number;
+    }
   | { status: 'synced'; pageId: string; notionBlockId?: string | null; version?: number }
-  | { status: 'failed'; pageId: string; code?: string; message?: string; statusCode?: number }
+  | {
+      status: 'failed';
+      pageId: string;
+      code?: string;
+      message?: string;
+      statusCode?: number;
+      deadLettered?: boolean;
+    }
   | { status: 'stale'; pageId: string; version?: number };

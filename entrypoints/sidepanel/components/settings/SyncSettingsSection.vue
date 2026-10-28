@@ -3,7 +3,6 @@
 import { computed } from 'vue';
 import type { SettingsPageContext } from './settingsPageContext';
 import SyncStatusList from '../lists/SyncStatusList.vue';
-import LegalConsent from './LegalConsent.vue';
 
 const props = defineProps<{ context: SettingsPageContext }>();
 const {
@@ -13,15 +12,6 @@ const {
   parentPageLabel,
   isResyncing,
   resync,
-  hasAcceptedLegalTerms,
-  isLegalAcceptanceLoaded,
-  LEGAL_TERMS_URL,
-  LEGAL_PRIVACY_URL,
-  openLegalUrl,
-  canLoginWithNotion,
-  isSigningIn,
-  loginWithNotion,
-  logout,
   isDeletingConnection,
   deleteConnection,
 } = props.context;
@@ -85,27 +75,6 @@ async function assignUnknownQueueToCurrentAccount() {
       <span v-else>Queued changes are locked to their original Notion account and workspace. Reconnect that connection to sync them. Your documents remain on this device.</span>
     </div>
 
-    <LegalConsent
-      v-if="!store.syncConfig.connected"
-      v-model:accepted="hasAcceptedLegalTerms"
-      :loaded="isLegalAcceptanceLoaded"
-      :terms-url="LEGAL_TERMS_URL"
-      :privacy-url="LEGAL_PRIVACY_URL"
-      :open-legal-url="openLegalUrl"
-    />
-
-    <button
-      v-if="!store.syncConfig.connected"
-      type="button"
-      class="icon-label-button"
-      :disabled="!canLoginWithNotion"
-      :title="isSigningIn ? 'Connecting' : store.syncConfig.logoutCleanupPending ? 'Retry logout cleanup before reconnecting' : 'Continue with Notion'"
-      :aria-label="isSigningIn ? 'Connecting' : store.syncConfig.logoutCleanupPending ? 'Retry logout cleanup before reconnecting' : 'Continue with Notion'"
-      @click="loginWithNotion"
-    >
-      <font-awesome-icon :icon="['fas', 'cloud-arrow-up']" fixed-width />
-      <span>{{ isSigningIn ? 'Connecting...' : 'Continue with Notion' }}</span>
-    </button>
     <button
       v-if="store.syncConfig.logoutCleanupPending"
       type="button"
@@ -117,18 +86,6 @@ async function assignUnknownQueueToCurrentAccount() {
     >
       <font-awesome-icon :icon="['fas', 'rotate']" :class="{ 'sync-rotating-icon': store.isRetryingLogoutCleanup }" fixed-width />
       <span>{{ store.isRetryingLogoutCleanup ? 'Finishing logout…' : 'Retry logout cleanup' }}</span>
-    </button>
-    <button
-      v-if="store.syncConfig.authenticated || store.syncConfig.connected"
-      type="button"
-      class="icon-label-button secondary-button"
-      title="Logout"
-      aria-label="Logout"
-      :disabled="isDeletingConnection"
-      @click="logout"
-    >
-      <font-awesome-icon :icon="['fas', 'right-from-bracket']" fixed-width />
-      <span>Logout</span>
     </button>
     <button
       v-if="store.projects.length > 0 || store.pendingSyncCount > 0 || store.syncConfig.authenticated || store.syncConfig.connected"

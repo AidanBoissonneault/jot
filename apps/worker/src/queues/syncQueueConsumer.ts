@@ -94,11 +94,12 @@ export async function processSyncQueue(
         message.ack();
         continue;
       }
+      job = await ensureServerAssignedQueueVersion(job, jobId);
       const installationId = String(job.installationId);
       const queuedVersion = job.queuedVersion;
       console.log('[queue] processing', job.type, 'v', queuedVersion);
 
-      const { data: row, error: syncRowError } = await supabase
+      let { data: row, error: syncRowError } = await supabase
         .from('notion_block_sync')
         .select('local_version')
         .eq('installation_id', job.installationId)
@@ -106,6 +107,41 @@ export async function processSyncQueue(
         .maybeSingle();
       if (syncRowError) throw new Error('Unable to load the current sync version.');
       syncRow = row;
+
+      // The RPC that assigned this version should already have created the
+      // state row. Repair it if an older deployment accepted a job without
+      // doing so, and never let a missing row look like a successful sync.
+      if (!row) {
+        const { error: insertError } = await supabase
+          .from('notion_block_sync')
+          .insert({
+            installation_id: job.installationId,
+            local_id: job.localId,
+            entity_type: job.type,
+            local_version: queuedVersion,
+            status: 'pending',
+          });
+        if (insertError) {
+          // A concurrent queue delivery may have repaired the same row first.
+          const { data: repairedRow, error: rereadError } = await supabase
+            .from('notion_block_sync')
+            .select('local_version')
+            .eq('installation_id', job.installationId)
+            .eq('local_id', job.localId)
+            .maybeSingle();
+          if (rereadError || !repairedRow) {
+            throw new Error('Unable to restore the sync version state.');
+          }
+          row = repairedRow;
+        } else {
+          row = { local_version: queuedVersion };
+        }
+        syncRow = row;
+      }
+
+      if (row.local_version < queuedVersion) {
+        throw new Error('The queued version is missing from durable sync state.');
+      }
 
       // Older full-page snapshots can be discarded. Incremental block batches
       // still run every chunk so the remote page is not left partially applied.
@@ -121,7 +157,8 @@ export async function processSyncQueue(
         .from('notion_block_sync')
         .update({ status: 'syncing', updated_at: new Date().toISOString() })
         .eq('installation_id', job.installationId)
-        .eq('local_id', job.localId);
+        .eq('local_id', job.localId)
+        .eq('local_version', queuedVersion);
       if (syncingError) throw new Error('Unable to mark the sync as active.');
 
       let notionBlockId: string | null = null;
@@ -158,9 +195,9 @@ export async function processSyncQueue(
       }
 
       const isFinalBatchMessage = job.type !== 'block_op' || job.batchIndex === job.batchSize - 1;
-      const isCurrentVersion = !row || row.local_version <= queuedVersion;
+      const isCurrentVersion = row.local_version <= queuedVersion;
       if (isFinalBatchMessage && isCurrentVersion) {
-        await supabase
+        const { data: syncedRow, error: syncedStateError } = await supabase
           .from('notion_block_sync')
           .update({
             status: 'synced',
@@ -169,13 +206,31 @@ export async function processSyncQueue(
             updated_at: new Date().toISOString(),
           })
           .eq('installation_id', job.installationId)
-          .eq('local_id', job.localId);
+          .eq('local_id', job.localId)
+          .eq('local_version', queuedVersion)
+          .select('local_version')
+          .maybeSingle();
+        if (syncedStateError) throw new Error('Unable to persist the completed sync state.');
 
-        const doStub = env.SYNC_EVENTS.get(env.SYNC_EVENTS.idFromName(installationId));
-        await doStub.fetch(new Request('http://do/notify', {
-          method: 'POST',
-          body: JSON.stringify({ status: 'synced', pageId: job.localId, notionBlockId, version: queuedVersion }),
-        })).catch(() => undefined);
+        if (syncedRow) {
+          const doStub = env.SYNC_EVENTS.get(env.SYNC_EVENTS.idFromName(installationId));
+          await doStub.fetch(new Request('http://do/notify', {
+            method: 'POST',
+            body: JSON.stringify({ status: 'synced', pageId: job.localId, notionBlockId, version: queuedVersion }),
+          })).catch(() => undefined);
+        } else {
+          // A newer edit may have been queued while Notion was being updated.
+          // Do not publish a stale "synced" event over its pending state.
+          const { data: latestRow, error: latestRowError } = await supabase
+            .from('notion_block_sync')
+            .select('local_version')
+            .eq('installation_id', job.installationId)
+            .eq('local_id', job.localId)
+            .maybeSingle();
+          if (latestRowError || !latestRow || latestRow.local_version <= queuedVersion) {
+            throw new Error('Unable to confirm the completed sync version.');
+          }
+        }
       }
 
       syncOperationSucceeded = true;
@@ -280,7 +335,7 @@ async function ackAfterPayloadCleanup(
   }
 }
 
-/** Dead-letter messages contain only references; remove any orphaned payload and ack them. */
+/** Dead-letter references while retaining the accepted payload for a later manual retry. */
 export async function processSyncDeadLetterQueue(
   batch: MessageBatch<SyncQueueReference>,
   env: WorkerEnv,
@@ -293,19 +348,53 @@ export async function processSyncDeadLetterQueue(
       continue;
     }
     try {
-      const { data: payload, error: payloadError } = await supabase
+      const { data: payloadRow, error: payloadError } = await supabase
         .from('jottathing_sync_queue_payloads')
-        .select('installation_id')
+        .select('installation_id, payload, status')
         .eq('id', jobId)
         .maybeSingle();
       if (payloadError) throw new Error('Unable to read the dead-letter sync payload.');
-      await removeQueuedPayload(jobId);
-      if (payload?.installation_id) {
-        await notifyQueueIdleIfDrained(env, String(payload.installation_id));
+      if (!payloadRow) {
+        message.ack();
+        continue;
       }
+
+      const job = payloadRow.payload;
+      if (!isSyncQueueMessage(job)) {
+        console.error('[queue] dead-letter payload is invalid; retained for inspection');
+        message.ack();
+        continue;
+      }
+
+      const deadLetteredJob = { ...job, deadLetteredAt: new Date().toISOString() };
+      const { error: retainError } = await supabase
+        .from('jottathing_sync_queue_payloads')
+        .update({ payload: deadLetteredJob, updated_at: new Date().toISOString() })
+        .eq('id', jobId)
+        .eq('status', 'pending');
+      if (retainError) throw new Error('Unable to retain the dead-letter sync payload.');
+
+      const { error: syncStateError } = await supabase
+        .from('notion_block_sync')
+        .update({ status: 'failed', updated_at: new Date().toISOString() })
+        .eq('installation_id', job.installationId)
+        .eq('local_id', job.localId)
+        .eq('local_version', job.queuedVersion);
+      if (syncStateError) throw new Error('Unable to mark the dead-letter sync as failed.');
+
+      const doStub = env.SYNC_EVENTS.get(env.SYNC_EVENTS.idFromName(String(job.installationId)));
+      await doStub.fetch(new Request('http://do/notify', {
+        method: 'POST',
+        body: JSON.stringify({
+          status: 'failed',
+          pageId: job.localId,
+          deadLettered: true,
+          message: 'Sync paused after repeated failures. Your local note is saved; use Sync to retry.',
+        }),
+      })).catch(() => undefined);
       message.ack();
     } catch (error) {
-      console.error('[queue] dead-letter payload cleanup failed', safeErrorMetadata(error));
+      console.error('[queue] dead-letter payload retention failed', safeErrorMetadata(error));
       message.retry();
     }
   }
@@ -334,6 +423,51 @@ async function notifyQueueIdleIfDrained(env: WorkerEnv, installationId: string):
     // notification does not strand a waiting reload indefinitely.
     console.error('[queue] idle notification failed', safeErrorMetadata(error));
   }
+}
+
+/** Assigns a durable server revision to legacy jobs that were queued at version zero. */
+async function ensureServerAssignedQueueVersion(
+  job: SyncQueueMessage,
+  jobId: string | undefined,
+): Promise<SyncQueueMessage> {
+  if (Number.isSafeInteger(job.queuedVersion) && job.queuedVersion >= 1) return job;
+
+  const { data, error } = await supabase.rpc('increment_block_version', {
+    p_installation_id: job.installationId,
+    p_local_id: job.localId,
+    p_entity_type: job.type,
+  });
+  const queuedVersion = Number(data);
+  if (error || !Number.isSafeInteger(queuedVersion) || queuedVersion < 1) {
+    throw new Error('Unable to assign a durable version to the queued sync job.');
+  }
+
+  const upgradedJob: SyncQueueMessage = { ...job, queuedVersion };
+  if (!jobId) return upgradedJob;
+
+  const { data: upgradedRow, error: upgradeError } = await supabase
+    .from('jottathing_sync_queue_payloads')
+    .update({ payload: upgradedJob, updated_at: new Date().toISOString() })
+    .eq('id', jobId)
+    .eq('status', 'pending')
+    .eq('payload->>queuedVersion', String(job.queuedVersion))
+    .select('payload')
+    .maybeSingle();
+  if (upgradeError) throw new Error('Unable to persist the queued sync version.');
+  if (upgradedRow && isSyncQueueMessage(upgradedRow.payload)) return upgradedRow.payload;
+
+  // Another delivery may have repaired this legacy reference concurrently.
+  const { data: latestRow, error: latestError } = await supabase
+    .from('jottathing_sync_queue_payloads')
+    .select('payload')
+    .eq('id', jobId)
+    .eq('status', 'pending')
+    .maybeSingle();
+  if (latestError) throw new Error('Unable to verify the queued sync version.');
+  if (latestRow && isSyncQueueMessage(latestRow.payload) && latestRow.payload.queuedVersion >= 1) {
+    return latestRow.payload;
+  }
+  throw new Error('Unable to persist the queued sync version.');
 }
 
 function isSyncQueueMessage(value: unknown): value is SyncQueueMessage {

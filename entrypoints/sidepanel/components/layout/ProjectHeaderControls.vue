@@ -36,6 +36,9 @@ const {
   selectPage: selectPageAction,
   createWorkspace: createWorkspaceAction,
   selectWorkspace: selectWorkspaceAction,
+  requestLogout,
+  syncConflicts,
+  openProjectSyncConflict,
 } = props.context;
 
 const controlsRef = ref<HTMLElement | null>(null);
@@ -83,13 +86,22 @@ async function selectPageFromTree(workspaceId: string, projectId: string, pageId
   if (activeTitleMenu.value === 'project') toggleTitleMenu('project');
 }
 
+async function openConflictProject(workspaceId: string, projectId: string) {
+  if (workspaceId !== store.currentWorkspaceId) await selectWorkspaceAction(workspaceId);
+  if (projectId !== store.currentProjectId) await selectProject(projectId);
+}
+
+async function openConflictPage(workspaceId: string, projectId: string, pageId: string) {
+  await openConflictProject(workspaceId, projectId);
+  if (pageId !== store.currentPage?.id) await selectPageAction(pageId);
+}
+
 function loadWorkspacePages(projectId: string) {
   void store.loadWorkspaceMenuPages(projectId);
 }
 
 async function createProjectInWorkspace(workspaceId: string) {
-  if (workspaceId !== store.currentWorkspaceId) await selectWorkspaceAction(workspaceId);
-  await createProject();
+  await createProject(workspaceId);
 }
 
 async function renameWorkspace(workspaceId: string, name: string) {
@@ -273,6 +285,7 @@ onBeforeUnmount(() => {
             :selected-project-id="store.currentProjectId"
             :selected-page-id="store.currentPage?.id"
             :authenticated="Boolean(store.syncConfig.authenticated)"
+            :project-sync-conflicts="syncConflicts"
             @select-project="selectProjectFromTree"
             @select-page="selectPageFromTree"
             @load-pages="loadWorkspacePages"
@@ -283,6 +296,10 @@ onBeforeUnmount(() => {
             @delete-workspace="deleteWorkspace"
             @delete-project="deleteProject"
             @delete-page="deletePage"
+            @logout="requestLogout"
+            @review-project-conflict="openProjectSyncConflict"
+            @open-conflict-project="openConflictProject"
+            @open-conflict-page="openConflictPage"
             @move-project="moveProjectToWorkspace"
             @move-page="movePageToProject"
           />

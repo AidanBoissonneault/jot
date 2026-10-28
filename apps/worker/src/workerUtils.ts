@@ -128,6 +128,24 @@ export function notionApiErrorResponse(
 ): Response | undefined {
   const failure = notionApiHttpFailure(error);
   if (!failure) return undefined;
+  const notionError = error as {
+    code?: unknown;
+    endpoint?: unknown;
+    status?: unknown;
+  };
+  const endpoint = typeof notionError.endpoint === 'string'
+    ? notionError.endpoint
+        .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/gi, ':id')
+        .replace(/[0-9a-f]{32}/gi, ':id')
+        .slice(0, 160)
+    : 'unknown';
+  console.error(JSON.stringify({
+    event: 'notion_api_request_failed',
+    workerRoute: context.req.path,
+    endpoint,
+    status: notionError.status,
+    code: notionError.code,
+  }));
   if (failure.retryAfter !== undefined) {
     context.header('Retry-After', String(Math.ceil(failure.retryAfter)));
   }
@@ -142,6 +160,14 @@ export function isNotionObjectNotFound(error: unknown): boolean {
 /** Detects a forbidden Notion object lookup so regular sync can try rediscovery. */
 export function isNotionObjectForbidden(error: unknown): boolean {
   return numberProperty(error, 'status') === 403 || stringProperty(error, 'code') === 'restricted_resource';
+}
+
+/** Detects a cached page identifier that Notion rejects as an invalid page path. */
+export function isNotionPageIdValidationError(error: unknown): boolean {
+  const endpoint = stringProperty(error, 'endpoint');
+  return numberProperty(error, 'status') === 400 &&
+    stringProperty(error, 'code') === 'validation_error' &&
+    Boolean(endpoint && /(?:^|\/)pages\/[^/?]+(?:\?.*)?$/.test(endpoint));
 }
 
 /** Detects a block/page endpoint mismatch. @param error - Unknown error. @returns Match result. */

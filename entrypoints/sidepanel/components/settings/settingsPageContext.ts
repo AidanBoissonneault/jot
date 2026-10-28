@@ -13,16 +13,10 @@ export interface SettingsPageContext {
   saveLabel: ComputedRef<string>;
   accountLabel: ComputedRef<string>;
   parentPageLabel: ComputedRef<string>;
-  hasAcceptedLegalTerms: Ref<boolean>;
-  isLegalAcceptanceLoaded: Ref<boolean>;
   LEGAL_TERMS_URL: string;
   LEGAL_PRIVACY_URL: string;
   openLegalUrl: (url: string) => void;
-  canLoginWithNotion: ComputedRef<boolean>;
-  isSigningIn: Ref<boolean>;
   isDeletingConnection: Ref<boolean>;
-  loginWithNotion: () => Promise<void>;
-  logout: () => Promise<void>;
   deleteConnection: () => Promise<void>;
   serverUrlDraft: Ref<string>;
   saveServerUrl: () => Promise<void>;

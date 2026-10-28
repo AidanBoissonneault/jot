@@ -182,6 +182,8 @@ export interface ConnectedWorkerStore extends WorkerStore {
 /** Describes the normalized subset of a local block operation consumed by the worker. */
 export interface ManagedBlockOperation {
   jottathingBlockId: string | undefined;
+  /** Preserved in the durable payload so a retry can reconcile local operation IDs. */
+  opId?: string;
   payload: Partial<SyncBlockOperation['payload']>;
   type: SyncBlockOperation['type'];
 }
@@ -212,6 +214,10 @@ interface SyncQueueMessageBase {
   installationId: Identifier;
   localId: string;
   queuedVersion: number;
+  /** Set after Queue retries are exhausted so a later manual Sync can redrive this durable payload. */
+  deadLetteredAt?: string;
+  /** Set when the durable payload was stored but its Queue reference could not be published. */
+  deliveryPendingAt?: string;
 }
 
 /** Describes a versioned incremental block queue message. */

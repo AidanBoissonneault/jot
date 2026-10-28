@@ -15,7 +15,7 @@ import {
 } from '@/src/services/notionClient';
 import { onSyncQueueChange } from '@/src/services/syncQueue';
 import { cleanSyncServerUrl } from '@/src/lib/syncServerUrl';
-import type { SyncEventMessage } from '@/src/types/sync';
+import type { SyncEventMessage, SyncProgressUpdate } from '@/src/types/sync';
 import type {
   DocumentContent,
   NotionParentPage,
@@ -88,6 +88,34 @@ export const useJottathingStore = defineStore('jottathing', () => {
 
   function getWorkspaceMenuAccountKey() {
     return `${syncConfig.value.userId ?? ''}::${syncConfig.value.workspaceId ?? ''}::${Boolean(syncConfig.value.authenticated)}`;
+  }
+
+  function createWelcomeGuideContent(): DocumentContent {
+    const heading = (level: number, text: string): DocumentContent => ({
+      type: 'heading',
+      attrs: { level },
+      content: [{ type: 'text', text }],
+    });
+    const paragraph = (text: string): DocumentContent => ({
+      type: 'paragraph',
+      content: [{ type: 'text', text }],
+    });
+
+    return {
+      type: 'doc',
+      content: [
+        heading(1, 'Welcome to Jottathing'),
+        paragraph('Turn useful web context into notes you can edit, organize, and sync with Notion.'),
+        heading(2, 'Capture from the web'),
+        paragraph('Select text on a webpage and send it to Jottathing. The note keeps its source link so you can return to the original.'),
+        heading(2, 'Organize your notes'),
+        paragraph('Use projects for separate topics and pages for related notes. Add a project in this Notion workspace whenever you need another space.'),
+        heading(2, 'Write and edit'),
+        paragraph('Format notes with headings, lists, links, images, and audio. Your synced notes remain available locally when you are offline.'),
+        heading(2, 'Try it out'),
+        paragraph('Capture a highlight from a page, or add a project and start writing. Changes in this workspace sync to Notion when you are online.'),
+      ],
+    };
   }
 
   async function refreshWorkspaceMenuTree() {
@@ -333,6 +361,38 @@ export const useJottathingStore = defineStore('jottathing', () => {
     await loadCurrentPage();
   }
 
+  async function activateNotionWorkspace() {
+    await refreshWorkspaceMenuTree();
+    const notionWorkspace = workspaces.value.find((workspace) =>
+      workspace.kind === 'notion' &&
+      workspace.accountId === syncConfig.value.userId &&
+      (!syncConfig.value.workspaceId || workspace.notionWorkspaceId === syncConfig.value.workspaceId),
+    );
+    if (!notionWorkspace) {
+      throw new Error('Jottathing could not create the connected Notion workspace. Try signing in again.');
+    }
+
+    await selectWorkspace(notionWorkspace.id);
+    const activeProjects = workspaceMenuProjects.value.filter((project) =>
+      project.workspaceId === notionWorkspace.id && project.status === 'active',
+    );
+    if (!activeProjects.length) {
+      await createProject(
+        'Welcome to Jottathing',
+        notionWorkspace.id,
+        {
+          title: 'Getting started',
+          content: createWelcomeGuideContent(),
+        },
+      );
+      return;
+    }
+
+    if (!activeProjects.some((project) => project.id === currentProjectId.value)) {
+      await selectProject(activeProjects[0].id);
+    }
+  }
+
   async function createLocalWorkspace(name: string) {
     const workspace = await notionClient.createLocalWorkspace(name);
     await refreshWorkspaceMenuTree();
@@ -455,11 +515,29 @@ export const useJottathingStore = defineStore('jottathing', () => {
     }
   }
 
-  async function createProject(name: string) {
+  async function createProject(
+    name: string,
+    workspaceId?: string,
+    initialPage?: { title: string; content: DocumentContent },
+  ) {
     saveStatus.value = 'creating';
 
     try {
-      const creation = await notionClient.createProject(name);
+      const targetWorkspaceId = workspaceId ?? currentWorkspaceId.value;
+      const targetWorkspace = workspaces.value.find((workspace) => workspace.id === targetWorkspaceId);
+      if (!targetWorkspace) throw new Error('Choose a workspace before creating a project.');
+      if (targetWorkspace.kind === 'notion' && !syncConfig.value.connected) {
+        throw new Error('Reconnect to Notion before adding a project to this workspace.');
+      }
+      if (workspaceId && workspaceId !== currentWorkspaceId.value) {
+        await selectWorkspace(workspaceId);
+      }
+      const creation = await notionClient.createProject(name, {
+        workspaceId: targetWorkspaceId,
+        ...(initialPage
+          ? { pageTitle: initialPage.title, pageContent: initialPage.content }
+          : {}),
+      });
       void refreshWorkspaceMenuTree().catch(() => undefined);
       projects.value = [...projects.value, creation.project];
       pages.value = [creation.page];
@@ -764,13 +842,17 @@ export const useJottathingStore = defineStore('jottathing', () => {
       return;
     }
 
+    const requestedProjectId = currentProjectId.value;
     saveStatus.value = 'creating';
 
     try {
       const creation = await notionClient.createProjectPage(
-        currentProjectId.value,
+        requestedProjectId,
         nextPageTitle(),
       );
+      if (currentProjectId.value === requestedProjectId) {
+        currentProjectId.value = creation.page.projectId;
+      }
       currentPage.value = creation.page;
       pages.value = [...pages.value, creation.page];
       applyPageSyncState(creation.page);
@@ -919,7 +1001,7 @@ export const useJottathingStore = defineStore('jottathing', () => {
   }
 
   async function handleSyncEvent(event: SyncEventMessage) {
-    if (event.status === 'queue_idle') return;
+    if (event.status === 'queue_idle' || event.status === 'reload_progress') return;
 
     const updated = await applySyncResult(event);
     if (!updated) {
@@ -1142,14 +1224,15 @@ export const useJottathingStore = defineStore('jottathing', () => {
     }
   }
 
-  async function resyncPendingChanges() {
+  async function resyncPendingChanges(onProgress?: (progress: SyncProgressUpdate) => void) {
     try {
-      const result = await notionClient.resyncPendingChanges();
+      const result = await notionClient.resyncPendingChanges(onProgress);
       if (result.reloadedFromNotion) {
         remoteReloadPending = false;
       } else if (result.remoteReloadPending) {
         remoteReloadPending = true;
       }
+      onProgress?.({ phase: 'updating_view' });
       await refreshWorkspaceFromStorage();
       syncCheckError.value = '';
       return result;
@@ -1210,39 +1293,27 @@ export const useJottathingStore = defineStore('jottathing', () => {
     sseStatus.value = 'disconnected';
   }
 
-  async function logout(): Promise<boolean> {
+  async function logout(
+    onProgress?: (progress: SyncProgressUpdate) => void,
+  ): Promise<boolean> {
     isLoading.value = false;
     isCheckingSync.value = false;
     isLoadingNotionParentPages.value = false;
     syncCheckError.value = '';
-    remoteReloadPending = false;
-    syncConfig.value = stripStoredSyncCredentials({
-      ...syncConfig.value,
-      authenticated: false,
-      userName: undefined,
-      userEmail: undefined,
-      connected: false,
-      workspaceId: undefined,
-      workspaceName: undefined,
-      selectedParentPageId: undefined,
-      selectedParentPageTitle: undefined,
-      selectedDatabaseId: undefined,
-      selectedDatabaseTitle: undefined,
-      selectedDataSourceId: undefined,
-    });
-    syncEventsSource?.close();
-    syncEventsSource = undefined;
-    sseStatus.value = 'disconnected';
+    errorMessage.value = '';
 
     let logoutResult: Awaited<ReturnType<typeof notionClient.logoutSyncSession>>;
     try {
-      logoutResult = await notionClient.logoutSyncSession();
-    } catch {
-      errorMessage.value = 'Could not clear the local Jottathing connection state. Try logging out again.';
+      logoutResult = await notionClient.logoutSyncSession({ onProgress });
+    } catch (error) {
+      errorMessage.value = error instanceof Error
+        ? error.message
+        : 'Could not finish syncing. Your Notion workspace is still connected; try signing out again.';
       saveStatus.value = 'error';
       return false;
     }
 
+    remoteReloadPending = false;
     syncConfig.value = {
       ...logoutResult.syncConfig,
       authenticated: false,
@@ -1257,11 +1328,16 @@ export const useJottathingStore = defineStore('jottathing', () => {
       selectedDatabaseTitle: undefined,
       selectedDataSourceId: undefined,
     };
+    syncEventsSource?.close();
+    syncEventsSource = undefined;
+    sseStatus.value = 'disconnected';
     await refreshWorkspaceFromStorage();
     isLoading.value = false;
     isCheckingSync.value = false;
     saveStatus.value = 'idle';
-    errorMessage.value = !logoutResult.serverDataCleanupComplete
+    errorMessage.value = logoutResult.queueDrainDeferred
+      ? 'Signed out while offline or disconnected. Jottathing could not push or verify queued changes; your local notes and pending sync work are saved on this device. Reconnect the same Notion account to sync them.'
+      : !logoutResult.serverDataCleanupComplete
       ? logoutResult.syncConfig.logoutCleanupPending
         ? 'You are signed out on this device, but server logout is still pending. Retry logout cleanup when the server is available.'
         : 'You are signed out on this device, but Jottathing could not confirm removal of all server credentials. Sign in again if you need to reconnect.'
@@ -1278,7 +1354,7 @@ export const useJottathingStore = defineStore('jottathing', () => {
     saveStatus.value = 'saving';
     errorMessage.value = '';
     try {
-      const result = await notionClient.logoutSyncSession();
+      const result = await notionClient.logoutSyncSession({ cleanupOnly: true });
       syncConfig.value = {
         ...result.syncConfig,
         authenticated: false,
@@ -1641,6 +1717,7 @@ export const useJottathingStore = defineStore('jottathing', () => {
     createProject,
     createPage,
     createLocalWorkspace,
+    activateNotionWorkspace,
     renameLocalWorkspace,
     deleteLocalWorkspace,
     selectWorkspace,

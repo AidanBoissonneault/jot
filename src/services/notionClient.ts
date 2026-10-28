@@ -46,6 +46,8 @@ import type {
   SyncConflictDiff,
   SyncContentConflict,
   SyncReloadResponse,
+  SyncProgressUpdate,
+  SyncQueueRetryResponse,
   SyncQueueStatusResponse,
   SyncSessionResponse,
   SyncValidationResponse,
@@ -98,6 +100,12 @@ type OptimisticProjectCreation = {
   page: ProjectPage;
   project: Project;
   settled: Promise<{ page: ProjectPage; project: Project }>;
+};
+
+type ProjectCreationOptions = {
+  workspaceId?: string;
+  pageTitle?: string;
+  pageContent?: DocumentContent;
 };
 
 type OptimisticPageCreation = {
@@ -154,17 +162,20 @@ const defaultProjects: Project[] = [
 ];
 
 const waitForStub = () => new Promise((resolve) => setTimeout(resolve, 80));
-const LOCAL_QUEUE_DELIVERY_DELAY_MS = 10_000;
-const REMOTE_QUEUE_SETTLE_TIMEOUT_MS = 45_000;
+const LOCAL_QUEUE_DELIVERY_DELAY_MS = 500;
+const REMOTE_QUEUE_SETTLE_TIMEOUT_MS = 10 * 60_000;
+const REMOTE_QUEUE_STATUS_POLL_MS = 2_000;
 const MAX_QUEUE_RETRY_DELAY_MS = 5 * 60_000;
 const pendingTempPageSaves = new Map<string, ProjectPage>();
 const projectReconciliations = new Map<string, Promise<string>>();
+const projectIdAliases = new Map<string, string>();
 const inFlightProjectSyncRequests = new Map<string, Promise<SyncProjectResponse>>();
 let queueDeliveryPromise: Promise<void> | undefined;
 let queueDeliveryTimer: ReturnType<typeof setTimeout> | undefined;
 let forcedQueueDeliveryPromise: Promise<void> | undefined;
 let queueDeliveryRetryAttempt = 0;
 let queueDeliveryRetryDelayMs = 0;
+let syncQueueRetryEndpointAvailable: boolean | undefined;
 let isSessionLogoutPending = false;
 let isConnectionDeletionPending = false;
 let idbWriteRecoveryPromise: Promise<void> | undefined;
@@ -858,6 +869,95 @@ async function writeStorage(
   return write;
 }
 
+/** Applies page updates by ID against the latest IndexedDB snapshot. */
+async function persistPagesById(pageUpdates: ProjectPage[]): Promise<void> {
+  if (!pageUpdates.length) return;
+  const write = workspaceWriteQueue.then(async () => {
+    const storedPages = (await idbGet<ProjectPage[]>('pages')) ?? [];
+    const pagesById = new Map(storedPages.map((page) => [page.id, page]));
+    for (const page of pageUpdates) pagesById.set(page.id, page);
+    await idbSet('pages', [...pagesById.values()]);
+    workspaceWriteVersion += 1;
+  });
+  workspaceWriteQueue = write.then(() => undefined, () => undefined);
+  await write;
+}
+
+/** Appends a page atomically so concurrent creates cannot overwrite each other. */
+async function appendPageAtomically(page: ProjectPage): Promise<ProjectPage> {
+  const write = workspaceWriteQueue.then(async () => {
+    const stored = await idbGetMany(['pages', 'activePageIdsByProject']);
+    const storedPages = (stored.pages as ProjectPage[] | undefined) ?? [];
+    const samePage = storedPages.find((candidate) => candidate.id === page.id);
+    const existingProjectPages = sortProjectPages(storedPages.filter((candidate) =>
+      candidate.projectId === page.projectId &&
+      candidate.status !== 'archived' &&
+      candidate.id !== page.id,
+    ));
+    const pageToStore = {
+      ...page,
+      pageOrder: samePage?.pageOrder ?? existingProjectPages.length,
+    };
+    const orderedProjectPages = sortProjectPages([...existingProjectPages, pageToStore]);
+    const pageOrderById = new Map(orderedProjectPages.map((candidate, index) => [candidate.id, index]));
+    const pagesById = new Map(storedPages.map((candidate) => [candidate.id, candidate]));
+    for (const candidate of orderedProjectPages) {
+      pagesById.set(candidate.id, {
+        ...candidate,
+        pageOrder: pageOrderById.get(candidate.id) ?? candidate.pageOrder,
+      });
+    }
+    const activePageIdsByProject = {
+      ...((stored.activePageIdsByProject as Record<string, string> | undefined) ?? {}),
+      [page.projectId]: page.id,
+    };
+    await idbSetMany({
+      pages: [...pagesById.values()],
+      activePageIdsByProject,
+    });
+    workspaceWriteVersion += 1;
+    return pageToStore;
+  });
+  workspaceWriteQueue = write.then(() => undefined, () => undefined);
+  return write;
+}
+
+/** Replaces an optimistic page against the latest snapshot without dropping concurrent creates. */
+async function replacePageAtomically(tempPage: ProjectPage, realPage: ProjectPage): Promise<void> {
+  const write = workspaceWriteQueue.then(async () => {
+    const stored = await idbGetMany(['pages', 'activePageIdsByProject']);
+    const storedPages = (stored.pages as ProjectPage[] | undefined) ?? [];
+    const currentTempPage = storedPages.find((page) => page.id === tempPage.id);
+    const currentRealPage = storedPages.find((page) => page.id === realPage.id);
+    const currentPage = currentTempPage ?? currentRealPage;
+    const replacement: ProjectPage = {
+      ...(currentPage ?? tempPage),
+      ...realPage,
+      ...(currentPage ? {
+        content: currentPage.content,
+        title: currentPage.title,
+        pageOrder: currentPage.pageOrder,
+      } : {}),
+      syncState: pendingTempPageSaves.has(tempPage.id)
+        ? 'saving'
+        : currentRealPage?.syncState ?? realPage.syncState,
+    };
+    const pages = storedPages.filter((page) => page.id !== tempPage.id && page.id !== realPage.id);
+    pages.push(replacement);
+    const activePageIdsByProject = {
+      ...((stored.activePageIdsByProject as Record<string, string> | undefined) ?? {}),
+    };
+    if (activePageIdsByProject[realPage.projectId] === tempPage.id) {
+      activePageIdsByProject[realPage.projectId] = realPage.id;
+    }
+
+    await idbSetMany({ pages, activePageIdsByProject });
+    workspaceWriteVersion += 1;
+  });
+  workspaceWriteQueue = write.then(() => undefined, () => undefined);
+  await write;
+}
+
 async function persistRebasedProjectSnapshots(
   snapshots: Project[],
   pagesToPreserve: ProjectPage[] = [],
@@ -1311,18 +1411,25 @@ async function pendingLocalWorkCount(): Promise<number> {
 }
 
 /** Waits for accepted server queue jobs before importing their Notion snapshot. */
-async function waitForRemoteSyncQueueToSettle(syncConfig: SyncConfig): Promise<void> {
+async function waitForRemoteSyncQueueToSettle(
+  syncConfig: SyncConfig,
+  onProgress?: (progress: SyncProgressUpdate) => void,
+  timeoutMs = REMOTE_QUEUE_SETTLE_TIMEOUT_MS,
+): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     let eventSource: EventSource | undefined;
     let timeout: ReturnType<typeof setTimeout> | undefined;
+    let poller: ReturnType<typeof setInterval> | undefined;
     let statusCheckInFlight = false;
     let statusRecheckRequested = false;
     let finished = false;
+    let totalPending: number | undefined;
 
     const finish = (error?: unknown): void => {
       if (finished) return;
       finished = true;
       if (timeout) clearTimeout(timeout);
+      if (poller) clearInterval(poller);
       eventSource?.close();
       if (error) reject(error);
       else resolve();
@@ -1346,6 +1453,16 @@ async function waitForRemoteSyncQueueToSettle(syncConfig: SyncConfig): Promise<v
           if (typeof status.hasPending !== 'boolean') {
             throw new Error('The sync server returned an invalid queue status. Try Sync again.');
           }
+          const pending = Number.isSafeInteger(status.pendingCount)
+            ? Math.max(0, status.pendingCount ?? 0)
+            : Number(status.hasPending);
+          totalPending = Math.max(totalPending ?? 0, pending);
+          onProgress?.({
+            phase: 'waiting_for_server',
+            completed: Math.max(0, totalPending - pending),
+            total: totalPending,
+            pending,
+          });
           if (!status.hasPending) {
             finish();
             return;
@@ -1363,20 +1480,25 @@ async function waitForRemoteSyncQueueToSettle(syncConfig: SyncConfig): Promise<v
         // Recheck after a push event so a late or duplicated idle notification
         // cannot make the snapshot race with newly queued work.
         if (event.status === 'queue_idle') void checkQueue();
+        if (event.status === 'failed' && event.deadLettered) {
+          finish(new Error(event.message ?? 'A saved Notion upload needs attention. Your local note remains saved.'));
+        }
       });
       eventSource.onopen = () => { void checkQueue(); };
       eventSource.onerror = () => {
         // EventSource reconnects automatically. Its next open triggers one
         // status check, covering idle notifications lost during a disconnect.
       };
-    } catch (error) {
-      finish(error);
-      return;
+    } catch {
+      // Status polling still drains the queue if EventSource is unavailable.
+      void checkQueue();
     }
 
+    poller = setInterval(() => { void checkQueue(); }, REMOTE_QUEUE_STATUS_POLL_MS);
+
     timeout = setTimeout(() => {
-      finish(new Error('Notion sync is still processing on the server. Try Sync again in a moment.'));
-    }, REMOTE_QUEUE_SETTLE_TIMEOUT_MS);
+      finish(new Error('Notion is still processing saved changes. Your local notes remain saved; use Sync to check again.'));
+    }, timeoutMs);
   });
 }
 
@@ -1492,12 +1614,19 @@ async function uploadLocalMediaInNode(
   };
 }
 
-async function uploadPendingLocalMedia(syncConfig: SyncConfig): Promise<boolean> {
+async function uploadPendingLocalMedia(
+  syncConfig: SyncConfig,
+  excludedProjectIds: ReadonlySet<string> = new Set(),
+): Promise<boolean> {
   const { pages, projects } = await readStorage();
   let hadFailures = false;
 
   for (const page of pages) {
-    if (page.status === 'archived' || page.syncMode !== 'notion') continue;
+    if (
+      page.status === 'archived' ||
+      page.syncMode !== 'notion' ||
+      excludedProjectIds.has(page.projectId)
+    ) continue;
     const result = await uploadLocalMediaInNode(page.content, syncConfig);
     hadFailures ||= result.failed;
     if (!result.changed) continue;
@@ -1523,14 +1652,34 @@ async function enqueuePageSync(
   project: Project,
   previousPage?: ProjectPage,
 ): Promise<ProjectPage> {
-  const { syncConfig } = await readStorage();
+  const { syncConfig, workspaces } = await readStorage();
+  const workspace = workspaces.find((entry) => entry.id === page.workspaceId)
+    ?? workspaces.find((entry) => entry.id === project.workspaceId);
+  const shouldSyncToNotion = page.syncMode === 'notion' ||
+    project.syncMode === 'notion' ||
+    workspace?.kind === 'notion';
+  const syncMode: 'notion' | 'local' = shouldSyncToNotion ? 'notion' : 'local';
   const normalizedPage = {
     ...page,
+    syncMode,
+    ...(shouldSyncToNotion
+      ? {
+          syncAccountId: workspace?.kind === 'notion'
+            ? workspace.accountId ?? page.syncAccountId ?? syncConfig.userId ?? syncConfig.syncQueueOwnerUserId ?? undefined
+            : page.syncAccountId ?? syncConfig.userId ?? syncConfig.syncQueueOwnerUserId ?? undefined,
+          syncWorkspaceId: workspace?.kind === 'notion'
+            ? workspace.notionWorkspaceId ?? page.syncWorkspaceId ?? syncConfig.workspaceId
+            : page.syncWorkspaceId ?? syncConfig.workspaceId,
+        }
+      : { syncWorkspaceId: undefined }),
     content: normalizeJottathingBlockIds(page.content),
   };
   if (normalizedPage.syncMode !== 'notion') {
     return withSyncStatus(normalizedPage, 'saved');
   }
+  const normalizedProject = project.syncMode === 'notion'
+    ? project
+    : { ...project, syncMode: 'notion' as const };
   const syncablePage = {
     ...normalizedPage,
     content: sanitizeMediaForSync(normalizedPage.content),
@@ -1542,15 +1691,25 @@ async function enqueuePageSync(
   const pendingOps = await addPendingSyncOps(buildPageSyncOps({
     previousPage: syncablePreviousPage,
     page: syncablePage,
-    project,
+    project: normalizedProject,
     selectedParentPageId: syncConfig.selectedParentPageId,
   }));
   if (pendingOps.length || countPendingLocalMedia(normalizedPage.content) > 0) {
     triggerQueueDelivery();
   }
 
+  if (!syncQueueBelongsToActiveAccount(syncConfig)) {
+    return withSyncStatus(
+      normalizedPage,
+      'stale',
+      syncConfig.syncQueueOwnerUserId === null
+        ? 'Saved locally. Reconnect the Notion account that owns this queue to sync it.'
+        : 'Saved locally. This queue belongs to a different Notion account or workspace.',
+    );
+  }
+
   return syncConfig.connected && !isBrowserOffline()
-    ? withSyncStatus(normalizedPage, 'saved')
+    ? withSyncStatus(normalizedPage, pendingOps.length ? 'saving' : 'saved')
     : withSyncStatus(
         normalizedPage,
         'stale',
@@ -1591,9 +1750,14 @@ async function scheduleQueueDeliveryIfNeeded(): Promise<void> {
     listPendingProjectSyncEvents(),
   ]);
   if (!syncQueueBelongsToActiveAccount(syncConfig)) return;
-  const hasDeliverableWork = pendingOps.some((op) => !op.deliveryBlocked) ||
+  const projectsWaitingForSetup = new Set(projectEvents.map((event) => event.projectId));
+  const hasDeliverableWork = pendingOps.some((op) =>
+    !op.deliveryBlocked && !projectsWaitingForSetup.has(op.projectId),
+  ) ||
     projectEvents.some((event) => !event.deliveryBlocked) ||
-    pages.some((page) => countPendingLocalMedia(page.content) > 0);
+    pages.some((page) =>
+      !projectsWaitingForSetup.has(page.projectId) && countPendingLocalMedia(page.content) > 0,
+    );
 
   if (syncConfig.connected && !isBrowserOffline() && hasDeliverableWork) {
     scheduleNextQueueDelivery(Math.max(
@@ -1627,7 +1791,7 @@ export function connectSyncEvents(
 }
 
 export async function applySyncResult(event: SyncEventMessage): Promise<ProjectPage | undefined> {
-  if (event.status === 'queue_idle') return undefined;
+  if (event.status === 'queue_idle' || event.status === 'reload_progress') return undefined;
 
   const { pages } = await readStorage();
   const page = pages.find((p) => p.id === event.pageId);
@@ -1724,13 +1888,7 @@ function hasNewerServerVersion(page: ProjectPage): boolean {
 }
 
 async function persistPage(page: ProjectPage) {
-  const { pages } = await readStorage();
-
-  await writeStorage({
-    pages: pages.map((storedPage) =>
-      storedPage.id === page.id ? page : storedPage,
-    ),
-  });
+  await persistPagesById([page]);
 }
 
 async function syncAndPersistPage(page: ProjectPage): Promise<ProjectPage> {
@@ -1866,7 +2024,13 @@ async function replaceTempProject({
   realProject: Project;
 }) {
   const selectionRevisionAtStart = currentProjectSelectionRevision;
-  const { activePageIdsByProject, currentProjectId, pages, projects } = await readStorage();
+  const {
+    activePageIdsByProject,
+    currentProjectId,
+    currentProjectIdByWorkspace,
+    pages,
+    projects,
+  } = await readStorage();
   const resolvedCurrentProjectId = currentProjectIdForTempProject(
     currentProjectId,
     tempProject.id,
@@ -1879,10 +2043,18 @@ async function replaceTempProject({
   delete nextActivePageIds[tempProject.id];
   nextActivePageIds[realProject.id] =
     tempActivePageId === tempPage.id ? realPage.id : tempActivePageId;
+  const nextCurrentProjectIdByWorkspace = { ...currentProjectIdByWorkspace };
+  if (
+    realProject.workspaceId &&
+    nextCurrentProjectIdByWorkspace[realProject.workspaceId] === tempProject.id
+  ) {
+    nextCurrentProjectIdByWorkspace[realProject.workspaceId] = realProject.id;
+  }
 
   await writeStorage({
     activePageIdsByProject: nextActivePageIds,
     currentProjectId: resolvedCurrentProjectId,
+    currentProjectIdByWorkspace: nextCurrentProjectIdByWorkspace,
     pages: pages.map((page) =>
       page.id === tempPage.id
         ? {
@@ -1911,7 +2083,13 @@ async function rollbackTempProject(
   message: string,
 ) {
   const selectionRevisionAtStart = currentProjectSelectionRevision;
-  const { activePageIdsByProject, currentProjectId, pages, projects } = await readStorage();
+  const {
+    activePageIdsByProject,
+    currentProjectId,
+    currentProjectIdByWorkspace,
+    pages,
+    projects,
+  } = await readStorage();
   const resolvedCurrentProjectId = currentProjectIdForTempProject(
     currentProjectId,
     tempProject.id,
@@ -1921,13 +2099,28 @@ async function rollbackTempProject(
   const nextActivePageIds = { ...activePageIdsByProject };
   delete nextActivePageIds[tempProject.id];
   pendingTempPageSaves.delete(tempPage.id);
+  const remainingProjects = projects.filter((project) => project.id !== tempProject.id);
+  const nextCurrentProjectIdByWorkspace = { ...currentProjectIdByWorkspace };
+  if (
+    tempProject.workspaceId &&
+    nextCurrentProjectIdByWorkspace[tempProject.workspaceId] === tempProject.id
+  ) {
+    nextCurrentProjectIdByWorkspace[tempProject.workspaceId] =
+      remainingProjects.find((project) =>
+        project.workspaceId === tempProject.workspaceId &&
+        project.status !== 'archived' &&
+        project.id === previousProjectId,
+      )?.id ?? remainingProjects.find((project) =>
+        project.workspaceId === tempProject.workspaceId && project.status !== 'archived',
+      )?.id ?? '';
+  }
 
   await writeStorage({
     activePageIdsByProject: nextActivePageIds,
     currentProjectId: resolvedCurrentProjectId,
+    currentProjectIdByWorkspace: nextCurrentProjectIdByWorkspace,
     pages: pages.filter((page) => page.projectId !== tempProject.id),
-    projects: projects
-      .filter((project) => project.id !== tempProject.id)
+    projects: remainingProjects
       .map((project) =>
         project.id === previousProjectId
           ? { ...project, syncState: 'error' as const, syncMessage: message }
@@ -1950,55 +2143,7 @@ function currentProjectIdForTempProject(
 }
 
 async function replaceTempPage(tempPage: ProjectPage, realPage: ProjectPage) {
-  const { activePageIdsByProject, currentProjectId, pages } = await readStorage();
-  const nextActivePageIds = {
-    ...activePageIdsByProject,
-    [realPage.projectId]:
-      activePageIdsByProject[realPage.projectId] === tempPage.id
-        ? realPage.id
-        : activePageIdsByProject[realPage.projectId],
-  };
-  const currentStoredPage = pages.find((page) => page.id === tempPage.id);
-
-  await writeStorage({
-    activePageIdsByProject: nextActivePageIds,
-    currentProjectId,
-    pages: pages.map((page) =>
-      page.id === tempPage.id
-        ? {
-            ...page,
-            ...realPage,
-            content: currentStoredPage?.content ?? page.content,
-            title: currentStoredPage?.title ?? page.title,
-            pageOrder: currentStoredPage?.pageOrder ?? page.pageOrder ?? realPage.pageOrder,
-            syncState: pendingTempPageSaves.has(tempPage.id) ? 'saving' : realPage.syncState,
-          }
-        : page,
-    ),
-  });
-}
-
-async function rollbackTempPage(
-  tempPage: ProjectPage,
-  previousActivePageId: string,
-  message: string,
-) {
-  const { activePageIdsByProject, pages } = await readStorage();
-  pendingTempPageSaves.delete(tempPage.id);
-
-  await writeStorage({
-    activePageIdsByProject: {
-      ...activePageIdsByProject,
-      [tempPage.projectId]: previousActivePageId,
-    },
-    pages: pages
-      .filter((page) => page.id !== tempPage.id)
-      .map((page) =>
-        page.id === previousActivePageId
-          ? { ...page, syncState: 'error', syncMessage: message }
-          : page,
-      ),
-  });
+  await replacePageAtomically(tempPage, realPage);
 }
 
 async function replayTempPageSave(tempPageId: string, realPage: ProjectPage) {
@@ -2016,8 +2161,119 @@ async function replayTempPageSave(tempPageId: string, realPage: ProjectPage) {
   });
 }
 
-async function flushPendingSyncOps(options: { force?: boolean } = {}): Promise<void> {
-  if (isSessionLogoutPending || isConnectionDeletionPending) return;
+/** Repairs a project left with an optimistic ID after the extension stopped mid-create. */
+async function recoverOrphanedTemporaryProject(tempProjectId: string): Promise<ProjectPage> {
+  const existingReconciliation = projectReconciliations.get(tempProjectId);
+  if (existingReconciliation) {
+    await existingReconciliation;
+    const latest = await readStorage();
+    const activePageId = latest.activePageIdsByProject[
+      latest.currentProjectIdByWorkspace[latest.currentWorkspaceId] ?? latest.currentProjectId
+    ];
+    const recoveredPage = latest.pages.find((page) => page.id === activePageId);
+    if (recoveredPage) return recoveredPage;
+  }
+
+  const recovery = (async () => {
+    const storage = await readStorage();
+    const tempProject = storage.projects.find((project) => project.id === tempProjectId);
+    if (!tempProject || !isTempProject(tempProject)) {
+      throw new Error('This project is no longer available.');
+    }
+    const tempPages = sortProjectPages(storage.pages.filter((page) =>
+      page.projectId === tempProjectId && page.status !== 'archived',
+    ));
+    if (!tempPages.length) {
+      throw new Error('The project is still being created. Keep it open and try again shortly.');
+    }
+
+    // The active page was just created by the caller. Use an older page as the
+    // project anchor where possible so the active page identity can be migrated
+    // independently without dropping its edits.
+    const activeTempPageId = storage.activePageIdsByProject[tempProjectId];
+    const rootTempPage = tempPages.find((page) => page.id !== activeTempPageId) ?? tempPages[0];
+    const realProject: Project = {
+      ...tempProject,
+      id: `project-${crypto.randomUUID()}`,
+      syncState: tempProject.syncMode === 'notion' ? 'saving' : 'saved',
+      syncMessage: undefined,
+    };
+    const realRootPage: ProjectPage = {
+      ...rootTempPage,
+      id: `page-${realProject.id}-${crypto.randomUUID()}`,
+      projectId: realProject.id,
+      syncState: tempProject.syncMode === 'notion' ? 'saved' : rootTempPage.syncState,
+      syncMessage: undefined,
+    };
+
+    await replaceTempProject({
+      tempPage: rootTempPage,
+      tempProject,
+      realPage: realRootPage,
+      realProject,
+    });
+
+    let latest = await readStorage();
+    const pagesToQueue: Array<{ page: ProjectPage; tempPageId?: string }> = [
+      { page: realRootPage, tempPageId: rootTempPage.id },
+    ];
+    for (const storedPage of latest.pages.filter((page) => page.projectId === realProject.id)) {
+      if (storedPage.id === realRootPage.id) continue;
+      let page = storedPage;
+      const tempPageId = page.id.startsWith('temp-page-') ? page.id : undefined;
+      if (tempPageId) {
+        page = {
+          ...page,
+          id: `page-${realProject.id}-${crypto.randomUUID()}`,
+          syncState: tempProject.syncMode === 'notion' ? 'saved' : page.syncState,
+          syncMessage: undefined,
+        };
+        await replaceTempPage(storedPage, page);
+      }
+      pagesToQueue.push({ page, ...(tempPageId ? { tempPageId } : {}) });
+    }
+
+    const syncedProject = await syncProject(realProject);
+    const savedProject = syncedProject ?? realProject;
+    latest = await readStorage();
+    await writeStorage({
+      projects: latest.projects.map((project) => project.id === realProject.id
+        ? savedProject
+        : project),
+    });
+
+    for (const { page, tempPageId } of pagesToQueue) {
+      const queuedPage = await enqueuePageSync(page, savedProject);
+      await persistPage(queuedPage);
+      if (tempPageId) await replayTempPageSave(tempPageId, queuedPage);
+    }
+
+    latest = await readStorage();
+    const currentProjectId = latest.currentProjectIdByWorkspace[latest.currentWorkspaceId]
+      ?? latest.currentProjectId;
+    const activePageId = latest.activePageIdsByProject[currentProjectId];
+    const currentPage = latest.pages.find((page) => page.id === activePageId);
+    if (currentPage) return currentPage;
+    const recoveredPage = latest.pages.find((page) => page.projectId === realProject.id);
+    if (recoveredPage) return recoveredPage;
+    throw new Error('The project was recovered, but its page could not be opened.');
+  })();
+  const projectReconciliation = recovery.then((page) => page.projectId);
+  projectReconciliation.catch(() => undefined);
+  projectReconciliations.set(tempProjectId, projectReconciliation);
+  try {
+    return await recovery;
+  } finally {
+    if (projectReconciliations.get(tempProjectId) === projectReconciliation) {
+      projectReconciliations.delete(tempProjectId);
+    }
+  }
+}
+
+async function flushPendingSyncOps(
+  options: { force?: boolean; allowSessionLogout?: boolean } = {},
+): Promise<void> {
+  if ((isSessionLogoutPending && !options.allowSessionLogout) || isConnectionDeletionPending) return;
   if (await hasPendingConnectionDeletion()) return;
 
   if (options.force) {
@@ -2041,7 +2297,10 @@ async function flushPendingSyncOps(options: { force?: boolean } = {}): Promise<v
         await queueDeliveryPromise;
       }
       try {
-        await deliverPendingSyncOps({ force: true });
+        await deliverPendingSyncOps({
+          force: true,
+          allowSessionLogout: options.allowSessionLogout,
+        });
       } catch (error) {
         recordQueueDeliveryFailure(error);
         throw error;
@@ -2074,25 +2333,60 @@ async function hasPendingConnectionDeletion(): Promise<boolean> {
   return pending;
 }
 
-async function deliverPendingSyncOps({ force }: { force: boolean }): Promise<void> {
-  if (isSessionLogoutPending || isConnectionDeletionPending || await hasPendingConnectionDeletion()) return;
+async function deliverPendingSyncOps({
+  force,
+  allowSessionLogout = false,
+}: {
+  force: boolean;
+  allowSessionLogout?: boolean;
+}): Promise<void> {
+  if (
+    (isSessionLogoutPending && !allowSessionLogout) ||
+    isConnectionDeletionPending ||
+    await hasPendingConnectionDeletion()
+  ) return;
   const { syncConfig } = await readStorage();
   if (!syncConfig.connected || isBrowserOffline()) return;
   if (!syncQueueBelongsToActiveAccount(syncConfig)) return;
 
-  await deliverPendingProjectSyncEvents(syncConfig);
-  const hadMediaFailures = await uploadPendingLocalMedia(syncConfig);
+  const projectDelivery = await deliverPendingProjectSyncEvents(syncConfig);
+  const hadMediaFailures = await uploadPendingLocalMedia(
+    syncConfig,
+    projectDelivery.blockedProjectIds,
+  );
+
+  const pendingBeforeRetry = (await compactStoredPendingSyncOps()).filter((op) =>
+    !projectDelivery.blockedProjectIds.has(op.projectId),
+  );
+  if (pendingBeforeRetry.length) {
+    const retry = await retryUndeliveredQueuePayloads(
+      syncConfig,
+      pendingBeforeRetry.map((op) => op.opId),
+      true,
+    );
+    const requeuedIds = new Set(retry?.requeuedOperationIds ?? []);
+    const requeuedOps = pendingBeforeRetry.filter((op) => requeuedIds.has(op.opId));
+    if (requeuedOps.length) {
+      await removePendingSyncOps(requeuedOps.map((op) => op.opId));
+      await applyQueuedVersions(requeuedOps, retry!);
+    }
+  }
 
   const pending = await compactStoredPendingSyncOps();
   if (pending.length) {
     const now = Date.now();
-    const eligible = pending.filter((op) => !op.deliveryBlocked && (
-      force || now - Date.parse(op.createdAt) >= LOCAL_QUEUE_DELIVERY_DELAY_MS
-    ));
+    const eligible = pending.filter((op) =>
+      !op.deliveryBlocked &&
+      !projectDelivery.blockedProjectIds.has(op.projectId) &&
+      (force || now - Date.parse(op.createdAt) >= LOCAL_QUEUE_DELIVERY_DELAY_MS),
+    );
 
     if (!eligible.length) {
-      const deliverable = pending.filter((op) => !op.deliveryBlocked);
+      const deliverable = pending.filter((op) =>
+        !op.deliveryBlocked && !projectDelivery.blockedProjectIds.has(op.projectId),
+      );
       if (deliverable.length) scheduleNextQueueDelivery(msUntilOldestOpIsEligible(deliverable, now));
+      if (projectDelivery.retryError) throw projectDelivery.retryError;
       return;
     }
 
@@ -2109,12 +2403,15 @@ async function deliverPendingSyncOps({ force }: { force: boolean }): Promise<voi
     throw new Error('Some local media is still waiting for a connection.');
   }
 
-  const remaining = (await listPendingSyncOps()).filter((op) => !op.deliveryBlocked);
+  const remaining = (await listPendingSyncOps()).filter((op) =>
+    !op.deliveryBlocked && !projectDelivery.blockedProjectIds.has(op.projectId),
+  );
   if (remaining.length) {
     scheduleNextQueueDelivery(msUntilOldestOpIsEligible(remaining));
   }
 
   resetQueueDeliveryBackoff();
+  if (projectDelivery.retryError) throw projectDelivery.retryError;
 }
 
 function stripConflictResolutionMarkers(content: DocumentContent): DocumentContent {
@@ -2185,14 +2482,20 @@ function withoutLocalSyncConflicts<T extends { syncConflicts?: SyncContentConfli
   return syncable;
 }
 
-async function deliverPendingProjectSyncEvents(syncConfig: SyncConfig): Promise<void> {
+async function deliverPendingProjectSyncEvents(syncConfig: SyncConfig): Promise<{
+  blockedProjectIds: Set<string>;
+  retryError?: unknown;
+}> {
   const events = await listPendingProjectSyncEvents();
-  const blockedProjectIds = new Set(
-    events.filter((event) => event.deliveryBlocked).map((event) => event.projectId),
-  );
+  const failedProjectIds = new Set<string>();
+  let retryError: unknown;
 
   for (const event of events) {
-    if (blockedProjectIds.has(event.projectId)) continue;
+    if (failedProjectIds.has(event.projectId)) continue;
+    if (event.deliveryBlocked) {
+      failedProjectIds.add(event.projectId);
+      continue;
+    }
 
     const isSourceEvent = event.type === 'project_source_upsert';
     let response: SyncProjectResponse;
@@ -2212,14 +2515,18 @@ async function deliverPendingProjectSyncEvents(syncConfig: SyncConfig): Promise<
             },
           } : {}),
         });
-        blockedProjectIds.add(event.projectId);
+        failedProjectIds.add(event.projectId);
         continue;
       }
-      throw error;
+      failedProjectIds.add(event.projectId);
+      retryError ??= error;
+      continue;
     }
 
     if (response.status === 'error') {
-      throw new Error(response.message ?? 'Unable to sync this project.');
+      failedProjectIds.add(event.projectId);
+      retryError ??= new Error(response.message ?? 'Unable to sync this project.');
+      continue;
     }
 
     if (response.parentPage) {
@@ -2233,6 +2540,12 @@ async function deliverPendingProjectSyncEvents(syncConfig: SyncConfig): Promise<
     await removePendingProjectSyncEvents([event.eventId]);
     await clearProjectConflictResolutionMarkers(event.projectId);
   }
+
+  const remainingEvents = await listPendingProjectSyncEvents();
+  return {
+    blockedProjectIds: new Set(remainingEvents.map((event) => event.projectId)),
+    ...(retryError ? { retryError } : {}),
+  };
 }
 
 async function applySyncedProject(
@@ -2260,7 +2573,10 @@ async function applySyncedProject(
   });
 }
 
-async function applyQueuedVersions(ops: BlockSyncOp[], response: SyncEnqueueResponse): Promise<void> {
+async function applyQueuedVersions(
+  ops: BlockSyncOp[],
+  response: Pick<SyncEnqueueResponse, 'version' | 'versions' | 'opVersions'>,
+): Promise<void> {
   const versions = response.versions ?? {};
   const opVersions = response.opVersions ?? {};
   const versionByPage = new Map<string, number>();
@@ -2287,6 +2603,34 @@ async function applyQueuedVersions(ops: BlockSyncOp[], response: SyncEnqueueResp
         : page;
     }),
   });
+}
+
+/** Redrives durable Queue payloads whose references could not be published. */
+async function retryUndeliveredQueuePayloads(
+  syncConfig: SyncConfig,
+  opIds: string[],
+  deliveryPendingOnly = false,
+): Promise<SyncQueueRetryResponse | undefined> {
+  if (syncQueueRetryEndpointAvailable === false) return undefined;
+  try {
+    const response = await requestServer<SyncQueueRetryResponse>(
+      `/sync/retry${deliveryPendingOnly ? '?deliveryPendingOnly=true' : ''}`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ opIds: opIds.slice(0, 5000) }),
+      },
+      syncConfig,
+    );
+    syncQueueRetryEndpointAvailable = true;
+    return response;
+  } catch (error) {
+    // Older deployed workers can keep syncing through the extension's durable queue.
+    if (error instanceof SyncServerError && error.status === 404) {
+      syncQueueRetryEndpointAvailable = false;
+      return undefined;
+    }
+    throw error;
+  }
 }
 
 function msUntilOldestOpIsEligible(ops: BlockSyncOp[], now = Date.now()): number {
@@ -2408,7 +2752,9 @@ export const notionClient = {
     queueDeliveryRetryDelayMs = 0;
   },
 
-  async resyncPendingChanges(): Promise<{
+  async resyncPendingChanges(
+    onProgress?: (progress: SyncProgressUpdate) => void,
+  ): Promise<{
     blockedMessage?: string;
     blockedProjectCount: number;
     conflicts: SyncContentConflict[];
@@ -2431,8 +2777,37 @@ export const notionClient = {
     // Retry blocked snapshots only from this explicit user action.
     await unblockPendingSyncOps();
     await unblockPendingProjectSyncEvents();
+
+    // Queue bodies are durably stored in Supabase. Redrive them before
+    // reconciling, and remove only local operations covered by those payloads.
+    const pendingBeforeRetry = await listPendingSyncOps();
+    const retry = await retryUndeliveredQueuePayloads(
+      syncConfig,
+      pendingBeforeRetry.map((op) => op.opId),
+    );
+    const requeuedCount = Number.isSafeInteger(retry?.requeuedCount)
+      ? Math.max(0, retry?.requeuedCount ?? 0)
+      : 0;
+    const requeuedIds = new Set(retry?.requeuedOperationIds ?? []);
+    const requeuedOps = pendingBeforeRetry.filter((op) => requeuedIds.has(op.opId));
+    if (requeuedOps.length) {
+      await removePendingSyncOps(requeuedOps.map((op) => op.opId));
+      await applyQueuedVersions(requeuedOps, retry!);
+    }
+
+    const remoteQueue = await requestServer<SyncQueueStatusResponse>(
+      '/sync/status',
+      undefined,
+      syncConfig,
+    );
+    if (remoteQueue.hasPending) {
+      onProgress?.({ phase: 'waiting_for_server', pending: remoteQueue.pendingCount ?? requeuedCount });
+      await waitForRemoteSyncQueueToSettle(syncConfig, onProgress);
+    }
+
     const workspace = await readStorage();
     const pendingOps = await listPendingSyncOps();
+    onProgress?.({ phase: 'checking_notion' });
     const validation = await notionClient.validateNotionCache();
     const pageIdsToReconcile = new Set([
       ...pendingOps.map((op) => op.pageId),
@@ -2440,10 +2815,20 @@ export const notionClient = {
       ...validation.failedPageIds,
     ]);
 
+    let reconciledPageCount = 0;
+    onProgress?.({
+      phase: 'syncing_pages',
+      completed: 0,
+      total: pageIdsToReconcile.size,
+    });
     for (const pageId of pageIdsToReconcile) {
       const page = workspace.pages.find((entry) => entry.id === pageId);
       const project = page && workspace.projects.find((entry) => entry.id === page.projectId);
-      if (!page || !project) continue;
+      if (!page || !project) {
+        reconciledPageCount += 1;
+        onProgress?.({ phase: 'syncing_pages', completed: reconciledPageCount, total: pageIdsToReconcile.size });
+        continue;
+      }
 
       try {
         const response = await requestServer<SyncPageResponse>('/sync/page/resync', {
@@ -2455,6 +2840,14 @@ export const notionClient = {
           }),
         }, syncConfig);
         if (response.status === 'error') throw new Error(response.message ?? 'Unable to sync this page.');
+        if (response.status === 'stale') {
+          await persistPage({
+            ...(response.page ?? page),
+            syncState: 'stale',
+            syncMessage: response.message ?? 'Notion changed before this page could be synced. Review it, then resync.',
+          });
+          continue;
+        }
         if (response.page) await persistPage({
           ...response.page,
           syncMode: 'notion',
@@ -2493,9 +2886,17 @@ export const notionClient = {
           remoteContent: error.diff.remoteContent,
         });
         await persistPage({ ...page, syncState: 'error', syncMessage: error.message });
+      } finally {
+        reconciledPageCount += 1;
+        onProgress?.({
+          phase: 'syncing_pages',
+          completed: reconciledPageCount,
+          total: pageIdsToReconcile.size,
+        });
       }
     }
 
+    onProgress?.({ phase: 'uploading', pending: await pendingLocalWorkCount() });
     await flushPendingSyncOps({ force: true });
     const projectEvents = await listPendingProjectSyncEvents();
     const blockedEvents = projectEvents.filter((event) => event.deliveryBlocked);
@@ -2558,7 +2959,7 @@ export const notionClient = {
       // workspace inventory. Validation signals can miss pages from older or
       // differently-shaped Notion records, so always fetch the full snapshot
       // once local writes and conflict handling are clear.
-      await notionClient.reloadFromNotion({ force: true });
+      await notionClient.reloadFromNotion({ force: true, onProgress });
       reloadedFromNotion = true;
     } else {
       // Keep remote discovery alive until local writes or conflict review no
@@ -2607,7 +3008,9 @@ export const notionClient = {
           selectedParentPageId: syncConfig.selectedParentPageId,
         }),
       }, syncConfig);
-      if (response.status === 'error') throw new Error(response.message ?? 'Unable to sync the merged page.');
+      if (response.status !== 'saved') {
+        throw new Error(response.message ?? 'Unable to sync the merged page. Review the page and try again.');
+      }
       await removePendingSyncOps((await listPendingSyncOps())
         .filter((op) => op.pageId === targetId)
         .map((op) => op.opId));
@@ -3325,10 +3728,13 @@ export const notionClient = {
     });
   },
 
-  async createProject(name = 'Untitled Project'): Promise<OptimisticProjectCreation> {
+  async createProject(
+    name = 'Untitled Project',
+    options: ProjectCreationOptions = {},
+  ): Promise<OptimisticProjectCreation> {
     const {
       activePageIdsByProject,
-      currentWorkspaceId,
+      currentWorkspaceId: storedCurrentWorkspaceId,
       currentProjectId,
       currentProjectIdByWorkspace,
       pages,
@@ -3336,18 +3742,23 @@ export const notionClient = {
       syncConfig,
       workspaces,
     } = await readStorage();
+    const currentWorkspaceId = options.workspaceId ?? storedCurrentWorkspaceId;
     const workspace = workspaces.find((entry) => entry.id === currentWorkspaceId);
+    if (!workspace) throw new Error('Choose a workspace before creating a project.');
     const project = {
       ...createOptimisticProjectRecord(name),
       workspaceId: currentWorkspaceId,
-      syncMode: workspace?.kind ?? 'local',
+      syncMode: workspace.kind,
     };
     const page = {
-      ...createOptimisticPage(project.id, 'Untitled Page'),
+      ...createOptimisticPage(project.id, options.pageTitle ?? 'Untitled Page'),
       workspaceId: currentWorkspaceId,
-      syncMode: workspace?.kind ?? 'local',
-      syncAccountId: syncConfig.userId ?? syncConfig.syncQueueOwnerUserId ?? undefined,
-      syncWorkspaceId: workspace?.kind === 'notion' ? workspace.notionWorkspaceId : undefined,
+      syncMode: workspace.kind,
+      syncAccountId: workspace.accountId ?? syncConfig.userId ?? syncConfig.syncQueueOwnerUserId ?? undefined,
+      syncWorkspaceId: workspace.kind === 'notion' ? workspace.notionWorkspaceId : undefined,
+      ...(options.pageContent
+        ? { content: normalizeJottathingBlockIds(options.pageContent) }
+        : {}),
     };
 
     await writeStorage({
@@ -3355,8 +3766,12 @@ export const notionClient = {
         ...activePageIdsByProject,
         [project.id]: page.id,
       },
+      currentWorkspaceId,
       currentProjectId: project.id,
-      currentProjectIdByWorkspace: { ...currentProjectIdByWorkspace, [currentWorkspaceId]: project.id },
+      currentProjectIdByWorkspace: {
+        ...currentProjectIdByWorkspace,
+        [currentWorkspaceId]: project.id,
+      },
       pages: [...pages, page],
       projects: [...projects, project].sort(sortProjectsByUpdatedDesc),
     });
@@ -3365,7 +3780,7 @@ export const notionClient = {
       const realProject = {
         ...createProjectRecord(project.name),
         workspaceId: currentWorkspaceId,
-        syncMode: workspace?.kind ?? 'local',
+        syncMode: workspace.kind,
       };
       const realPage = {
         ...page,
@@ -3377,6 +3792,12 @@ export const notionClient = {
       try {
         // Reconcile temporary IDs before touching the network so the project
         // and its first page remain usable if the request hangs or the panel closes.
+        projectIdAliases.set(project.id, realProject.id);
+        while (projectIdAliases.size > 100) {
+          const oldestProjectId = projectIdAliases.keys().next().value;
+          if (!oldestProjectId) break;
+          projectIdAliases.delete(oldestProjectId);
+        }
         await replaceTempProject({
           tempPage: page,
           tempProject: project,
@@ -3399,10 +3820,15 @@ export const notionClient = {
         const queuedPage = await enqueuePageSync(realPage, savedProject);
         await persistPage(queuedPage);
         const savedPage = await replayTempPageSave(page.id, queuedPage);
+        // A new project and its first page are user-visible immediately. Start
+        // an outbox delivery from this live UI context instead of depending on
+        // a timer that a suspended extension worker may not run promptly.
+        void flushPendingSyncOps({ force: true }).catch(() => undefined);
         return { page: savedPage, project: savedProject };
       } catch (error) {
         const message =
           error instanceof Error ? error.message : 'Unable to create this project.';
+        projectIdAliases.delete(project.id);
         await rollbackTempProject(project, page, currentProjectId, message);
         throw error;
       } finally {
@@ -3761,6 +4187,7 @@ export const notionClient = {
   async reloadFromNotion(options: {
     force?: boolean;
     preserveLocalWhenRemoteEmpty?: boolean;
+    onProgress?: (progress: SyncProgressUpdate) => void;
   } = {}): Promise<{
     currentProjectId: string;
     pages: ProjectPage[];
@@ -3791,14 +4218,38 @@ export const notionClient = {
       };
     }
 
-    await waitForRemoteSyncQueueToSettle(syncConfig);
+    await waitForRemoteSyncQueueToSettle(syncConfig, options.onProgress);
     const startingWorkspaceWriteVersion = workspaceWriteVersion;
-    const response = await requestServer<SyncReloadResponse>('/sync/reload', {
-      method: 'POST',
-      body: JSON.stringify({
-        selectedParentPageId: syncConfig.selectedParentPageId,
-      }),
-    }, syncConfig);
+    const reloadId = options.onProgress ? crypto.randomUUID() : undefined;
+    let reloadProgressStream: EventSource | undefined;
+    if (reloadId) {
+      try {
+        reloadProgressStream = connectSyncEvents(syncConfig, (event) => {
+          if (event.status !== 'reload_progress' || event.reloadId !== reloadId) return;
+          options.onProgress?.({
+            phase: 'loading_workspace',
+            stage: event.stage,
+            completed: event.completed,
+            total: event.total,
+          });
+        });
+      } catch {
+        // The reload request remains authoritative if progress streaming is unavailable.
+      }
+    }
+    let response: SyncReloadResponse;
+    options.onProgress?.({ phase: 'loading_workspace' });
+    try {
+      response = await requestServer<SyncReloadResponse>('/sync/reload', {
+        method: 'POST',
+        body: JSON.stringify({
+          selectedParentPageId: syncConfig.selectedParentPageId,
+          ...(reloadId ? { reloadId } : {}),
+        }),
+      }, syncConfig);
+    } finally {
+      reloadProgressStream?.close();
+    }
     const nextSyncConfig = response.clearSelectedParentPage
       ? {
           ...syncConfig,
@@ -4001,8 +4452,12 @@ export const notionClient = {
     };
   },
 
-  async logoutSyncSession(): Promise<{
+  async logoutSyncSession(options: {
+    cleanupOnly?: boolean;
+    onProgress?: (progress: SyncProgressUpdate) => void;
+  } = {}): Promise<{
     notionTokenRevoked: boolean;
+    queueDrainDeferred: boolean;
     serverDataCleanupComplete: boolean;
     syncConfig: SyncConfig;
   }> {
@@ -4018,9 +4473,72 @@ export const notionClient = {
       serverDataCleanupComplete: false,
       retryable: true,
     };
+    let queueDrainDeferred = Boolean(options.cleanupOnly);
     try {
-      await scrubLegacyExtensionSyncCredentials();
       const { syncConfig } = await readStorage();
+
+      if (!options.cleanupOnly) {
+        if (isBrowserOffline() || !syncConfig.connected) {
+          queueDrainDeferred = true;
+        } else if (!syncQueueBelongsToActiveAccount(syncConfig)) {
+          if (await pendingLocalWorkCount() > 0) {
+            throw new Error(
+              'Queued changes belong to a different Notion account. Reconnect that account and sync before signing out.',
+            );
+          }
+          queueDrainDeferred = true;
+        } else {
+          const drainDeadline = Date.now() + REMOTE_QUEUE_SETTLE_TIMEOUT_MS;
+          options.onProgress?.({ phase: 'saving_edits' });
+          await Promise.allSettled(
+            [queueDeliveryPromise, forcedQueueDeliveryPromise].filter(
+              (promise): promise is Promise<void> => Boolean(promise),
+            ),
+          );
+
+          // Repeat the local outbox check after the worker drains. A capture or
+          // editor save can arrive while the user is waiting in this dialog.
+          while (true) {
+            if (isBrowserOffline()) {
+              throw new Error(
+                'You went offline before sync finished. Your Notion workspace is still connected; reconnect and try signing out again.',
+              );
+            }
+            if (Date.now() >= drainDeadline) {
+              throw new Error(
+                'Sync is taking longer than expected. Your Notion workspace is still connected; try signing out again after sync finishes.',
+              );
+            }
+
+            const localPending = await pendingLocalWorkCount();
+            options.onProgress?.({ phase: 'uploading', pending: localPending });
+            await flushPendingSyncOps({ force: true, allowSessionLogout: true });
+
+            const remainingLocalWork = await pendingLocalWorkCount();
+            if (remainingLocalWork > 0) {
+              throw new Error(
+                'Some queued changes could not be sent. Your Notion workspace is still connected and your local notes are saved; resolve the sync issue, then try again.',
+              );
+            }
+
+            options.onProgress?.({ phase: 'waiting_for_server', pending: 0 });
+            await waitForRemoteSyncQueueToSettle(
+              syncConfig,
+              options.onProgress,
+              Math.max(1, drainDeadline - Date.now()),
+            );
+
+            if (isBrowserOffline()) {
+              throw new Error(
+                'You went offline before Notion finished syncing. Your Notion workspace is still connected; reconnect and try signing out again.',
+              );
+            }
+            if (await pendingLocalWorkCount() === 0) break;
+          }
+        }
+      }
+
+      await scrubLegacyExtensionSyncCredentials();
       await updateStoredSyncConfig({
         authenticated: false,
         userName: undefined,
@@ -4070,13 +4588,16 @@ export const notionClient = {
 
       return {
         notionTokenRevoked: serverCleanup.notionTokenRevoked,
+        queueDrainDeferred,
         serverDataCleanupComplete: serverCleanup.serverDataCleanupComplete,
         syncConfig: persistedSyncConfig,
       };
-    } catch {
+    } catch (error) {
+      if (error instanceof Error) throw error;
       throw new Error('Unable to clear the local Jottathing account state.');
     } finally {
       isSessionLogoutPending = false;
+      void scheduleQueueDeliveryIfNeeded();
     }
   },
 
@@ -4273,50 +4794,71 @@ export const notionClient = {
     projectId: string,
     title = 'Untitled Page',
   ): Promise<OptimisticPageCreation> {
-    const { activePageIdsByProject, pages, projects, syncConfig, workspaces } = await readStorage();
-    const project = projects.find((storedProject) => storedProject.id === projectId);
+    const requestedProjectId = projectId;
+    let storage = await readStorage();
+    let project = storage.projects.find((storedProject) => storedProject.id === projectId);
+    const inFlightReconciliation = projectReconciliations.get(requestedProjectId);
+
+    // The project record is switched from its temporary ID before the store's
+    // async callback updates the UI selection. Follow that exact temporary to
+    // real ID mapping instead of flashing a "not ready" error in this window.
+    if (
+      !project &&
+      (inFlightReconciliation || projectIdAliases.has(requestedProjectId))
+    ) {
+      const mappedProjectId = projectIdAliases.get(requestedProjectId)
+        ?? await inFlightReconciliation;
+      project = storage.projects.find((storedProject) => storedProject.id === mappedProjectId);
+      if (!project && inFlightReconciliation) {
+        await inFlightReconciliation;
+        storage = await readStorage();
+        project = storage.projects.find((storedProject) => storedProject.id === mappedProjectId);
+      }
+      if (project) projectId = project.id;
+    }
 
     if (!project) {
       throw new Error('This project is no longer available.');
     }
 
-    const previousActivePageId = activePageIdsByProject[projectId] ?? '';
-    const orderedExistingPages = sortProjectPages(pages.filter((entry) =>
-      entry.projectId === projectId && entry.status !== 'archived',
-    ));
-    const existingPageOrder = new Map<string, number>(
-      orderedExistingPages.map((entry, index) => [entry.id, index] as const),
-    );
+    const {
+      projects,
+      syncConfig,
+      workspaces,
+    } = storage;
     const workspace = workspaces.find((entry) => entry.id === project.workspaceId);
-    const page = {
+    const syncMode: 'notion' | 'local' = workspace?.kind === 'notion' || project.syncMode === 'notion'
+      ? 'notion'
+      : workspace?.kind ?? 'local';
+    const page = await appendPageAtomically({
       ...createOptimisticPage(projectId, title.trim() || 'Untitled Page'),
-      pageOrder: orderedExistingPages.length,
+      pageOrder: 0,
       workspaceId: project.workspaceId,
-      syncMode: workspace?.kind ?? project.syncMode ?? 'local',
+      syncMode,
       syncAccountId: syncConfig.userId ?? syncConfig.syncQueueOwnerUserId ?? undefined,
-      syncWorkspaceId: workspace?.kind === 'notion' ? workspace.notionWorkspaceId : undefined,
-    };
-
-    await writeStorage({
-      activePageIdsByProject: {
-        ...activePageIdsByProject,
-        [projectId]: page.id,
-      },
-      pages: [
-        ...pages.map((entry) => existingPageOrder.has(entry.id)
-          ? { ...entry, pageOrder: existingPageOrder.get(entry.id) }
-          : entry),
-        page,
-      ],
+      syncWorkspaceId: syncMode === 'notion'
+        ? workspace?.kind === 'notion'
+          ? workspace.notionWorkspaceId
+          : syncConfig.workspaceId
+        : undefined,
     });
 
     const settled = (async () => {
       try {
-        const realProjectId = projectReconciliations.has(projectId)
-          ? await projectReconciliations.get(projectId)
-          : projectId;
         const { projects: latestProjects } = await readStorage();
-        const realProject = latestProjects.find(
+        const currentProject = latestProjects.find((storedProject) =>
+          storedProject.id === projectId,
+        );
+        if (!inFlightReconciliation && isTempProject(currentProject)) {
+          const recoveredPage = await recoverOrphanedTemporaryProject(projectId);
+          void flushPendingSyncOps({ force: true }).catch(() => undefined);
+          return recoveredPage;
+        }
+        const realProjectId = inFlightReconciliation
+          ? await inFlightReconciliation
+          : projectId;
+        const { projects: reconciledProjects } = await readStorage();
+        const realProject = reconciledProjects.find(
           (storedProject) => storedProject.id === realProjectId,
         );
 
@@ -4333,12 +4875,28 @@ export const notionClient = {
         const syncedPage = await enqueuePageSync(realPage, realProject);
 
         await replaceTempPage(page, syncedPage);
-        return replayTempPageSave(page.id, syncedPage);
+        const savedPage = await replayTempPageSave(page.id, syncedPage);
+        void flushPendingSyncOps({ force: true }).catch(() => undefined);
+        return savedPage;
       } catch (error) {
         const message =
           error instanceof Error ? error.message : 'Unable to create this page.';
-        await rollbackTempPage(page, previousActivePageId, message);
-        throw error;
+        // Keep the optimistic page and its edits when project reconciliation or
+        // sync setup fails. Removing it here could discard content typed while
+        // the page's worker request was still pending.
+        const latestStorage = await readStorage();
+        const retainedPage = latestStorage.pages.find((candidate) => candidate.id === page.id)
+          ?? latestStorage.pages.find((candidate) =>
+            candidate.id === latestStorage.activePageIdsByProject[projectId],
+          );
+        if (!retainedPage) throw error;
+        const retained = withSyncStatus(
+          retainedPage,
+          'stale',
+          `Saved locally. ${message} Sync will retry when the project is ready.`,
+        );
+        await persistPage(retained);
+        return retained;
       }
     })();
 
@@ -4364,12 +4922,8 @@ export const notionClient = {
     }
 
     const syncedPage = await enqueuePageSync(updatedPage, project, page);
-
-    await writeStorage({
-      pages: pages.map((storedPage) =>
-        storedPage.id === syncedPage.id ? syncedPage : storedPage,
-      ),
-    });
+    await persistPage(syncedPage);
+    void flushPendingSyncOps({ force: true }).catch(() => undefined);
 
     return syncedPage;
   },
@@ -4461,11 +5015,7 @@ export const notionClient = {
       ),
     });
 
-    await writeStorage({
-      pages: pages.map((storedPage) =>
-        storedPage.id === updatedPage.id ? updatedPage : storedPage,
-      ),
-    });
+    await persistPagesById([updatedPage]);
 
     if (isTempPage(updatedPage) || isTempProject(project)) {
       pendingTempPageSaves.set(updatedPage.id, updatedPage);
@@ -4474,6 +5024,7 @@ export const notionClient = {
 
     const syncedPage = await enqueuePageSync(updatedPage, project, previousPage);
     await persistPage(syncedPage);
+    void flushPendingSyncOps({ force: true }).catch(() => undefined);
     return syncedPage;
   },
 
@@ -4522,14 +5073,11 @@ export const notionClient = {
       : project;
     const updatedPage = appendContent(page, capturedContent);
 
-    await writeStorage({
-      pages: pages.map((storedPage) =>
-        storedPage.id === updatedPage.id ? updatedPage : storedPage,
-      ),
-    });
+    await persistPagesById([updatedPage]);
 
     const syncedPage = await enqueuePageSync(updatedPage, savedProject, page);
     await persistPage(syncedPage);
+    void flushPendingSyncOps({ force: true }).catch(() => undefined);
     return syncedPage;
   },
 

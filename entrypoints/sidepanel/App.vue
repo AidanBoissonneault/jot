@@ -7,6 +7,8 @@
 import { computed, nextTick, onBeforeUnmount, ref } from 'vue';
 import ArchiveConfirmModal from './components/shared/ArchiveConfirmModal.vue';
 import SyncConflictModal from './components/shared/SyncConflictModal.vue';
+import NotionConnectModal from './components/shared/NotionConnectModal.vue';
+import NotionLogoutConfirmModal from './components/shared/NotionLogoutConfirmModal.vue';
 import TopBar from './components/layout/TopBar.vue';
 import type { TopBarContext } from './components/layout/topBarContext';
 import SettingsPage from './components/settings/SettingsPage.vue';
@@ -53,7 +55,7 @@ import {
 } from './components/editor/editorOptions';
 import { useJottathingStore } from '@/src/stores/jottathing';
 import type { DocumentContent } from '@/src/types/capture';
-import type { SyncContentConflict } from '@/src/types/sync';
+import type { SyncContentConflict, SyncProgressUpdate } from '@/src/types/sync';
 import type { CaptureSelectionPayload, JottathingRuntimeMessage } from '@/src/types/messages';
 import { autoMergeUniquePageAdditions } from '@/src/lib/syncConflictAutoMerge';
 
@@ -132,11 +134,15 @@ let pageTitleEditOriginalDirty = false;
 const newProjectNameDraft = ref('');
 const uiMessage = ref('');
 const isResyncing = ref(false);
+const resyncProgress = ref<SyncProgressUpdate | null>(null);
 const isResolvingSyncConflict = ref(false);
 const syncConflictError = ref('');
 const syncConflicts = ref<SyncContentConflict[]>([]);
+const isSyncConflictModalDismissed = ref(false);
 const activeSyncConflict = computed(() => syncConflicts.value.find((conflict) => conflict.targetType === 'project'));
 const activeTab = ref<'editor' | 'settings'>('editor');
+const isNotionConnectModalOpen = ref(false);
+const isNotionLogoutConfirmationOpen = ref(false);
 const {
   createParentPage,
   parentPageLabel,
@@ -148,7 +154,7 @@ const {
   serverUrlDraft,
 } = useSettingsActions(store, uiMessage);
 
-async function prepareForConnectionDeletion() {
+async function prepareForConnectionChange() {
   window.clearTimeout(saveTimer.value);
   saveTimer.value = undefined;
   await editorPersistence?.flushEditorContent();
@@ -162,6 +168,9 @@ const {
   hasAcceptedLegalTerms,
   isLegalAcceptanceLoaded,
   isSigningIn,
+  isLoggingOut,
+  logoutError,
+  logoutProgress,
   isDeletingConnection,
   canLoginWithNotion,
   loadLegalAcceptance,
@@ -174,9 +183,32 @@ const {
   store,
   activeTab,
   uiMessage,
-  prepareForConnectionDeletion,
+  prepareForConnectionChange,
   resetEditorAfterConnectionDeletion,
 );
+const canOpenNotionConnectModal = computed(
+  () => isLegalAcceptanceLoaded.value && !isSigningIn.value && !store.syncConfig.logoutCleanupPending,
+);
+
+function openNotionConnectModal() {
+  if (canOpenNotionConnectModal.value) isNotionConnectModalOpen.value = true;
+}
+
+async function confirmNotionConnect() {
+  await loginWithNotion();
+  if (isSigningIn.value) isNotionConnectModalOpen.value = false;
+}
+
+function requestNotionLogout() {
+  if (store.syncConfig.connected || store.syncConfig.authenticated) {
+    logoutError.value = '';
+    isNotionLogoutConfirmationOpen.value = true;
+  }
+}
+
+async function confirmNotionLogout() {
+  if (await logout()) isNotionLogoutConfirmationOpen.value = false;
+}
 const isProjectNameEditing = ref(false);
 const projectNameInputRef = ref<HTMLInputElement | null>(null);
 const editorStateVersion = ref(0);
@@ -511,17 +543,21 @@ function saveProjectMetadata() {
 async function resync() {
   if (isResyncing.value) return;
   isResyncing.value = true;
+  resyncProgress.value = { phase: 'saving_edits' };
   uiMessage.value = '';
 
   try {
     await flushEditorContent();
     const hadPendingLocalChanges = (await notionClient.pendingSyncEventCount()) > 0;
+    resyncProgress.value = { phase: 'checking_notion' };
     await store.refreshSyncSession(false, false);
     if (!store.syncConfig.connected) {
       throw new Error(store.errorMessage || 'Connect Notion before resyncing.');
     }
 
-    const result = await store.resyncPendingChanges();
+    const result = await store.resyncPendingChanges((progress) => {
+      resyncProgress.value = progress;
+    });
 
     const conflictsNeedingInlineReview: SyncContentConflict[] = [];
     const conflictsNeedingModalReview: SyncContentConflict[] = [];
@@ -550,8 +586,10 @@ async function resync() {
     }
 
     syncConflicts.value = conflictsNeedingModalReview;
+    isSyncConflictModalDismissed.value = false;
 
     if (autoMergedAdditions) {
+      resyncProgress.value = { phase: 'updating_view' };
       await store.refreshWorkspaceFromStorage();
     }
 
@@ -586,13 +624,25 @@ async function resync() {
       : 'Unable to resync with Notion. Your local changes remain saved.';
   } finally {
     isResyncing.value = false;
+    resyncProgress.value = null;
   }
 }
 
 function cancelSyncConflict() {
-  syncConflicts.value = [];
+  isSyncConflictModalDismissed.value = true;
   syncConflictError.value = '';
   uiMessage.value = 'Sync review paused. Your local changes remain saved.';
+}
+
+function openProjectSyncConflict(conflict: SyncContentConflict) {
+  const projectConflicts = syncConflicts.value.filter((entry) => entry.targetType === 'project');
+  syncConflicts.value = [
+    conflict,
+    ...projectConflicts.filter((entry) => entry.targetId !== conflict.targetId),
+  ];
+  isSyncConflictModalDismissed.value = false;
+  syncConflictError.value = '';
+  activeTab.value = 'editor';
 }
 
 async function resolveInlinePageSyncConflict(
@@ -721,7 +771,12 @@ const topBarContext: TopBarContext = {
   colorForCategory,
   flushEditorContent,
   canUseEditor,
+  canOpenNotionConnectModal,
+  isSigningIn,
   isResyncing,
+  resyncProgress,
+  syncConflicts,
+  openProjectSyncConflict,
   activeTab,
   createProject,
   createPage,
@@ -737,7 +792,8 @@ const topBarContext: TopBarContext = {
     activeTab.value = 'editor';
   },
   resync,
-  logout,
+  openNotionConnectModal,
+  requestLogout: requestNotionLogout,
   selectProject,
   selectPage,
   archiveProject,
@@ -752,16 +808,10 @@ const settingsPageContext: SettingsPageContext = {
   saveLabel,
   accountLabel,
   parentPageLabel,
-  hasAcceptedLegalTerms,
-  isLegalAcceptanceLoaded,
   LEGAL_TERMS_URL,
   LEGAL_PRIVACY_URL,
   openLegalUrl,
-  canLoginWithNotion,
-  isSigningIn,
   isDeletingConnection,
-  loginWithNotion,
-  logout,
   deleteConnection,
   serverUrlDraft,
   saveServerUrl,
@@ -931,12 +981,35 @@ const editorPageTitleContext: EditorPageTitleContext = {
     />
 
     <SyncConflictModal
-      v-if="activeSyncConflict"
+      v-if="activeSyncConflict && !isSyncConflictModalDismissed"
       :conflict="activeSyncConflict"
       :busy="isResolvingSyncConflict"
       :error="syncConflictError"
       @cancel="cancelSyncConflict"
       @resolve="resolveSyncConflict"
+    />
+
+    <NotionConnectModal
+      v-if="isNotionConnectModalOpen"
+      v-model:accepted="hasAcceptedLegalTerms"
+      :loaded="isLegalAcceptanceLoaded"
+      :can-continue="canLoginWithNotion"
+      :signing-in="isSigningIn"
+      :terms-url="LEGAL_TERMS_URL"
+      :privacy-url="LEGAL_PRIVACY_URL"
+      :open-legal-url="openLegalUrl"
+      @cancel="isNotionConnectModalOpen = false"
+      @confirm="confirmNotionConnect"
+    />
+
+    <NotionLogoutConfirmModal
+      v-if="isNotionLogoutConfirmationOpen"
+      :busy="isLoggingOut"
+      :error="logoutError"
+      :online="store.isOnline"
+      :progress="logoutProgress"
+      @cancel="isNotionLogoutConfirmationOpen = false"
+      @confirm="confirmNotionLogout"
     />
   </main>
 </template>

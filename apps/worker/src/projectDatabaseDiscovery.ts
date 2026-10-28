@@ -5,6 +5,7 @@
  */
 import {
   JOTTATHING_DATABASE_TITLE,
+  JOTTATHING_PROJECTS_DATA_SOURCE_TITLE,
   PROJECT_PROPERTIES,
   activeProjectsView,
   allProjectsView,
@@ -240,16 +241,25 @@ export function createProjectDatabaseDiscoveryHelpers({
     store: WorkerStore,
     { parentPageId, ignoredDatabaseIds = new Set<string>() }: Partial<DatabaseSearchOptions> = {},
   ): Promise<JottathingDatabase | undefined> {
-    const databases: NotionObject[] = [];
-    const seenDatabaseIds = new Set<string>();
-    for (const query of [JOTTATHING_DATABASE_TITLE, ...legacyDatabaseTitles]) {
+    const dataSources: NotionObject[] = [];
+    const seenDataSourceIds = new Set<string>();
+    // Since Notion API version 2025-09-03, database search results are data
+    // sources. The current Jottathing database uses "Projects" as its data
+    // source title; the database titles cover installations created by older
+    // versions of the API.
+    const searchTitles = [
+      JOTTATHING_PROJECTS_DATA_SOURCE_TITLE,
+      JOTTATHING_DATABASE_TITLE,
+      ...legacyDatabaseTitles,
+    ];
+    for (const query of searchTitles) {
       let cursor: string | undefined;
       const seenCursors = new Set<string>();
       do {
         const body: JsonObject = {
           query,
           page_size: 100,
-          filter: { property: 'object', value: 'database' },
+          filter: { property: 'object', value: 'data_source' },
         };
         if (cursor) body.start_cursor = cursor;
 
@@ -257,12 +267,12 @@ export function createProjectDatabaseDiscoveryHelpers({
         // as empty would create a duplicate database and split user data.
         const response = await notionRequest(store, '/search', { method: 'POST', body });
         if (!Array.isArray(response.results)) {
-          throw new Error('Notion returned an invalid database search result.');
+          throw new Error('Notion returned an invalid data source search result.');
         }
-        for (const database of response.results) {
-          if (!seenDatabaseIds.has(database.id)) {
-            seenDatabaseIds.add(database.id);
-            databases.push(database);
+        for (const dataSource of response.results) {
+          if (!seenDataSourceIds.has(dataSource.id)) {
+            seenDataSourceIds.add(dataSource.id);
+            dataSources.push(dataSource);
           }
         }
         if (response.has_more) {
@@ -279,12 +289,19 @@ export function createProjectDatabaseDiscoveryHelpers({
     }
 
     const candidates = [];
+    const databaseIds = new Set<string>();
 
-    for (const database of databases) {
-      const dataSourceId = firstDataSourceId(database);
+    for (const dataSource of dataSources) {
+      const databaseId = dataSource.parent?.database_id;
+      if (!databaseId || ignoredDatabaseIds.has(databaseId) || databaseIds.has(databaseId)) continue;
+
+      // Search returns a data_source object. Resolve its parent database so
+      // we can verify the managed database title and its page/workspace parent.
+      const database = await notionRequest(store, `/databases/${databaseId}`);
+      databaseIds.add(databaseId);
+      const dataSourceId = dataSource.id ?? firstDataSourceId(database);
 
       if (
-        !ignoredDatabaseIds.has(database.id) &&
         !isArchivedObject(database) &&
         [JOTTATHING_DATABASE_TITLE, ...legacyDatabaseTitles].includes(titleFromDatabase(database)) &&
         (parentPageId === undefined || parentPageIdFromObject(database) === parentPageId) &&
@@ -293,7 +310,7 @@ export function createProjectDatabaseDiscoveryHelpers({
         candidates.push({
           database,
           dataSourceId,
-          mappedProjects: mappedProjectCount(store, database.id),
+          mappedProjects: mappedProjectCount(store, databaseId),
           managedProjects: await managedProjectCount(store, dataSourceId),
         });
       }
@@ -341,14 +358,22 @@ export function createProjectDatabaseDiscoveryHelpers({
           : properties['Managed by Jot']
             ? 'Managed by Jot'
             : PROJECT_PROPERTIES.managed;
+      const managedPropertySchema = properties[managedProperty];
+      if (!managedPropertySchema) return -1;
+      const managedPropertyType = typeof managedPropertySchema.type === 'string'
+        ? managedPropertySchema.type
+        : undefined;
       do {
-        const body: JsonObject = {
-          page_size: 100,
-          filter: {
+        const body: JsonObject = { page_size: 100 };
+        // Only send a typed filter when the adopted schema confirms it is valid.
+        // Older workspaces may have customized or migrated this property to a
+        // different type, where a checkbox filter makes Notion reject discovery.
+        if (managedPropertyType === 'checkbox') {
+          body.filter = {
             property: managedProperty,
             checkbox: { equals: true },
-          },
-        };
+          };
+        }
 
         if (cursor) {
           body.start_cursor = cursor;
@@ -361,7 +386,9 @@ export function createProjectDatabaseDiscoveryHelpers({
         if (!Array.isArray(response.results)) {
           throw new Error('Notion returned an invalid managed-project count result.');
         }
-        count += response.results.length;
+        count += managedPropertyType === 'checkbox'
+          ? response.results.length
+          : response.results.filter((page) => checkboxValue(page.properties?.[managedProperty])).length;
         if (response.has_more) {
           const nextCursor = response.next_cursor;
           if (!nextCursor || seenCursors.has(nextCursor)) {
@@ -453,7 +480,7 @@ export function createProjectDatabaseDiscoveryHelpers({
         title: richText(JOTTATHING_DATABASE_TITLE),
         is_inline: false,
         initial_data_source: {
-          title: richText('Projects'),
+          title: richText(JOTTATHING_PROJECTS_DATA_SOURCE_TITLE),
           properties: projectSchema(),
         },
       },

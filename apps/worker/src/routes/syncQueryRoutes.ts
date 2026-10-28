@@ -51,7 +51,8 @@ export function registerSyncQueryRoutes(app: Hono<{ Bindings: WorkerEnv }>): voi
 
     if (!pageId) {
       try {
-        return c.json({ hasPending: await hasPendingSyncQueuePayload(store.installationId) });
+        const pendingCount = await pendingSyncQueuePayloadCount(store.installationId);
+        return c.json({ hasPending: pendingCount > 0, pendingCount });
       } catch {
         return c.json({ error: 'Unable to read queued synchronization status.' }, 500);
       }
@@ -198,10 +199,26 @@ export function registerSyncQueryRoutes(app: Hono<{ Bindings: WorkerEnv }>): voi
     if (parsed.tooLarge) return c.json({ error: 'Request is too large.' }, 413);
     const body = (parsed.body ?? {}) as Partial<SyncReloadRequest>;
     const { selectedParentPageId } = body ?? {};
+    const reloadId = typeof body.reloadId === 'string' && /^[A-Za-z0-9-]{1,80}$/.test(body.reloadId)
+      ? body.reloadId
+      : undefined;
     const store = await requireConnectedStore(c);
   
     const result = await withFreshInstallationStore(store, async (freshStore) => {
-      const reloaded = await reloadProjectDatabaseFromNotion(freshStore, { selectedParentPageId });
+      const doStub = reloadId
+        ? c.env.SYNC_EVENTS.get(c.env.SYNC_EVENTS.idFromName(String(freshStore.installationId)))
+        : undefined;
+      const reloaded = await reloadProjectDatabaseFromNotion(freshStore, {
+        selectedParentPageId,
+        onProgress: doStub
+          ? async (progress) => {
+              await doStub.fetch(new Request('http://do/notify', {
+                method: 'POST',
+                body: JSON.stringify({ status: 'reload_progress', reloadId, ...progress }),
+              })).catch(() => undefined);
+            }
+          : undefined,
+      });
       appendLog(freshStore, 'sync_reload', `${reloaded.projects.length} projects, ${reloaded.pages.length} pages`);
       await writeStore(freshStore);
       return reloaded;
@@ -312,4 +329,15 @@ export async function hasPendingSyncQueuePayload(installationId: string | number
     .limit(1);
   if (error) throw new Error('Unable to read queued synchronization status.');
   return Boolean(data?.length);
+}
+
+/** Counts durable, accepted work that has not been acknowledged by the Queue consumer. */
+export async function pendingSyncQueuePayloadCount(installationId: string | number): Promise<number> {
+  const { count, error } = await supabase
+    .from('jottathing_sync_queue_payloads')
+    .select('id', { count: 'exact', head: true })
+    .eq('installation_id', installationId)
+    .eq('status', 'pending');
+  if (error) throw new Error('Unable to read queued synchronization status.');
+  return count ?? 0;
 }

@@ -60,6 +60,7 @@ interface BackoffOptions {
 /** Describes the notion api error contract used by this API feature. */
 export class NotionApiError extends Error {
   readonly code: string | undefined;
+  readonly endpoint: string;
   readonly isNotionApiError = true;
   readonly retryAfter: number | undefined;
   readonly status: number;
@@ -70,13 +71,21 @@ export class NotionApiError extends Error {
    * @param status - HTTP response status.
    * @param code - Notion's machine-readable error code.
    * @param retryAfter - Server-requested retry delay in seconds.
+   * @param endpoint - Relative API endpoint that failed.
    */
-  constructor(message: string, status: number, code: string | undefined, retryAfter: number | undefined) {
+  constructor(
+    message: string,
+    status: number,
+    code: string | undefined,
+    retryAfter: number | undefined,
+    endpoint: string,
+  ) {
     super(message);
     this.name = 'NotionApiError';
     this.status = status;
     this.code = code;
     this.retryAfter = retryAfter;
+    this.endpoint = endpoint;
   }
 }
 
@@ -195,7 +204,7 @@ export function createNotionRequester({
           return notionObject(payload);
         }
 
-        const error = createNotionError(response, payload);
+        const error = createNotionError(response, payload, endpoint);
 
         const rateLimited = error.status === 429 && error.code === 'rate_limited';
         if (
@@ -410,12 +419,13 @@ function createRateLimiter({
  * @param payload - Untrusted JSON response body.
  * @returns A normalized Notion API error.
  */
-function createNotionError(response: Response, payload: unknown): NotionApiError {
+function createNotionError(response: Response, payload: unknown, endpoint: string): NotionApiError {
   return new NotionApiError(
     stringProperty(payload, 'message') ?? `Notion returned ${response.status}.`,
     response.status,
     stringProperty(payload, 'code'),
     retryAfterHeader(response),
+    endpoint,
   );
 }
 

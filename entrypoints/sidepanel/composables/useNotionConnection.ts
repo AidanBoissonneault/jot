@@ -2,6 +2,7 @@
 import { computed, ref, type Ref } from 'vue';
 import { hasAcceptedCurrentLegalTerms, storeCurrentLegalAcceptance } from '@/src/services/legal';
 import type { useJottathingStore } from '@/src/stores/jottathing';
+import type { SyncProgressUpdate } from '@/src/types/sync';
 
 type JottathingStore = ReturnType<typeof useJottathingStore>;
 
@@ -10,12 +11,15 @@ export function useNotionConnection(
   store: JottathingStore,
   activeTab: Ref<'editor' | 'settings'>,
   uiMessage: Ref<string>,
-  prepareForDeletion?: () => Promise<void>,
+  prepareForConnectionChange?: () => Promise<void>,
   resetAfterDeletion?: () => void,
 ) {
   const hasAcceptedLegalTerms = ref(false);
   const isLegalAcceptanceLoaded = ref(false);
   const isSigningIn = ref(false);
+  const isLoggingOut = ref(false);
+  const logoutError = ref('');
+  const logoutProgress = ref('');
   const isDeletingConnection = ref(false);
   let sessionPollTimer: number | undefined;
 
@@ -32,13 +36,28 @@ export function useNotionConnection(
   function startSessionPolling() {
     window.clearInterval(sessionPollTimer);
     let attempts = 0;
+    let completingLogin = false;
     sessionPollTimer = window.setInterval(() => {
+      if (completingLogin) return;
       attempts += 1;
-      void store.refreshSyncSession(true).then(() => {
-        if (store.syncConfig.connected || attempts >= 30) {
-          window.clearInterval(sessionPollTimer);
-          isSigningIn.value = false;
-          if (store.syncConfig.connected) activeTab.value = 'editor';
+      void store.refreshSyncSession(true).then(async () => {
+        if (!store.syncConfig.connected && attempts < 30) return;
+        completingLogin = true;
+        window.clearInterval(sessionPollTimer);
+        sessionPollTimer = undefined;
+        isSigningIn.value = false;
+        if (!store.syncConfig.connected) {
+          uiMessage.value = 'Notion login did not finish. Please try again.';
+          return;
+        }
+
+        try {
+          await store.activateNotionWorkspace();
+          activeTab.value = 'editor';
+        } catch (error) {
+          uiMessage.value = error instanceof Error
+            ? error.message
+            : 'Jottathing connected to Notion, but could not open its workspace.';
         }
       });
     }, 2000);
@@ -58,20 +77,61 @@ export function useNotionConnection(
       uiMessage.value = 'Review and accept the Terms and Privacy Policy before connecting Notion.';
       return;
     }
-    await storeCurrentLegalAcceptance();
-    isSigningIn.value = true;
-    await browser.tabs.create({ active: true, url: store.getSyncLoginUrl() });
-    startSessionPolling();
+    try {
+      await prepareForConnectionChange?.();
+      await storeCurrentLegalAcceptance();
+      isSigningIn.value = true;
+      await browser.tabs.create({ active: true, url: store.getSyncLoginUrl() });
+      startSessionPolling();
+    } catch (error) {
+      isSigningIn.value = false;
+      uiMessage.value = error instanceof Error
+        ? error.message
+        : 'Could not open Notion login. Please try again.';
+    }
   }
 
   function openLegalUrl(url: string) {
     void browser.tabs.create({ active: true, url });
   }
 
-  async function logout() {
+  async function logout(): Promise<boolean> {
+    if (isLoggingOut.value) return false;
+    logoutError.value = '';
+    logoutProgress.value = '';
+    isLoggingOut.value = true;
     stopSessionPolling();
     isSigningIn.value = false;
-    if (await store.logout()) activeTab.value = 'editor';
+    try {
+      await prepareForConnectionChange?.();
+      const didLogout = await store.logout((progress: SyncProgressUpdate) => {
+        logoutProgress.value = progress.phase === 'saving_edits'
+          ? 'Saving the latest edits…'
+          : progress.phase === 'uploading'
+            ? progress.pending
+              ? `Sending ${progress.pending} queued change${progress.pending === 1 ? '' : 's'} to the sync worker…`
+              : 'Sending queued changes to the sync worker…'
+            : progress.pending
+              ? `Waiting for ${progress.pending} queued change${progress.pending === 1 ? '' : 's'} to finish syncing to Notion…`
+              : 'Waiting for the sync worker to finish syncing to Notion…';
+      });
+      if (didLogout) {
+        activeTab.value = 'editor';
+        if (store.errorMessage) uiMessage.value = store.errorMessage;
+        return true;
+      }
+      logoutError.value = store.errorMessage || 'Could not sign out. Please try again.';
+      return false;
+    } catch (error) {
+      logoutError.value = error instanceof Error
+        ? error.message
+        : 'Could not save your current note before signing out.';
+      uiMessage.value = logoutError.value;
+      return false;
+    } finally {
+      isLoggingOut.value = false;
+      logoutProgress.value = '';
+    }
   }
 
   async function deleteConnection() {
@@ -97,7 +157,7 @@ export function useNotionConnection(
     isSigningIn.value = false;
     isDeletingConnection.value = true;
     try {
-      await prepareForDeletion?.();
+      await prepareForConnectionChange?.();
       const result = await store.deleteConnection();
       resetAfterDeletion?.();
       activeTab.value = 'settings';
@@ -115,6 +175,9 @@ export function useNotionConnection(
     hasAcceptedLegalTerms,
     isLegalAcceptanceLoaded,
     isSigningIn,
+    isLoggingOut,
+    logoutError,
+    logoutProgress,
     isDeletingConnection,
     canLoginWithNotion,
     loadLegalAcceptance,

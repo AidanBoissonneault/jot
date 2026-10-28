@@ -1,7 +1,8 @@
 <script setup lang="ts">
 /** Shows workspaces, their projects, and pages in one expandable tree. */
-import { onBeforeUnmount, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import type { Project, ProjectPage, Workspace } from '@/src/types/capture';
+import type { SyncContentConflict } from '@/src/types/sync';
 
 const props = defineProps<{
   workspaces: Workspace[];
@@ -13,7 +14,52 @@ const props = defineProps<{
   selectedProjectId: string | null;
   selectedPageId: string | undefined;
   authenticated: boolean;
+  projectSyncConflicts: SyncContentConflict[];
 }>();
+
+type WorkspaceConflictEntry = {
+  key: string;
+  workspaceId: string;
+  kind: 'page' | 'project';
+  projectId: string;
+  projectName: string;
+  title: string;
+  conflict?: SyncContentConflict;
+};
+
+const conflictEntries = computed<WorkspaceConflictEntry[]>(() => {
+  const entries = new Map<string, WorkspaceConflictEntry>();
+  for (const project of props.projects) {
+    if (project.status !== 'active') continue;
+    for (const conflict of project.syncConflicts ?? []) {
+      if (conflict.targetType !== 'page') continue;
+      const key = `page:${conflict.targetId}`;
+      entries.set(key, {
+        key,
+        workspaceId: project.workspaceId ?? props.workspaces.find((workspace) => workspace.kind === 'notion')?.id ?? props.selectedWorkspaceId,
+        kind: 'page',
+        projectId: project.id,
+        projectName: project.name,
+        title: conflict.targetTitle,
+      });
+    }
+  }
+  for (const conflict of props.projectSyncConflicts) {
+    if (conflict.targetType !== 'project') continue;
+    const project = props.projects.find((candidate) => candidate.id === conflict.targetId);
+    if (!project) continue;
+    entries.set(`project:${conflict.targetId}`, {
+      key: `project:${conflict.targetId}`,
+      workspaceId: project.workspaceId ?? props.workspaces.find((workspace) => workspace.kind === 'notion')?.id ?? props.selectedWorkspaceId,
+      kind: 'project',
+      projectId: project.id,
+      projectName: project.name,
+      title: conflict.targetTitle,
+      conflict,
+    });
+  }
+  return [...entries.values()];
+});
 
 const emit = defineEmits<{
   selectProject: [workspaceId: string, projectId: string];
@@ -26,6 +72,10 @@ const emit = defineEmits<{
   deleteWorkspace: [workspaceId: string];
   deleteProject: [projectId: string];
   deletePage: [pageId: string];
+  logout: [];
+  reviewProjectConflict: [conflict: SyncContentConflict];
+  openConflictProject: [workspaceId: string, projectId: string];
+  openConflictPage: [workspaceId: string, projectId: string, pageId: string];
   moveProject: [projectId: string, workspaceId: string];
   movePage: [pageId: string, projectId: string, targetPageId?: string, position?: 'before' | 'after'];
 }>();
@@ -36,6 +86,7 @@ const detailsWorkspaceId = ref<string | null>(null);
 const workspaceNameDraft = ref('');
 const draggedItem = ref<{ kind: 'project' | 'page'; id: string } | null>(null);
 const activeDropTarget = ref('');
+const openConflictWorkspaceId = ref<string | null>(null);
 const WORKSPACE_TREE_DRAG_TYPE = 'application/x-jottathing-workspace-item';
 let projectExpandTimer: ReturnType<typeof setTimeout> | undefined;
 let pendingProjectExpansionId = '';
@@ -46,6 +97,42 @@ function isWorkspaceExpanded(workspaceId: string) {
 
 function isProjectExpanded(projectId: string) {
   return expandedProjectIds.value.includes(projectId);
+}
+
+function workspaceConflicts(workspaceId: string) {
+  return conflictEntries.value.filter((entry) => entry.workspaceId === workspaceId);
+}
+
+function toggleWorkspaceConflictMenu(workspaceId: string) {
+  openConflictWorkspaceId.value = openConflictWorkspaceId.value === workspaceId ? null : workspaceId;
+}
+
+function openWorkspaceConflict(entry: WorkspaceConflictEntry) {
+  openConflictWorkspaceId.value = null;
+  if (entry.kind === 'project' && entry.conflict) {
+    emit('reviewProjectConflict', entry.conflict);
+  } else if (entry.kind === 'page') {
+    emit('openConflictPage', entry.workspaceId, entry.projectId, entry.key.slice('page:'.length));
+  }
+}
+
+function openConflictProject(entry: WorkspaceConflictEntry) {
+  openConflictWorkspaceId.value = null;
+  emit('openConflictProject', entry.workspaceId, entry.projectId);
+}
+
+function closeWorkspaceConflictMenu() {
+  openConflictWorkspaceId.value = null;
+}
+
+function handleConflictOutsidePointerDown(event: PointerEvent) {
+  const target = event.target as Element | null;
+  if (target?.closest('.workspace-tree-conflict-menu, .workspace-tree-conflicts-button')) return;
+  closeWorkspaceConflictMenu();
+}
+
+function handleConflictKeyDown(event: KeyboardEvent) {
+  if (event.key === 'Escape') closeWorkspaceConflictMenu();
 }
 
 function toggleWorkspace(workspaceId: string) {
@@ -238,7 +325,15 @@ function dropOnPageSlot(event: DragEvent, projectId: string, slotIndex: number) 
   finishDrag();
 }
 
-onBeforeUnmount(finishDrag);
+onMounted(() => {
+  document.addEventListener('pointerdown', handleConflictOutsidePointerDown);
+  document.addEventListener('keydown', handleConflictKeyDown);
+});
+onBeforeUnmount(() => {
+  finishDrag();
+  document.removeEventListener('pointerdown', handleConflictOutsidePointerDown);
+  document.removeEventListener('keydown', handleConflictKeyDown);
+});
 
 function toggleProject(projectId: string) {
   if (isProjectExpanded(projectId)) {
@@ -278,6 +373,12 @@ watch(() => props.selectedWorkspaceId, (workspaceId) => {
   }
 }, { immediate: true });
 
+watch(conflictEntries, (entries) => {
+  if (openConflictWorkspaceId.value && !entries.some((entry) => entry.workspaceId === openConflictWorkspaceId.value)) {
+    closeWorkspaceConflictMenu();
+  }
+});
+
 watch(
   () => props.projects.find((project) => project.id === props.selectedProjectId)?.id,
   (projectId) => {
@@ -301,7 +402,10 @@ watch(
       <span class="workspace-dropdown-heading">Workspaces</span>
     </div>
     <section v-for="workspace in workspaces" :key="workspace.id" class="workspace-tree-group">
-      <div class="workspace-tree-row">
+      <div
+        class="workspace-tree-row"
+        :class="{ 'has-sync-conflicts': workspace.kind === 'notion' && workspaceConflicts(workspace.id).length > 0 }"
+      >
         <button
           type="button"
           class="workspace-tree-select workspace-tree-workspace"
@@ -364,6 +468,66 @@ watch(
           >
             <font-awesome-icon :icon="['fas', 'trash-can']" fixed-width />
           </button>
+          <button
+            v-if="workspace.kind === 'notion' && authenticated"
+            type="button"
+            class="workspace-tree-action workspace-tree-logout-action"
+            title="Sign out of this Notion workspace"
+            :aria-label="`Sign out of ${workspace.name}`"
+            @click.stop="emit('logout')"
+          >
+            <font-awesome-icon :icon="['fas', 'right-from-bracket']" fixed-width />
+          </button>
+          <button
+            v-if="workspace.kind === 'notion' && authenticated && workspaceConflicts(workspace.id).length > 0"
+            type="button"
+            class="workspace-tree-conflicts-button"
+            :aria-label="`Review ${workspaceConflicts(workspace.id).length} sync ${workspaceConflicts(workspace.id).length === 1 ? 'conflict' : 'conflicts'} in ${workspace.name}`"
+            :title="`Review ${workspaceConflicts(workspace.id).length} sync ${workspaceConflicts(workspace.id).length === 1 ? 'conflict' : 'conflicts'}`"
+            :aria-expanded="openConflictWorkspaceId === workspace.id"
+            @click.stop="toggleWorkspaceConflictMenu(workspace.id)"
+          >
+            <font-awesome-icon :icon="['fas', 'triangle-exclamation']" fixed-width />
+            <span>{{ workspaceConflicts(workspace.id).length }}</span>
+          </button>
+        </div>
+      </div>
+
+      <div
+        v-if="openConflictWorkspaceId === workspace.id"
+        class="sync-conflict-menu workspace-tree-conflict-menu"
+        role="menu"
+        aria-label="Notion sync conflicts"
+        @click.stop
+      >
+        <div class="sync-conflict-menu-heading" role="presentation">Sync conflicts</div>
+        <div
+          v-for="entry in workspaceConflicts(workspace.id)"
+          :key="entry.key"
+          class="sync-conflict-menu-item"
+          role="group"
+          :aria-label="`${entry.projectName}: ${entry.title}`"
+        >
+          <div class="sync-conflict-menu-page">{{ entry.title }}</div>
+          <div class="sync-conflict-menu-project">{{ entry.projectName }}</div>
+          <div class="sync-conflict-menu-actions">
+            <button
+              v-if="entry.kind === 'project' && entry.conflict"
+              type="button"
+              role="menuitem"
+              @click="openWorkspaceConflict(entry)"
+            >
+              Review project
+            </button>
+            <template v-else>
+              <button type="button" role="menuitem" @click="openConflictProject(entry)">
+                Open project
+              </button>
+              <button type="button" role="menuitem" @click="openWorkspaceConflict(entry)">
+                Open page
+              </button>
+            </template>
+          </div>
         </div>
       </div>
 

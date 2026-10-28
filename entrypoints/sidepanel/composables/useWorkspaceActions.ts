@@ -52,11 +52,11 @@ export function useWorkspaceActions(options: WorkspaceActionOptions) {
     await store.selectProject(projectId);
   }
 
-  async function createProject() {
+  async function createProject(workspaceId?: string) {
     activeTitleMenu.value = null;
     await flushEditorContent();
     const name = newProjectNameDraft.value.trim() || 'Untitled Project';
-    await store.createProject(name);
+    await store.createProject(name, workspaceId);
     newProjectNameDraft.value = '';
     activeTab.value = 'editor';
   }

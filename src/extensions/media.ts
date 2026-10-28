@@ -285,7 +285,11 @@ export const JottathingImage = Image.extend({
       img.setAttribute('aria-haspopup', 'dialog');
       img.setAttribute('aria-label', `Preview image: ${imageDisplayTitle(currentNode.attrs)}`);
       img.addEventListener('keydown', onImageKeyDown);
-      img.src = String(node.attrs.src ?? '');
+      const initialSrc = String(node.attrs.src ?? '');
+      const initialFileUploadId = String(node.attrs.notionFileUploadId ?? '');
+      const initialNotionBlockId = String(node.attrs.notionBlockId ?? '');
+      const refreshBeforeLoad = Boolean(initialFileUploadId || initialNotionBlockId)
+        && isExpiredNotionMediaUrl(initialSrc);
       if (node.attrs.alt) img.alt = node.attrs.alt;
       if (node.attrs.title) img.title = node.attrs.title;
       applyImageWidth(wrapper, img, node.attrs.width);
@@ -322,27 +326,7 @@ export const JottathingImage = Image.extend({
             restoreImageElement(wrapper, img);
             img.src = freshSrc;
 
-            // Uploaded files keep a stable upload id, so persisting the fresh URL
-            // cannot turn the Notion file into an external, expiring URL.
-            if (fileUploadId) {
-              const pos = typeof getPos === 'function' ? getPos() : undefined;
-              if (typeof pos === 'number') {
-                const attrs = {
-                  ...currentNode.attrs,
-                  src: freshSrc,
-                  uploadState: 'done',
-                  ...(notionBlockId ? { notionBlockId } : {}),
-                };
-                currentNode = currentNode.type.create(
-                  attrs,
-                  currentNode.content,
-                  currentNode.marks,
-                );
-                editor.view.dispatch(
-                  editor.view.state.tr.setNodeMarkup(pos, undefined, attrs),
-                );
-              }
-            }
+            persistFreshImageUrl(freshSrc);
           })
           .catch(() => {
             if (!restoreLocalImageSource()) showImageFallback(wrapper, img, failedSrc);
@@ -369,7 +353,24 @@ export const JottathingImage = Image.extend({
         return true;
       };
 
+      const persistFreshImageUrl = (freshSrc: string) => {
+        if (!String(currentNode.attrs.notionFileUploadId ?? '')) return;
+        const pos = typeof getPos === 'function' ? getPos() : undefined;
+        if (typeof pos !== 'number') return;
+        const attrs = {
+          ...currentNode.attrs,
+          src: freshSrc,
+          uploadState: 'done',
+          ...(currentNode.attrs.notionBlockId
+            ? { notionBlockId: currentNode.attrs.notionBlockId }
+            : {}),
+        };
+        currentNode = currentNode.type.create(attrs, currentNode.content, currentNode.marks);
+        editor.view.dispatch(editor.view.state.tr.setNodeMarkup(pos, undefined, attrs));
+      };
+
       img.addEventListener('error', onImageError);
+      if (!refreshBeforeLoad) img.src = initialSrc;
 
       wrapper.appendChild(img);
       wrapper.appendChild(controls);
@@ -379,6 +380,28 @@ export const JottathingImage = Image.extend({
       resizeHandle.className = 'jottathing-image-resize-handle';
       resizeHandle.setAttribute('aria-hidden', 'true');
       wrapper.appendChild(resizeHandle);
+
+      if (refreshBeforeLoad) {
+        isRefreshing = true;
+        wrapper.classList.add('is-uploading');
+        void notionClient.refreshMediaUrl(initialFileUploadId, initialNotionBlockId)
+          .then((freshSrc) => {
+            if (!freshSrc || freshSrc === initialSrc) {
+              throw new Error('Media URL did not change.');
+            }
+            lastRefreshedSrc = freshSrc;
+            restoreImageElement(wrapper, img);
+            img.src = freshSrc;
+            persistFreshImageUrl(freshSrc);
+          })
+          .catch(() => {
+            if (!restoreLocalImageSource()) showImageFallback(wrapper, img, initialSrc);
+          })
+          .finally(() => {
+            isRefreshing = false;
+            wrapper.classList.remove('is-uploading');
+          });
+      }
 
       const onDragStart = (event: DragEvent) => {
         const pos = typeof getPos === 'function' ? getPos() : undefined;
@@ -680,6 +703,34 @@ function showAudioFallback(wrapper: HTMLElement, audio: HTMLAudioElement, src: s
   link.target = '_blank';
   link.rel = 'noopener noreferrer';
   wrapper.appendChild(link);
+}
+
+function isExpiredNotionMediaUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    if (!url.hostname.startsWith('prod-files-secure.s3.')) return false;
+
+    const signedAtValue = url.searchParams.get('X-Amz-Date');
+    const expiresInSeconds = Number(url.searchParams.get('X-Amz-Expires'));
+    if (!signedAtValue || !Number.isFinite(expiresInSeconds) || expiresInSeconds <= 0) return false;
+
+    const awsDate = signedAtValue.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/);
+    const signedAt = awsDate
+      ? Date.UTC(
+          Number(awsDate[1]),
+          Number(awsDate[2]) - 1,
+          Number(awsDate[3]),
+          Number(awsDate[4]),
+          Number(awsDate[5]),
+          Number(awsDate[6]),
+        )
+      : Date.parse(signedAtValue);
+
+    return Number.isFinite(signedAt)
+      && signedAt + expiresInSeconds * 1_000 <= Date.now();
+  } catch {
+    return false;
+  }
 }
 
 async function setYoutubeIframeSource(iframe: HTMLIFrameElement, src: string) {

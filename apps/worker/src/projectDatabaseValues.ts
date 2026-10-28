@@ -8,6 +8,7 @@ import type { DocumentContent, NotionParentPage, Project } from '../../../src/ty
 import type { JottathingDatabase, JsonObject, NotionObject, NotionRichText } from './types.js';
 
 export const JOTTATHING_DATABASE_TITLE = 'Jottathing';
+export const JOTTATHING_PROJECTS_DATA_SOURCE_TITLE = 'Projects';
 export const PROJECT_STATE_BLOCK_KEY = 'project-state';
 export const PROJECT_PROPERTIES = {
   title: 'Name',
@@ -26,19 +27,30 @@ export const PROJECT_PROPERTIES = {
  * @param project - Local project metadata.
  * @returns Notion page-property payload.
  */
-export function projectProperties(project: Project): JsonObject {
+export function projectProperties(
+  project: Project,
+  statusPropertyType: string | undefined = 'select',
+): JsonObject {
   const createdAt = project.createdAt ?? new Date().toISOString();
   const updatedAt = project.updatedAt ?? createdAt;
   const category = String(project.category ?? '').trim();
-  return {
+  const properties: JsonObject = {
     [PROJECT_PROPERTIES.title]: { title: [{ text: { content: project.name || 'Untitled Project' } }] },
-    [PROJECT_PROPERTIES.status]: { select: { name: project.status === 'archived' ? 'Archived' : 'Active' } },
     [PROJECT_PROPERTIES.category]: { select: category ? { name: category } : null },
     [PROJECT_PROPERTIES.created]: { date: { start: createdAt } },
     [PROJECT_PROPERTIES.updated]: { date: { start: updatedAt } },
     [PROJECT_PROPERTIES.jottathingId]: { rich_text: [{ text: { content: project.id } }] },
     [PROJECT_PROPERTIES.managed]: { checkbox: true },
   };
+  // Notion's Status type uses predefined workflow options rather than the
+  // select options owned by Jottathing. Preserve it untouched when adopting a
+  // user database; archived projects are separately archived as Notion pages.
+  if (!statusPropertyType || statusPropertyType === 'select') {
+    properties[PROJECT_PROPERTIES.status] = {
+      select: { name: project.status === 'archived' ? 'Archived' : 'Active' },
+    };
+  }
+  return properties;
 }
 
 /**
@@ -292,7 +304,7 @@ export function richTextProperty(property: JsonObject | undefined): string {
  * @returns Selected name or an empty string.
  */
 export function selectProperty(property: JsonObject | undefined): string {
-  return nestedString(property, 'select', 'name') ?? '';
+  return nestedString(property, 'select', 'name') ?? nestedString(property, 'status', 'name') ?? '';
 }
 
 /**

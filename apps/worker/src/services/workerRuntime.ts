@@ -183,8 +183,8 @@ function performSyncProjectFolder(store: WorkerStore, input: ProjectSyncInput) {
 }
 
 /** Enqueues a page or block synchronization job. */
-function enqueueSync(env: WorkerEnv, job: EnqueueJob, clientVersion = 0): Promise<number> {
-  return workerQueueOperations.enqueueSync(env, job, clientVersion);
+function enqueueSync(env: WorkerEnv, job: EnqueueJob, batchVersion?: number): Promise<number> {
+  return workerQueueOperations.enqueueSync(env, job, batchVersion);
 }
 
 /** Loads fresh state and credentials for a queued installation. */

@@ -37,12 +37,13 @@ import {
 } from '../services/workerRuntime.js';
 import {
   MAX_SYNC_JSON_REQUEST_BYTES,
+  MAX_CONTROL_JSON_REQUEST_BYTES,
   notionApiErrorResponse,
   readLimitedJsonBody,
   safeErrorMetadata,
   stringValue,
 } from '../workerUtils.js';
-import type { WorkerEnv } from '../types.js';
+import type { SyncQueueMessage, WorkerEnv } from '../types.js';
 import {
   isUnmappedNotionContentError,
   UNMAPPED_NOTION_CONTENT_CODE,
@@ -118,10 +119,11 @@ export function registerSyncMutationRoutes(app: Hono<{ Bindings: WorkerEnv }>): 
           payload: { ...jobBase.payload, ops: chunk },
         }));
   
-        let version = group.version;
+        let version: number | undefined;
         for (const job of jobs) {
-          version = await enqueueSync(c.env, job, group.version);
+          version = await enqueueSync(c.env, job, version);
         }
+        if (version === undefined) return c.json({ status: 'error', message: 'Unable to assign a sync version.' }, 500);
         versions[latestOp.pageId] = version;
         for (const op of group.ops) {
           opVersions[op.opId] = version;
@@ -142,9 +144,95 @@ export function registerSyncMutationRoutes(app: Hono<{ Bindings: WorkerEnv }>): 
       projectId: project.id,
       installationId: store.installationId,
       payload: { page, project, selectedParentPageId },
-    }, page.localSyncVersion ?? page.knownSyncVersion ?? 0);
+    });
   
     return c.json({ queued: true, version });
+  });
+
+  /** Redrives accepted Queue payloads whose references reached the dead-letter queue. */
+  app.post('/sync/retry', async (c) => {
+    const parsed = await readLimitedJsonBody<{ opIds?: unknown[] }>(c.req.raw, MAX_CONTROL_JSON_REQUEST_BYTES);
+    if (parsed.tooLarge) return c.json({ error: 'Sync retry request is too large.' }, 413);
+    const requestedOpIds = new Set(
+      Array.isArray(parsed.body?.opIds)
+        ? parsed.body.opIds.filter((opId): opId is string => typeof opId === 'string')
+        : [],
+    );
+    const store = await requireConnectedStore(c);
+    const deliveryPendingOnly = c.req.query('deliveryPendingOnly') === 'true';
+    const pageSize = 25;
+    let requeuedCount = 0;
+    const requeuedOperationIds = new Set<string>();
+    const versions: Record<string, number> = {};
+    const opVersions: Record<string, number> = {};
+
+    const retryMarkers = deliveryPendingOnly
+      ? ['deliveryPendingAt'] as const
+      : ['deadLetteredAt', 'deliveryPendingAt'] as const;
+    for (const retryMarker of retryMarkers) {
+      let afterId: string | undefined;
+      while (true) {
+        let query = supabase
+          .from('jottathing_sync_queue_payloads')
+          .select('id, payload')
+          .eq('installation_id', store.installationId)
+          .eq('status', 'pending')
+          .not(`payload->>${retryMarker}`, 'is', null)
+          .order('id', { ascending: true })
+          .range(0, pageSize - 1);
+        if (afterId) query = query.gt('id', afterId);
+        const { data: rows, error } = await query;
+        if (error) return c.json({ error: 'Unable to read saved sync jobs for retry.' }, 503);
+        if (!rows?.length) break;
+
+        for (const row of rows) {
+          if (!isRetryableQueueMessage(row.payload, retryMarker)) continue;
+          const job = row.payload;
+          const { error: resetError } = await supabase
+            .from('notion_block_sync')
+            .update({ status: 'pending', updated_at: new Date().toISOString() })
+            .eq('installation_id', job.installationId)
+            .eq('local_id', job.localId)
+            .eq('local_version', job.queuedVersion);
+          if (resetError) return c.json({ error: 'Unable to prepare the saved sync job for retry.' }, 503);
+
+          try {
+            await c.env.SYNC_QUEUE.send({ jobId: String(row.id) });
+          } catch {
+            return c.json({ error: 'Unable to restart a saved sync job. Your note remains saved.' }, 503);
+          }
+
+          const retryPayload = { ...job };
+          delete retryPayload.deadLetteredAt;
+          delete retryPayload.deliveryPendingAt;
+          const { error: clearError } = await supabase
+            .from('jottathing_sync_queue_payloads')
+            .update({ payload: retryPayload, updated_at: new Date().toISOString() })
+            .eq('id', row.id)
+            .eq('status', 'pending');
+          if (clearError) return c.json({ error: 'A saved sync job was restarted, but its retry marker could not be cleared.' }, 503);
+          requeuedCount += 1;
+          if (job.type === 'block_op' && requestedOpIds.size) {
+            for (const operation of job.payload.ops ?? []) {
+              if (!operation.opId || !requestedOpIds.has(operation.opId)) continue;
+              requeuedOperationIds.add(operation.opId);
+              opVersions[operation.opId] = job.queuedVersion;
+              versions[job.localId] = Math.max(versions[job.localId] ?? 0, job.queuedVersion);
+            }
+          }
+        }
+
+        afterId = String(rows.at(-1)?.id ?? '');
+        if (rows.length < pageSize) break;
+      }
+    }
+
+    return c.json({
+      requeuedCount,
+      requeuedOperationIds: [...requeuedOperationIds],
+      versions,
+      opVersions,
+    });
   });
 
   /** Runs a user-requested page reconciliation immediately so its content diff can be returned. */
@@ -159,24 +247,61 @@ export function registerSyncMutationRoutes(app: Hono<{ Bindings: WorkerEnv }>): 
 
     try {
       const store = await requireConnectedStore(c);
+      const { data: assignedVersion, error: versionError } = await supabase.rpc('increment_block_version', {
+        p_installation_id: store.installationId,
+        p_local_id: page.id,
+        p_entity_type: 'page',
+      });
+      const serverVersion = Number(assignedVersion);
+      if (versionError || !Number.isSafeInteger(serverVersion) || serverVersion < 1) {
+        throw new Error('Unable to assign a server sync version.');
+      }
+
       const result = await pushPageToNotion({
         c,
         page,
         project,
         selectedParentPageId,
       });
-      await supabase.from('notion_block_sync').upsert({
-        installation_id: store.installationId,
-        local_id: page.id,
-        local_version: page.localSyncVersion ?? page.knownSyncVersion ?? 0,
-        synced_version: page.localSyncVersion ?? page.knownSyncVersion ?? 0,
-        status: 'synced',
-        notion_block_id: result?.page?.notionPageId ?? page.notionPageId ?? null,
-        entity_type: 'page',
-        is_stale: false,
-        updated_at: new Date().toISOString(),
-      }, { onConflict: 'installation_id,local_id' });
-      return c.json(result);
+      const isSynced = result.status === 'saved';
+      const { data: savedSyncState, error: stateError } = await supabase
+        .from('notion_block_sync')
+        .update({
+          ...(isSynced ? { synced_version: serverVersion, is_stale: false } : {}),
+          status: isSynced ? 'synced' : result.status,
+          notion_block_id: result?.page?.notionPageId ?? page.notionPageId ?? null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('installation_id', store.installationId)
+        .eq('local_id', page.id)
+        .eq('local_version', serverVersion)
+        .select('local_version')
+        .maybeSingle();
+      if (stateError) throw new Error('Unable to save the page sync version.');
+
+      if (savedSyncState && (isSynced || result.status === 'stale')) {
+        const doStub = c.env.SYNC_EVENTS.get(c.env.SYNC_EVENTS.idFromName(String(store.installationId)));
+        await doStub.fetch(new Request('http://do/notify', {
+          method: 'POST',
+          body: JSON.stringify({
+            status: isSynced ? 'synced' : 'stale',
+            pageId: page.id,
+            notionBlockId: result?.page?.notionPageId ?? page.notionPageId ?? null,
+            version: serverVersion,
+          }),
+        })).catch(() => undefined);
+      }
+
+      return c.json({
+        ...result,
+        ...(result.page ? {
+          page: {
+            ...result.page,
+            knownSyncVersion: serverVersion,
+            serverSyncVersion: serverVersion,
+          },
+        } : {}),
+      });
     } catch (error) {
       if (error instanceof HTTPException) {
         const response = error.getResponse();
@@ -310,5 +435,25 @@ export function registerSyncMutationRoutes(app: Hono<{ Bindings: WorkerEnv }>): 
       return c.json({ status: 'error', message }, 500);
     }
   });
+}
+
+function isRetryableQueueMessage(
+  value: unknown,
+  retryMarker: 'deadLetteredAt' | 'deliveryPendingAt',
+): value is SyncQueueMessage {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const candidate = value as Partial<SyncQueueMessage> & {
+    deadLetteredAt?: unknown;
+    deliveryPendingAt?: unknown;
+  };
+  return (
+    (candidate.type === 'block_op' || candidate.type === 'page' || candidate.type === 'project') &&
+    (typeof candidate.installationId === 'number' || typeof candidate.installationId === 'string') &&
+    typeof candidate.localId === 'string' &&
+    typeof candidate.queuedVersion === 'number' &&
+    (retryMarker === 'deliveryPendingAt'
+      ? typeof candidate.deliveryPendingAt === 'string'
+      : typeof candidate.deadLetteredAt === 'string')
+  );
 }
 

@@ -68,28 +68,28 @@ export function createWorkerQueueOperations(dependencies: WorkerQueueDependencie
     freshConnectedStore,
     performSyncProjectFolder,
   } = dependencies;
-  /** Persists a pending version and sends its normalized Queue message. */
-  async function enqueueSync(env: WorkerEnv, job: EnqueueJob, clientVersion = 0): Promise<number> {
-    const version = Number.isFinite(Number(clientVersion)) ? Number(clientVersion) : 0;
-    const { data: existing } = await supabase
-      .from('notion_block_sync')
-      .select('local_version')
-      .eq('installation_id', job.installationId)
-      .eq('local_id', job.localId)
-      .maybeSingle();
-
-    const { error: syncStateError } = await supabase.from('notion_block_sync').upsert(
-      {
-        installation_id: job.installationId,
-        local_id: job.localId,
-        entity_type: job.type,
-        local_version: Math.max(existing?.local_version ?? 0, version),
-        status: 'pending',
-        updated_at: new Date().toISOString(),
-      },
-      { onConflict: 'installation_id,local_id' },
-    );
-    if (syncStateError) throw new Error('Unable to record the pending Jottathing sync.');
+  /** Persists a server-assigned revision and sends its normalized Queue message. */
+  async function enqueueSync(
+    env: WorkerEnv,
+    job: EnqueueJob,
+    batchVersion?: number,
+  ): Promise<number> {
+    let version = batchVersion;
+    // `0` is the client's starting version, not a server-assigned revision.
+    // Treat it like an omitted batch version so the first queue job always
+    // creates a durable notion_block_sync row before publishing its reference.
+    if (version === undefined || !Number.isSafeInteger(version) || version < 1) {
+      const { data, error } = await supabase.rpc('increment_block_version', {
+        p_installation_id: job.installationId,
+        p_local_id: job.localId,
+        p_entity_type: job.type,
+      });
+      const assignedVersion = Number(data);
+      if (error || !Number.isSafeInteger(assignedVersion) || assignedVersion < 1) {
+        throw new Error('Unable to assign a server sync version.');
+      }
+      version = assignedVersion;
+    }
 
     const jobId = crypto.randomUUID();
     const message: SyncQueueMessage = { ...job, queuedVersion: version };
@@ -107,10 +107,17 @@ export function createWorkerQueueOperations(dependencies: WorkerQueueDependencie
       const reference: SyncQueueReference = { jobId };
       await env.SYNC_QUEUE.send(reference);
     } catch {
+      // Keep the durable outbox payload. The extension retains its local
+      // operations too, and can redrive this reference automatically later.
+      const retryableMessage: SyncQueueMessage = {
+        ...message,
+        deliveryPendingAt: new Date().toISOString(),
+      };
       await supabase
         .from('jottathing_sync_queue_payloads')
-        .delete()
-        .eq('id', jobId);
+        .update({ payload: retryableMessage, updated_at: new Date().toISOString() })
+        .eq('id', jobId)
+        .eq('status', 'pending');
       throw new Error('Unable to publish the pending sync job.');
     }
     return version;
