@@ -1048,7 +1048,7 @@ describe('Notion webhook verification', () => {
     await expect(response.json()).resolves.toEqual({ error: 'Invalid upload request.' });
   });
 
-  it('rejects SVG media rather than accepting every image MIME subtype', async () => {
+  it('rejects SVG bytes that do not match the declared image format', async () => {
     const sessionToken = 'media-svg-session-token-test';
     const accountId = 'notion:media-svg-test';
     stubAuthenticatedJottathingSession(sessionToken, accountId);
@@ -1061,11 +1061,11 @@ describe('Notion webhook verification', () => {
         Cookie: `jottathing_session=${sessionToken}`,
         'X-Jottathing-Account': accountId,
       },
-      body: JSON.stringify({ dataBase64: 'PHN2Zz48L3N2Zz4=', mimeType: 'image/svg+xml' }),
+      body: JSON.stringify({ dataBase64: 'bm90IGFuIHN2Zw==', mimeType: 'image/svg+xml' }),
     }, env);
 
     expect(response.status).toBe(400);
-    await expect(response.json()).resolves.toEqual({ error: 'This image or audio format is not supported.' });
+    await expect(response.json()).resolves.toEqual({ error: 'Image data does not match its file type.' });
   });
 
   it('rejects image bytes that do not match their declared MIME type', async () => {

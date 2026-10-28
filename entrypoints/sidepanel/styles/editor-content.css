@@ -347,7 +347,8 @@
   white-space: nowrap;
 }
 
-.editor .tiptap .jottathing-image-delete {
+.editor .tiptap .jottathing-image-delete,
+.editor .tiptap .jottathing-image-drag {
   align-items: center;
   background: transparent;
   border: 0;
@@ -362,16 +363,103 @@
 }
 
 .editor .tiptap .jottathing-image-delete:hover,
-.editor .tiptap .jottathing-image-delete:focus-visible {
+.editor .tiptap .jottathing-image-delete:focus-visible,
+.editor .tiptap .jottathing-image-drag:hover,
+.editor .tiptap .jottathing-image-drag:focus-visible {
   background: rgba(255, 255, 255, 0.2);
   outline: 2px solid var(--jottathing-surface);
   outline-offset: 1px;
 }
 
-.editor .tiptap .jottathing-image-delete svg {
+.editor .tiptap .jottathing-image-delete svg,
+.editor .tiptap .jottathing-image-drag svg {
   display: block;
   height: 14px;
   width: 14px;
+}
+
+.editor .tiptap .jottathing-image-drag {
+  cursor: grab;
+}
+
+.editor .tiptap .jottathing-image-drag:active {
+  cursor: grabbing;
+}
+
+.editor .tiptap .jottathing-image-caption-display {
+  background: transparent;
+  border: 0;
+  color: var(--jottathing-muted);
+  cursor: text;
+  display: block;
+  font: inherit;
+  font-size: 0.86rem;
+  line-height: 1.35;
+  margin-top: 3px;
+  max-width: 100%;
+  min-height: 22px;
+  overflow-wrap: anywhere;
+  padding: 2px 4px;
+  text-align: left;
+  white-space: pre-wrap;
+  width: 100%;
+}
+
+.editor .tiptap .jottathing-image-caption-display[data-empty='false'] {
+  color: var(--jottathing-text);
+}
+
+.editor .tiptap .jottathing-image-caption-display[data-empty='true'] {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.editor .tiptap .jottathing-image-wrapper:hover .jottathing-image-caption-display[data-empty='true'],
+.editor .tiptap .jottathing-image-wrapper.is-selected .jottathing-image-caption-display[data-empty='true'],
+.editor .tiptap .jottathing-image-wrapper:focus-within .jottathing-image-caption-display[data-empty='true'] {
+  opacity: 0.75;
+  pointer-events: auto;
+}
+
+.editor .tiptap .jottathing-image-caption-display:hover,
+.editor .tiptap .jottathing-image-caption-display:focus-visible {
+  color: var(--jottathing-text);
+  outline: 1px solid var(--jottathing-border-strong);
+}
+
+.editor .tiptap .jottathing-image-caption {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  box-sizing: border-box;
+  color: var(--jottathing-muted);
+  display: block;
+  font: inherit;
+  font-size: 0.86rem;
+  line-height: 1.35;
+  margin-top: 3px;
+  min-height: 22px;
+  min-width: 120px;
+  overflow: hidden;
+  padding: 2px 4px;
+  resize: none;
+  width: 100%;
+}
+
+.editor .tiptap .jottathing-image-caption-display[hidden],
+.editor .tiptap .jottathing-image-caption[hidden] {
+  display: none !important;
+}
+
+.editor .tiptap .jottathing-image-caption:not(:placeholder-shown) {
+  color: var(--jottathing-text);
+}
+
+.editor .tiptap .jottathing-image-caption:hover,
+.editor .tiptap .jottathing-image-caption:focus-visible {
+  background: var(--jottathing-surface);
+  border-color: var(--jottathing-border-strong);
+  outline: none;
 }
 
 .jottathing-image-preview-overlay {

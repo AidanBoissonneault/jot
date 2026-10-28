@@ -237,7 +237,9 @@ describe('media drop helpers', () => {
       kind: 'file',
       file: { type: 'image/png', name: 'pasted-image' },
     });
-    expect(IMAGE_FILE_ACCEPT).toBe('image/jpeg,image/png,image/gif,image/webp,image/avif');
+    expect(IMAGE_FILE_ACCEPT).toBe(
+      'image/jpeg,image/png,image/gif,image/webp,image/avif,image/heic,image/svg+xml,image/tiff,image/vnd.microsoft.icon,image/bmp,image/apng,.jpg,.jpeg,.png,.gif,.webp,.avif,.heic,.svg,.tif,.tiff,.ico,.bmp,.apng',
+    );
   });
 
   it('uses image files listed directly on clipboard data before item fallback', () => {
@@ -250,13 +252,13 @@ describe('media drop helpers', () => {
 
   it('rejects empty, oversized, and unsupported image formats consistently', () => {
     const empty = new File([], 'empty.png', { type: 'image/png' });
-    const svg = new File(['<svg/>'], 'vector.svg', { type: 'image/svg+xml' });
+    const unsupported = new File(['raw'], 'vector.raw', { type: 'image/x-raw' });
     const oversized = new File([new Uint8Array(IMAGE_UPLOAD_MAX_BYTES + 1)], 'huge.png', {
       type: 'image/png',
     });
 
     expect(isUploadableImageFile(empty)).toBe(false);
-    expect(isUploadableImageFile(svg)).toBe(false);
+    expect(isUploadableImageFile(unsupported)).toBe(false);
     expect(isUploadableImageFile(oversized)).toBe(false);
   });
 

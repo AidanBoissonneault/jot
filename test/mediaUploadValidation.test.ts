@@ -14,6 +14,6 @@ describe('Notion image upload validation', () => {
 
   it('rejects a MIME type that does not match the image bytes', () => {
     expect(hasValidImageSignature(new TextEncoder().encode('not an image'), 'image/png')).toBe(false);
-    expect(hasValidImageSignature(new TextEncoder().encode('<svg/>'), 'image/svg+xml')).toBe(false);
+    expect(hasValidImageSignature(new TextEncoder().encode('not an svg'), 'image/svg+xml')).toBe(false);
   });
 });

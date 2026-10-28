@@ -109,12 +109,19 @@ function tiptapNodeToNotionBlock(node: DocumentContent): NotionBlockPayload {
   if (node.type === 'image') {
     const src = stringProperty(node.attrs, 'src');
     const fileUploadId = stringProperty(node.attrs, 'notionFileUploadId');
+    const rawCaption = node.attrs?.caption;
+    const caption = Array.isArray(rawCaption)
+      ? inlineContentToRichText(rawCaption as DocumentContent[])
+      : typeof rawCaption === 'string' && rawCaption.trim()
+        ? plainRichText(rawCaption.trim())
+        : [];
+    const captionPayload = caption.length ? { caption } : {};
 
     if (fileUploadId) {
       return {
         object: 'block',
         type: 'image',
-        image: { type: 'file_upload', file_upload: { id: fileUploadId } },
+        image: { type: 'file_upload', file_upload: { id: fileUploadId }, ...captionPayload },
       };
     }
 
@@ -122,7 +129,11 @@ function tiptapNodeToNotionBlock(node: DocumentContent): NotionBlockPayload {
       return paragraphFallback('');
     }
 
-    return { object: 'block', type: 'image', image: { type: 'external', external: { url: src } } };
+    return {
+      object: 'block',
+      type: 'image',
+      image: { type: 'external', external: { url: src }, ...captionPayload },
+    };
   }
 
   if (node.type === 'youtube') {

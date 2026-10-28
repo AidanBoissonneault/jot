@@ -6,8 +6,18 @@ export const SUPPORTED_IMAGE_MIME_TYPES = [
   'image/gif',
   'image/webp',
   'image/avif',
+  'image/heic',
+  'image/svg+xml',
+  'image/tiff',
+  'image/vnd.microsoft.icon',
+  'image/bmp',
+  'image/apng',
 ] as const;
-export const IMAGE_FILE_ACCEPT = SUPPORTED_IMAGE_MIME_TYPES.join(',');
+export const IMAGE_FILE_ACCEPT = [
+  ...SUPPORTED_IMAGE_MIME_TYPES,
+  '.jpg', '.jpeg', '.png', '.gif', '.webp', '.avif', '.heic', '.svg',
+  '.tif', '.tiff', '.ico', '.bmp', '.apng',
+].join(',');
 
 export type UploadableImageDrop = { kind: 'file'; file: File };
 export type UploadableAudioDrop = { kind: 'file'; file: File };
@@ -21,9 +31,24 @@ type DropData = {
 
 type ClipboardImageData = Pick<DropData, 'files' | 'items'>;
 
-const IMAGE_URL_PATTERN = /\.(png|jpe?g|gif|webp|svg|avif)(\?[^#]*)?(#.*)?$/i;
+const IMAGE_URL_PATTERN = /\.(png|jpe?g|gif|webp|svg|avif|heic|tif{1,2}|bmp|ico|apng)(\?[^#]*)?(#.*)?$/i;
 const AUDIO_URL_PATTERN = /\.(mp3|mpeg|m4a|aac|wav|ogg|oga|opus|webm)(\?[^#]*)?(#.*)?$/i;
 const YOUTUBE_HOST_PATTERN = /(^|\.)youtube(?:-nocookie)?\.com$|(^|\.)youtu\.be$/i;
+const IMAGE_EXTENSION_MIME_TYPES: Record<string, string> = {
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  png: 'image/png',
+  gif: 'image/gif',
+  webp: 'image/webp',
+  avif: 'image/avif',
+  heic: 'image/heic',
+  svg: 'image/svg+xml',
+  tif: 'image/tiff',
+  tiff: 'image/tiff',
+  ico: 'image/vnd.microsoft.icon',
+  bmp: 'image/bmp',
+  apng: 'image/apng',
+};
 
 export function readImageDropSrc(dataTransfer: DropData | null | undefined): string | null {
   const html = dataTransfer?.getData('text/html') ?? '';
@@ -121,13 +146,31 @@ export function peekUploadableAudioDrop(
 }
 
 export function isUploadableImageFile(file: File): boolean {
-  return isSupportedImageMimeType(file.type) && file.size > 0 && file.size <= IMAGE_UPLOAD_MAX_BYTES;
+  return isSupportedImageMimeType(imageMimeTypeForFile(file)) &&
+    file.size > 0 && file.size <= IMAGE_UPLOAD_MAX_BYTES;
 }
 
 export function isSupportedImageMimeType(mimeType: string): boolean {
+  const normalizedMime = normalizeImageMimeType(mimeType);
   return SUPPORTED_IMAGE_MIME_TYPES.includes(
-    mimeType.trim().toLowerCase() as (typeof SUPPORTED_IMAGE_MIME_TYPES)[number],
+    normalizedMime as (typeof SUPPORTED_IMAGE_MIME_TYPES)[number],
   );
+}
+
+/** Resolves browser MIME aliases and missing MIME types from common image extensions. */
+export function imageMimeTypeForFile(file: File): string {
+  const declaredMime = normalizeImageMimeType(file.type);
+  if (isSupportedImageMimeType(declaredMime)) return declaredMime;
+  if (declaredMime && declaredMime !== 'application/octet-stream' && declaredMime !== 'binary/octet-stream') {
+    return declaredMime;
+  }
+  const extension = file.name.split('.').pop()?.toLowerCase() ?? '';
+  return IMAGE_EXTENSION_MIME_TYPES[extension] ?? '';
+}
+
+function normalizeImageMimeType(mimeType: string): string {
+  const normalizedMime = mimeType.trim().toLowerCase();
+  return normalizedMime === 'image/x-icon' ? 'image/vnd.microsoft.icon' : normalizedMime;
 }
 
 function imageFileFromTransfer(data: ClipboardImageData | null | undefined): File | null {

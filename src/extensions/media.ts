@@ -23,6 +23,15 @@ export const JottathingImage = Image.extend({
       notionFileUploadId: { default: '' },
       notionBlockId: { default: '' },
       filename: { default: '' },
+      caption: {
+        default: [],
+        parseHTML: (element: HTMLElement) => {
+          const caption = element.getAttribute('data-caption') ?? '';
+          return caption ? [{ type: 'text', text: caption }] : [];
+        },
+        renderHTML: ({ caption }: Record<string, unknown>) =>
+          imageCaptionText(caption) ? { 'data-caption': imageCaptionText(caption) } : {},
+      },
       localSrc: {
         default: '',
         parseHTML: () => '',
@@ -43,11 +52,12 @@ export const JottathingImage = Image.extend({
     return ({ node, editor, getPos }) => {
       const wrapper = document.createElement('div');
       wrapper.className = 'jottathing-image-wrapper';
-      wrapper.draggable = true;
+      wrapper.draggable = false;
       wrapper.tabIndex = -1;
       const uploadState = String(node.attrs.uploadState ?? 'idle');
       let currentNode = node;
       let isRefreshing = false;
+      let lastRefreshedSrc = '';
       let imageElement: HTMLImageElement | null = null;
       let previewOverlay: HTMLElement | null = null;
       let closePreview: (restoreFocus?: boolean) => void = () => undefined;
@@ -58,15 +68,46 @@ export const JottathingImage = Image.extend({
       controls.setAttribute('aria-label', 'Image actions');
       const title = document.createElement('span');
       title.className = 'jottathing-image-title';
+      const dragButton = document.createElement('button');
+      dragButton.className = 'jottathing-image-drag';
+      dragButton.type = 'button';
+      dragButton.draggable = true;
+      dragButton.appendChild(createDragIcon(document));
+      dragButton.setAttribute('aria-label', 'Drag image to move');
+      dragButton.title = 'Drag image to move';
       const deleteButton = document.createElement('button');
       deleteButton.className = 'jottathing-image-delete';
       deleteButton.type = 'button';
       deleteButton.appendChild(createTrashIcon(document));
       deleteButton.setAttribute('aria-label', 'Delete image');
       deleteButton.title = 'Delete image';
-      controls.append(title, deleteButton);
+      controls.append(title, dragButton, deleteButton);
       applyImageTitle(wrapper, title, currentNode.attrs);
       applyImageBlockId(wrapper, currentNode.attrs.jottathingBlockId);
+
+      const captionButton = document.createElement('button');
+      captionButton.className = 'jottathing-image-caption-display';
+      captionButton.type = 'button';
+      captionButton.setAttribute('aria-label', 'Add image caption');
+      captionButton.textContent = 'Add caption';
+
+      const captionInput = document.createElement('textarea');
+      captionInput.className = 'jottathing-image-caption';
+      captionInput.rows = 1;
+      captionInput.maxLength = 2000;
+      captionInput.placeholder = 'Add caption…';
+      captionInput.setAttribute('aria-label', 'Image caption');
+      captionInput.hidden = true;
+      captionInput.value = imageCaptionText(currentNode.attrs.caption);
+      let editingCaption = false;
+
+      const showCaptionButton = () => {
+        const caption = imageCaptionText(currentNode.attrs.caption);
+        captionButton.textContent = caption || 'Add caption';
+        captionButton.setAttribute('aria-label', caption ? 'Edit image caption' : 'Add image caption');
+        captionButton.dataset.empty = caption ? 'false' : 'true';
+      };
+      showCaptionButton();
 
       const selectImage = (event?: Event) => {
         const pos = typeof getPos === 'function' ? getPos() : undefined;
@@ -125,7 +166,7 @@ export const JottathingImage = Image.extend({
 
         const caption = ownerDocument.createElement('div');
         caption.className = 'jottathing-image-preview-caption';
-        caption.textContent = imageDisplayTitle(currentNode.attrs);
+        caption.textContent = imageCaptionText(currentNode.attrs);
 
         const closeButton = ownerDocument.createElement('button');
         closeButton.className = 'jottathing-image-preview-close';
@@ -154,7 +195,7 @@ export const JottathingImage = Image.extend({
 
       const onClick = (event: MouseEvent) => {
         const target = event.target;
-        if (target instanceof Element && target.closest('.jottathing-image-controls')) return;
+        if (target instanceof Element && target.closest('.jottathing-image-controls, .jottathing-image-caption')) return;
         selectImage(event);
         if (imageElement && target === imageElement) openImagePreview();
       };
@@ -170,10 +211,43 @@ export const JottathingImage = Image.extend({
       const onDeleteClick = (event: MouseEvent) => onDeleteImage(event);
       deleteButton.addEventListener('click', onDeleteClick);
 
+      const onCaptionInput = () => {
+        const pos = typeof getPos === 'function' ? getPos() : undefined;
+        if (typeof pos !== 'number') return;
+        const attrs = {
+          ...currentNode.attrs,
+          caption: captionInput.value ? [{ type: 'text', text: captionInput.value }] : [],
+        };
+        currentNode = currentNode.type.create(attrs, currentNode.content, currentNode.marks);
+        editor.view.dispatch(editor.view.state.tr.setNodeMarkup(pos, undefined, attrs));
+        resizeImageCaption(captionInput);
+      };
+      const onCaptionButtonClick = (event: MouseEvent) => {
+        event.preventDefault();
+        event.stopPropagation();
+        editingCaption = true;
+        captionButton.hidden = true;
+        captionInput.hidden = false;
+        captionInput.focus();
+        captionInput.setSelectionRange(captionInput.value.length, captionInput.value.length);
+        resizeImageCaption(captionInput);
+      };
+      const onCaptionBlur = () => {
+        onCaptionInput();
+        editingCaption = false;
+        captionInput.hidden = true;
+        captionButton.hidden = false;
+        showCaptionButton();
+      };
+      captionButton.addEventListener('click', onCaptionButtonClick);
+      captionInput.addEventListener('input', onCaptionInput);
+      captionInput.addEventListener('blur', onCaptionBlur);
+      resizeImageCaption(captionInput);
+
       const stopNodeViewEvent = (event: Event) => {
         const target = event.target;
         return target instanceof Element && Boolean(
-          target.closest('.jottathing-image-resize-handle, .jottathing-image-controls'),
+          target.closest('.jottathing-image-resize-handle, .jottathing-image-controls, .jottathing-image-caption-display, .jottathing-image-caption'),
         );
       };
 
@@ -182,7 +256,7 @@ export const JottathingImage = Image.extend({
         const error = document.createElement('span');
         error.className = 'jottathing-image-error-message';
         error.textContent = 'Image was not synced. Drop it again to upload it to Notion.';
-        wrapper.append(error, controls);
+        wrapper.append(error, controls, captionButton, captionInput);
         wrapper.addEventListener('click', onClick);
         return {
           dom: wrapper,
@@ -192,6 +266,9 @@ export const JottathingImage = Image.extend({
           destroy() {
             wrapper.removeEventListener('click', onClick);
             deleteButton.removeEventListener('click', onDeleteClick);
+            captionButton.removeEventListener('click', onCaptionButtonClick);
+            captionInput.removeEventListener('input', onCaptionInput);
+            captionInput.removeEventListener('blur', onCaptionBlur);
           },
         };
       }
@@ -223,6 +300,11 @@ export const JottathingImage = Image.extend({
           return;
         }
 
+        if (lastRefreshedSrc && failedSrc === lastRefreshedSrc) {
+          if (!restoreLocalImageSource()) showImageFallback(wrapper, img, failedSrc);
+          return;
+        }
+
         if (!fileUploadId && !notionBlockId) {
           if (!restoreLocalImageSource()) showImageFallback(wrapper, img, failedSrc);
           return;
@@ -236,6 +318,7 @@ export const JottathingImage = Image.extend({
               throw new Error('Media URL did not change.');
             }
 
+            lastRefreshedSrc = freshSrc;
             restoreImageElement(wrapper, img);
             img.src = freshSrc;
 
@@ -279,7 +362,7 @@ export const JottathingImage = Image.extend({
           : hasStableUpload && /^data:image\//i.test(originalSrc)
             ? originalSrc
             : '';
-        if (!fallbackSrc) return false;
+        if (!fallbackSrc || !isInlineImageFormatSupported(currentNode.attrs, fallbackSrc)) return false;
 
         restoreImageElement(wrapper, img);
         img.src = fallbackSrc;
@@ -290,6 +373,8 @@ export const JottathingImage = Image.extend({
 
       wrapper.appendChild(img);
       wrapper.appendChild(controls);
+      wrapper.appendChild(captionButton);
+      wrapper.appendChild(captionInput);
       const resizeHandle = document.createElement('span');
       resizeHandle.className = 'jottathing-image-resize-handle';
       resizeHandle.setAttribute('aria-hidden', 'true');
@@ -393,11 +478,17 @@ export const JottathingImage = Image.extend({
           const preview = previewOverlay?.querySelector<HTMLImageElement>('.jottathing-image-preview');
           if (preview && preview.src !== nextSrc) preview.src = nextSrc;
           const caption = previewOverlay?.querySelector<HTMLElement>('.jottathing-image-preview-caption');
-          if (caption) caption.textContent = imageDisplayTitle(nextNode.attrs);
+          if (caption) caption.textContent = imageCaptionText(nextNode.attrs);
           previewOverlay?.setAttribute(
             'aria-label',
             `Image preview: ${imageDisplayTitle(nextNode.attrs)}`,
           );
+          const nextCaption = imageCaptionText(nextNode.attrs.caption);
+          showCaptionButton();
+          if (!editingCaption && captionInput.value !== nextCaption) {
+            captionInput.value = nextCaption;
+            resizeImageCaption(captionInput);
+          }
           applyImageWidth(wrapper, img, nextNode.attrs.width);
           return true;
         },
@@ -410,6 +501,9 @@ export const JottathingImage = Image.extend({
           img.removeEventListener('keydown', onImageKeyDown);
           img.removeEventListener('dragstart', onDragStart, true);
           deleteButton.removeEventListener('click', onDeleteClick);
+          captionButton.removeEventListener('click', onCaptionButtonClick);
+          captionInput.removeEventListener('input', onCaptionInput);
+          captionInput.removeEventListener('blur', onCaptionBlur);
           resizeHandle.removeEventListener('pointerdown', onResizePointerDown);
         },
       };
@@ -647,9 +741,50 @@ function applyImageBlockId(wrapper: HTMLElement, value: unknown) {
 function imageDisplayTitle(attrs: Record<string, unknown>): string {
   const value = [attrs.title, attrs.alt, attrs.filename]
     .find((candidate) => typeof candidate === 'string' && candidate.trim());
-  if (typeof value !== 'string') return 'Image';
-  const filename = value.split(/[\\/]/).pop()?.trim() ?? value.trim();
+  const candidate = typeof value === 'string' ? value : String(attrs.src ?? '');
+  if (!candidate || /^data:/i.test(candidate)) return 'Image';
+  let filename = candidate.split(/[\\/]/).pop()?.trim() ?? candidate.trim();
+  try {
+    const pathname = new URL(candidate, 'https://jottathing.invalid').pathname;
+    filename = decodeURIComponent(pathname.split('/').pop() ?? '').trim() || filename;
+  } catch {
+    // Use the source text fallback for non-URL image data.
+  }
   return filename || 'Image';
+}
+
+function isInlineImageFormatSupported(attrs: Record<string, unknown>, src: string): boolean {
+  const mimeType = String(attrs.mimeType ?? '').trim().toLowerCase();
+  if (mimeType === 'image/heic' || mimeType === 'image/tiff') return false;
+  const dataMimeType = src.match(/^data:([^;,]+)/i)?.[1]?.toLowerCase();
+  if (dataMimeType === 'image/heic' || dataMimeType === 'image/tiff') return false;
+  try {
+    const path = decodeURIComponent(new URL(src, 'https://jottathing.invalid').pathname);
+    return !/\.(?:heic|tif|tiff)$/i.test(path);
+  } catch {
+    return true;
+  }
+}
+
+function imageCaptionText(value: unknown): string {
+  const isAttributes = Boolean(value && typeof value === 'object' && !Array.isArray(value));
+  const caption = isAttributes
+    ? (value as Record<string, unknown>).caption
+    : value;
+  const text = typeof caption === 'string'
+    ? caption.trim()
+    : Array.isArray(caption)
+      ? caption.map(readImageCaptionNodeText).join('').trim()
+      : '';
+  return text || (isAttributes ? imageDisplayTitle(value as Record<string, unknown>) : '');
+}
+
+function readImageCaptionNodeText(value: unknown): string {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return '';
+  const node = value as Record<string, unknown>;
+  if (typeof node.text === 'string') return node.text;
+  if (node.type === 'hardBreak') return '\n';
+  return Array.isArray(node.content) ? node.content.map(readImageCaptionNodeText).join('') : '';
 }
 
 function applyImageTitle(
@@ -676,6 +811,29 @@ function createTrashIcon(ownerDocument: Document): SVGSVGElement {
   path.setAttribute('stroke-width', '2');
   icon.appendChild(path);
   return icon;
+}
+
+function createDragIcon(ownerDocument: Document): SVGSVGElement {
+  const icon = ownerDocument.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  icon.setAttribute('viewBox', '0 0 16 16');
+  icon.setAttribute('aria-hidden', 'true');
+  icon.setAttribute('focusable', 'false');
+  for (const x of [5, 11]) {
+    for (const y of [3, 8, 13]) {
+      const dot = ownerDocument.createElementNS('http://www.w3.org/2000/svg', 'circle');
+      dot.setAttribute('cx', String(x));
+      dot.setAttribute('cy', String(y));
+      dot.setAttribute('r', '1.2');
+      dot.setAttribute('fill', 'currentColor');
+      icon.appendChild(dot);
+    }
+  }
+  return icon;
+}
+
+function resizeImageCaption(caption: HTMLTextAreaElement) {
+  caption.style.height = 'auto';
+  caption.style.height = `${Math.max(22, caption.scrollHeight)}px`;
 }
 
 function clamp(value: number, min: number, max: number) {

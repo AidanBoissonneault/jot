@@ -239,7 +239,8 @@ export function isBase64(value: string): boolean {
 
 /** Checks whether a MIME type is supported media. @param mimeType - MIME type. @returns Support decision. */
 const SUPPORTED_MEDIA_MIME_TYPES = new Set([
-  'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/avif',
+  'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/avif', 'image/heic',
+  'image/svg+xml', 'image/tiff', 'image/vnd.microsoft.icon', 'image/x-icon', 'image/bmp', 'image/apng',
   'audio/mpeg', 'audio/mp3', 'audio/mp4', 'audio/aac', 'audio/wav',
   'audio/x-wav', 'audio/ogg', 'audio/opus', 'audio/webm',
 ]);
@@ -260,12 +261,61 @@ export function hasValidImageSignature(data: Uint8Array, mimeType: string): bool
   if (mime === 'image/png') {
     return data.length >= 8 && startsWith(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a);
   }
+  if (mime === 'image/apng') {
+    return hasPngSignature(data) && hasPngAnimationControlChunk(data);
+  }
   if (mime === 'image/gif') return data.length >= 6 && ['GIF87a', 'GIF89a'].includes(ascii(0, 6));
   if (mime === 'image/webp') {
     return data.length >= 12 && ascii(0, 4) === 'RIFF' && ascii(8, 12) === 'WEBP';
   }
-  if (mime === 'image/avif') {
-    return data.length >= 12 && ascii(4, 8) === 'ftyp' && ['avif', 'avis'].includes(ascii(8, 12));
+  if (mime === 'image/avif') return hasIsoBmffBrand(data, ['avif', 'avis']);
+  if (mime === 'image/heic') {
+    return hasIsoBmffBrand(data, ['heic', 'heix', 'hevc', 'hevx', 'heim', 'heis', 'hevm', 'hevs']);
+  }
+  if (mime === 'image/bmp') return data.length >= 2 && ascii(0, 2) === 'BM';
+  if (mime === 'image/tiff') {
+    return data.length >= 4 && (
+      ascii(0, 4) === 'II*\u0000' || ascii(0, 4) === 'MM\u0000*' ||
+      ascii(0, 4) === 'II+\u0000' || ascii(0, 4) === 'MM\u0000+'
+    );
+  }
+  if (mime === 'image/vnd.microsoft.icon' || mime === 'image/x-icon') {
+    return data.length >= 4 && startsWith(0x00, 0x00, 0x01, 0x00);
+  }
+  if (mime === 'image/svg+xml') {
+    return /<svg(?:\s|>)/i.test(new TextDecoder().decode(data.subarray(0, 4096)));
+  }
+  return false;
+}
+
+function hasPngSignature(data: Uint8Array): boolean {
+  return data.length >= 8 &&
+    data[0] === 0x89 && data[1] === 0x50 && data[2] === 0x4e && data[3] === 0x47 &&
+    data[4] === 0x0d && data[5] === 0x0a && data[6] === 0x1a && data[7] === 0x0a;
+}
+
+function hasPngAnimationControlChunk(data: Uint8Array): boolean {
+  const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+  let offset = 8;
+  const maxOffset = Math.min(data.length, 4096);
+  while (offset + 12 <= maxOffset) {
+    const chunkLength = view.getUint32(offset);
+    const chunkType = String.fromCharCode(...data.subarray(offset + 4, offset + 8));
+    if (chunkType === 'acTL') return chunkLength === 8 && offset + 20 <= data.length;
+    if (chunkType === 'IDAT' || chunkType === 'IEND') return false;
+    const nextOffset = offset + 12 + chunkLength;
+    if (!Number.isSafeInteger(nextOffset) || nextOffset <= offset || nextOffset > maxOffset) return false;
+    offset = nextOffset;
+  }
+  return false;
+}
+
+function hasIsoBmffBrand(data: Uint8Array, brands: string[]): boolean {
+  if (data.length < 16 || String.fromCharCode(...data.subarray(4, 8)) !== 'ftyp') return false;
+  const boxLength = new DataView(data.buffer, data.byteOffset, data.byteLength).getUint32(0);
+  const ftypEnd = Math.min(data.length, boxLength >= 16 ? boxLength : 16);
+  for (let offset = 8; offset + 4 <= ftypEnd; offset += 4) {
+    if (brands.includes(String.fromCharCode(...data.subarray(offset, offset + 4)))) return true;
   }
   return false;
 }
@@ -283,7 +333,9 @@ export function sanitizeMediaFilename(filename: string | undefined, mimeType: st
 export function mediaExtensionFromMimeType(mimeType: string): string {
   const extensions: Record<string, string> = {
     'image/jpeg': 'jpg', 'image/png': 'png', 'image/gif': 'gif', 'image/webp': 'webp',
-    'image/svg+xml': 'svg', 'image/avif': 'avif', 'audio/mpeg': 'mp3', 'audio/mp3': 'mp3',
+    'image/svg+xml': 'svg', 'image/avif': 'avif', 'image/heic': 'heic', 'image/tiff': 'tiff',
+    'image/vnd.microsoft.icon': 'ico', 'image/x-icon': 'ico', 'image/bmp': 'bmp',
+    'image/apng': 'apng', 'audio/mpeg': 'mp3', 'audio/mp3': 'mp3',
     'audio/mp4': 'm4a', 'audio/aac': 'aac', 'audio/wav': 'wav', 'audio/x-wav': 'wav',
     'audio/ogg': 'ogg', 'audio/opus': 'opus', 'audio/webm': 'webm',
   };

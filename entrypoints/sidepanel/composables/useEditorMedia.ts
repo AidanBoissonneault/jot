@@ -8,6 +8,7 @@ import {
   AUDIO_UPLOAD_MAX_BYTES,
   IMAGE_FILE_ACCEPT,
   IMAGE_UPLOAD_MAX_BYTES,
+  imageMimeTypeForFile,
   isUploadableAudioFile,
   isUploadableImageFile,
 } from '@/src/extensions/mediaDrop';
@@ -64,11 +65,11 @@ export function useEditorMedia(
     void saveEditorContent();
   }
 
-  async function uploadMediaFile(file: File, label: string): Promise<string> {
+  async function uploadMediaFile(file: File, label: string, mimeType = file.type): Promise<string> {
     queueMicrotask(clearEditorUpdateSkip);
     if (!store.syncConfig.connected || !store.isOnline) return '';
     try {
-      return await notionClient.uploadMedia(file, file.type, file.name);
+      return await notionClient.uploadMedia(file, mimeType, file.name);
     } catch (error) {
       uiMessage.value =
         error instanceof Error ? error.message : `Unable to upload this ${label} to Notion.`;
@@ -108,9 +109,10 @@ export function useEditorMedia(
     }
     if (!editor.value) return;
 
+    const mimeType = imageMimeTypeForFile(file);
     let localSrc: string;
     try {
-      localSrc = await fileToDataUrl(file);
+      localSrc = await fileToDataUrl(file, mimeType);
     } catch {
       uiMessage.value = 'Unable to read this image file.';
       return;
@@ -128,13 +130,13 @@ export function useEditorMedia(
         src: localSrc,
         uploadState: shouldUploadNow ? 'uploading' : 'local',
         ...(shouldUploadNow ? { uploadStartedAt: Date.now() } : {}),
-        mimeType: file.type,
-        filename: file.name || filenameForImageType(file.type),
+        mimeType,
+        filename: file.name || filenameForImageType(mimeType),
         jottathingBlockId: blockId,
       } as any)
       .run();
     await saveEditorContent();
-    const fileUploadId = await uploadMediaFile(file, 'image');
+    const fileUploadId = await uploadMediaFile(file, 'image', mimeType);
     updateMediaNodeUploadState(editor.value, 'image', blockId, fileUploadId);
     await saveEditorContent();
   }
@@ -211,7 +213,7 @@ function imageValidationMessage(file: File): string {
     return `Images must be 20 MB or smaller.`;
   }
   if (file.size === 0) return 'The selected image file is empty.';
-  return 'Use a JPEG, PNG, GIF, WebP, or AVIF image.';
+  return 'Use an image format supported by Notion.';
 }
 
 function filenameForImageType(mimeType: string): string {
@@ -221,6 +223,12 @@ function filenameForImageType(mimeType: string): string {
     'image/gif': 'gif',
     'image/webp': 'webp',
     'image/avif': 'avif',
+    'image/heic': 'heic',
+    'image/svg+xml': 'svg',
+    'image/tiff': 'tiff',
+    'image/vnd.microsoft.icon': 'ico',
+    'image/bmp': 'bmp',
+    'image/apng': 'apng',
   };
   return `pasted-image.${extensions[mimeType.toLowerCase()] ?? 'img'}`;
 }
@@ -229,12 +237,12 @@ function isHttpAudioUrl(value: string) {
   return /^https?:\/\/.+\.(mp3|mpeg|m4a|aac|wav|ogg|oga|opus|webm)(\?[^#]*)?(#.*)?$/i.test(value);
 }
 
-async function fileToDataUrl(file: File): Promise<string> {
+async function fileToDataUrl(file: File, mimeType = file.type): Promise<string> {
   const bytes = new Uint8Array(await file.arrayBuffer());
   let binary = '';
   const chunkSize = 8192;
   for (let index = 0; index < bytes.length; index += chunkSize) {
     binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
   }
-  return `data:${file.type || 'application/octet-stream'};base64,${btoa(binary)}`;
+  return `data:${mimeType || 'application/octet-stream'};base64,${btoa(binary)}`;
 }

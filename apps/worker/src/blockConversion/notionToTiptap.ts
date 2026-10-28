@@ -93,10 +93,14 @@ function notionBlockToTiptapNode(block: NotionBlock): DocumentContent | null {
     const url =
       block.image?.external?.url ?? block.image?.file?.url ?? block.image?.file_upload?.url;
     if (!url) return null;
+    const caption = richTextToTiptapInline(richTextProperty(block.image, 'caption')) ?? [];
+    const fileUploadId = stringProperty(objectProperty(block.image, 'file_upload'), 'id');
     return {
       type: 'image',
       attrs: {
         src: url,
+        ...(caption.length ? { caption } : {}),
+        ...(fileUploadId ? { notionFileUploadId: fileUploadId, uploadState: 'done' } : {}),
         ...(block.id ? { notionBlockId: block.id } : {}),
       },
     };

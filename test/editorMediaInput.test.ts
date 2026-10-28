@@ -86,8 +86,8 @@ describe('editor image file intake', () => {
   it('surfaces unreadable and unsupported files without inserting broken image nodes', async () => {
     const { media, imageNodes, uiMessage } = setupMedia({ connected: false, online: false });
 
-    await media.handleUploadableImageFile(new File(['svg'], 'image.svg', { type: 'image/svg+xml' }));
-    expect(uiMessage.value).toBe('Use a JPEG, PNG, GIF, WebP, or AVIF image.');
+    await media.handleUploadableImageFile(new File(['raw'], 'image.raw', { type: 'image/x-raw' }));
+    expect(uiMessage.value).toBe('Use an image format supported by Notion.');
     expect(imageNodes).toHaveLength(0);
 
     await media.handleUploadableImageFile(new File([], 'empty.png', { type: 'image/png' }));
