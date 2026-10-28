@@ -41,7 +41,124 @@ function helpers(notionRequest: ReturnType<typeof vi.fn>) {
   });
 }
 
+function mappedProjectStore(projectId: string, notionPageId: string) {
+  return {
+    blockMappings: {},
+    jottathingDatabase: {
+      databaseId: 'db-main',
+      dataSourceId: 'ds-main',
+      parentPageId: undefined,
+      title: 'Jottathing',
+      views: {},
+    },
+    notePages: {},
+    projectBlocks: {},
+    projectPages: {
+      [projectId]: {
+        archived: false,
+        kind: undefined,
+        notionPageId,
+        parentPageId: 'db-main',
+        dataSourceId: 'ds-main',
+        title: 'Project',
+        lastEditedTime: undefined,
+      },
+    },
+    threadBlocks: {},
+  };
+}
+
+function activeDatabaseResponses(endpoint: string) {
+  if (endpoint === '/databases/db-main') return database('db-main', 'ds-main', '2026-10-20T12:00:00.000Z');
+  if (endpoint === '/data_sources/ds-main') return { properties: expectedProperties };
+  if (endpoint === '/views?database_id=db-main') {
+    return { results: [
+      { name: 'Active Projects' },
+      { name: 'By Category' },
+      { name: 'All Projects' },
+    ] };
+  }
+  return undefined;
+}
+
 describe('Jottathing project database selection', () => {
+  test('restores an archived project row before syncing an active project', async () => {
+    const archivedPage = {
+      id: 'project-row',
+      archived: false,
+      in_trash: true,
+      last_edited_time: '2026-10-27T12:00:00.000Z',
+      parent: { type: 'data_source_id', data_source_id: 'ds-main' },
+      properties: {
+        Name: { type: 'title', title: [{ plain_text: 'Project' }] },
+      },
+      url: 'https://notion.so/project-row',
+    };
+    const notionRequest = vi.fn(async (_store, endpoint, init) => {
+      const databaseResponse = activeDatabaseResponses(endpoint);
+      if (databaseResponse) return databaseResponse;
+      if (endpoint === '/pages/project-row' && !init) return archivedPage;
+      if (endpoint === '/pages/project-row' && init?.method === 'PATCH') {
+        return { ...archivedPage, ...(init.body as object), in_trash: false };
+      }
+      throw new Error(`Unexpected request: ${endpoint}`);
+    });
+    const store = mappedProjectStore('project-active', 'project-row');
+
+    await helpers(notionRequest).ensureProjectPage(store as never, {
+      id: 'project-active',
+      name: 'Project',
+      status: 'active',
+    } as never, { syncState: false });
+
+    expect(notionRequest).toHaveBeenCalledWith(
+      store,
+      '/pages/project-row',
+      { method: 'PATCH', body: { in_trash: false } },
+    );
+    expect(notionRequest).not.toHaveBeenCalledWith(
+      store,
+      '/pages',
+      expect.objectContaining({ method: 'POST' }),
+    );
+  });
+
+  test('does not re-edit an already trashed archived project', async () => {
+    const archivedPage = {
+      id: 'project-row',
+      archived: false,
+      in_trash: true,
+      last_edited_time: '2026-10-27T12:00:00.000Z',
+      parent: { type: 'data_source_id', data_source_id: 'ds-main' },
+      properties: {
+        Name: { type: 'title', title: [{ plain_text: 'Project' }] },
+      },
+      url: 'https://notion.so/project-row',
+    };
+    const notionRequest = vi.fn(async (_store, endpoint) =>
+      activeDatabaseResponses(endpoint) ??
+      (endpoint === '/pages/project-row' ? archivedPage : (() => { throw new Error(`Unexpected request: ${endpoint}`); })()),
+    );
+    const store = mappedProjectStore('project-archived', 'project-row');
+
+    await helpers(notionRequest).ensureProjectPage(store as never, {
+      id: 'project-archived',
+      name: 'Project',
+      status: 'archived',
+    } as never);
+
+    expect(notionRequest).not.toHaveBeenCalledWith(
+      store,
+      '/pages/project-row',
+      expect.objectContaining({ method: 'PATCH' }),
+    );
+    expect(notionRequest).not.toHaveBeenCalledWith(
+      store,
+      '/pages',
+      expect.objectContaining({ method: 'POST' }),
+    );
+  });
+
   test('trashes an archived project row using the current Notion API field', async () => {
     const store = {} as never;
     const notionRequest = vi.fn(async (_store, endpoint) => {

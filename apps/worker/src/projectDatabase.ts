@@ -32,6 +32,7 @@ import type { DocumentContent, Project, ProjectPage } from '../../../src/types/c
 import type {
   AppendLog,
   JottathingDatabase,
+  JsonObject,
   ListAllBlockChildren,
   NotionBlock,
   NotionBlockPayload,
@@ -210,6 +211,30 @@ export function createProjectDatabaseHelpers({
     }
 
     try {
+      if (page && isArchivedObject(page)) {
+        if (project.status === 'archived') {
+          // Retrying a project archive is idempotent. The row is already
+          // unavailable in Notion, so do not patch it or write its child state.
+          storeProjectPage(store, database, project, page);
+          return {
+            ...pageSummaryFromNotionPage(page, database),
+            project: { ...project },
+          };
+        }
+
+        const restoreBody: JsonObject = {};
+        if (page.archived === true || page.in_trash === true) {
+          restoreBody.in_trash = false;
+        }
+        if (page.is_archived === true) restoreBody.is_archived = false;
+        if (Object.keys(restoreBody).length) {
+          page = await notionRequest(store, `/pages/${page.id}`, {
+            method: 'PATCH',
+            body: restoreBody,
+          });
+        }
+      }
+
       if (!page) {
         page = await createProjectDatabasePage(store, database.dataSourceId, project);
         appendLog(store, 'project_database_page_created', project.name || 'Untitled Project');
@@ -217,7 +242,7 @@ export function createProjectDatabaseHelpers({
         page = await updateProjectDatabasePage(store, page.id, database.dataSourceId, project);
       }
 
-      const stateSync = syncState
+      const stateSync = syncState && project.status !== 'archived'
         ? await syncProjectState(store, page.id, project, isForcedMerge)
         : undefined;
       storeProjectPage(store, database, project, page);
