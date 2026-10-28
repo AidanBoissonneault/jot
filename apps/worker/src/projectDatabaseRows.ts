@@ -248,7 +248,7 @@ export function createProjectDatabaseRows(notionRequest: NotionRequester) {
   ): Promise<NotionObject> {
     const properties = await projectPropertyValues(store, dataSourceId, project);
     const body: JsonObject = { properties };
-    if (project.status === 'archived') body.archived = true;
+    if (project.status === 'archived') body.in_trash = true;
     return notionRequest(store, `/pages/${pageId}`, { method: 'PATCH', body });
   }
 

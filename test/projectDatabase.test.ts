@@ -1,5 +1,7 @@
 import { describe, expect, test, vi } from 'vitest';
 import { createProjectDatabaseHelpers } from '@/apps/worker/src/projectDatabase';
+import { createProjectDatabaseRows } from '@/apps/worker/src/projectDatabaseRows';
+import type { NotionRequester } from '@/apps/worker/src/types';
 
 const expectedProperties = {
   Name: {},
@@ -40,6 +42,36 @@ function helpers(notionRequest: ReturnType<typeof vi.fn>) {
 }
 
 describe('Jottathing project database selection', () => {
+  test('trashes an archived project row using the current Notion API field', async () => {
+    const store = {} as never;
+    const notionRequest = vi.fn(async (_store, endpoint) => {
+      if (endpoint === '/data_sources/ds-project') {
+        return { properties: { Status: { type: 'select' } } };
+      }
+      if (endpoint === '/pages/page-project') return { id: 'page-project' };
+      throw new Error(`Unexpected request: ${endpoint}`);
+    }) as unknown as NotionRequester;
+
+    await createProjectDatabaseRows(notionRequest).updateProjectDatabasePage(
+      store,
+      'page-project',
+      'ds-project',
+      { id: 'project-id', name: 'Project', status: 'archived' } as never,
+    );
+
+    expect(notionRequest).toHaveBeenNthCalledWith(
+      2,
+      store,
+      '/pages/page-project',
+      expect.objectContaining({
+        method: 'PATCH',
+        body: expect.objectContaining({ in_trash: true }),
+      }),
+    );
+    const requestBody = (notionRequest as unknown as ReturnType<typeof vi.fn>).mock.calls[1]?.[2]?.body;
+    expect(requestBody).not.toHaveProperty('archived');
+  });
+
   test('follows an explicit parent selection instead of a cached database under another parent', async () => {
     const selectedDatabase = {
       ...database('db-new-parent', 'ds-new-parent', '2026-10-07T12:00:00.000Z'),

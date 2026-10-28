@@ -244,7 +244,7 @@ export function parentPageIdFromObject(object: NotionObject): string | undefined
  * @returns Whether the object is inactive.
  */
 export function isArchivedObject(object: NotionObject): boolean {
-  return object.archived || object.in_trash;
+  return object.archived === true || object.in_trash === true || object.is_archived === true;
 }
 
 /**

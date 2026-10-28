@@ -52,11 +52,12 @@ export interface NotionParent extends JsonObject {
 
 /** Describes the normalized fields shared by Notion API responses. */
 export interface NotionObject extends JsonObject {
-  archived: boolean;
+  archived?: boolean;
   created_time: string;
   has_more: boolean;
   id: string;
-  in_trash: boolean;
+  in_trash?: boolean;
+  is_archived?: boolean;
   last_edited_time: string;
   next_cursor: string | null;
   object: string;

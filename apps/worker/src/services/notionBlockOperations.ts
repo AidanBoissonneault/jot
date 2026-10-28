@@ -119,13 +119,13 @@ export function createNotionBlockOperations({
     const body: JsonObject = {
       properties: { title: [{ text: { content: page.title || 'Untitled Page' } }] },
     };
-    if (page.status === 'archived') body.archived = true;
+    if (page.status === 'archived') body.in_trash = true;
     return notionRequest(store, `/pages/${pageId}`, { method: 'PATCH', body });
   }
 
   /** Archives a legacy project root page. */
   async function archiveProjectRootPage(store: WorkerStore, pageId: string): Promise<NotionObject> {
-    return notionRequest(store, `/pages/${pageId}`, { method: 'PATCH', body: { archived: true } });
+    return notionRequest(store, `/pages/${pageId}`, { method: 'PATCH', body: { in_trash: true } });
   }
 
   /** Deletes a managed Notion block. */
