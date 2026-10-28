@@ -52,9 +52,15 @@ interface ProjectDatabaseStateDependencies {
 
 /** Mapping key and project/thread block mappings for a managed Notion toggle. */
 interface ToggleOptions {
+  excludedBlockIds?: ReadonlySet<string>;
   isForcedMerge?: boolean;
   key: string;
   mappings: Record<string, StoredBlock>;
+}
+
+/** Options for excluding a Notion container rejected by a previous write. */
+export interface ThreadToggleOptions {
+  excludedBlockIds?: ReadonlySet<string>;
 }
 
 /** Creates operations for project state containers and page thread toggles. */
@@ -274,8 +280,10 @@ export function createProjectDatabaseStateHelpers({
     store: WorkerStore,
     projectPageId: string,
     page: ProjectPage,
+    options: ThreadToggleOptions = {},
   ): Promise<NotionObject> {
     return ensureToggleBlock(store, projectPageId, page.title || 'Untitled Page', {
+      ...options,
       isForcedMerge: page.content.attrs?.jottathingConflictResolution === true,
       key: threadKey(page.id),
       mappings: store.threadBlocks,
@@ -287,10 +295,10 @@ export function createProjectDatabaseStateHelpers({
     store: WorkerStore,
     parentBlockId: string,
     title: string,
-    { isForcedMerge = false, key, mappings }: ToggleOptions,
+    { excludedBlockIds, isForcedMerge = false, key, mappings }: ToggleOptions,
   ): Promise<NotionObject> {
     const stored = mappings?.[key];
-    if (stored?.blockId) {
+    if (stored?.blockId && !excludedBlockIds?.has(stored.blockId)) {
       const block = await notionRequest(store, `/blocks/${stored.blockId}`).catch((error) => {
         if (
           isNotionObjectNotFoundError(error) ||
@@ -315,7 +323,10 @@ export function createProjectDatabaseStateHelpers({
       throw error;
     });
     const matching = children.find(
-      (block) => block.type === 'toggle' && !isArchivedObject(block) && toggleTitle(block) === title,
+      (block) => block.type === 'toggle' &&
+        !isArchivedObject(block) &&
+        !excludedBlockIds?.has(block.id) &&
+        toggleTitle(block) === title,
     );
 
     if (matching) {

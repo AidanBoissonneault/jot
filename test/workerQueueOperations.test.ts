@@ -42,10 +42,16 @@ describe('queued Notion block operations', () => {
       project,
       title: project.name,
     }));
-    const ensureThreadToggle = vi.fn(async (syncStore: WorkerStore) => {
+    const ensureThreadToggle = vi.fn(async (
+      syncStore: WorkerStore,
+      _projectPageId: string,
+      _page: ProjectPage,
+      options?: { excludedBlockIds?: ReadonlySet<string> },
+    ) => {
       if (ensureThreadToggle.mock.calls.length === 1) {
         return { id: 'archived-toggle' } as NotionObject;
       }
+      expect(options?.excludedBlockIds?.has('archived-toggle')).toBe(true);
       expect(syncStore.threadBlocks).not.toHaveProperty(threadKey(page.id));
       expect(syncStore.blockMappings).not.toHaveProperty(page.id);
       syncStore.threadBlocks[threadKey(page.id)] = { blockId: 'fresh-toggle' } as never;

@@ -13,6 +13,7 @@ import type {
   NotionRequester,
   WorkerStore,
 } from './types.js';
+import { notionBlockIdFromError } from './workerUtils.js';
 
 /** Describes the project page result contract used by this API feature. */
 interface ProjectPageResult {
@@ -46,6 +47,7 @@ interface PageSyncDependencies {
     store: WorkerStore,
     projectPageId: string,
     page: ProjectPage,
+    options?: { excludedBlockIds?: ReadonlySet<string> },
   ) => Promise<NotionObject>) | undefined;
   notionRequest: NotionRequester;
   replaceManagedBlocks: (
@@ -276,7 +278,7 @@ async function pushPageToProjectDatabase({
     toggle = await ensureThreadToggle(store, projectPage.id, page);
   } catch (error) {
     if (!isArchivedBlockEditError(error) || project.status === 'archived') throw error;
-    ({ projectPage, toggle } = await recoverArchivedThreadContainer());
+    ({ projectPage, toggle } = await recoverArchivedThreadContainer(error));
     recoveredArchivedContainer = true;
   }
   const isUserReviewedReplacement = page.content.attrs?.jottathingConflictResolution === true;
@@ -319,7 +321,7 @@ async function pushPageToProjectDatabase({
     );
   } catch (error) {
     if (!isArchivedBlockEditError(error) || project.status === 'archived') throw error;
-    ({ projectPage, toggle } = await recoverArchivedThreadContainer());
+    ({ projectPage, toggle } = await recoverArchivedThreadContainer(error));
     await updateThreadToggleTitle?.(store, page);
     replacement = await replaceManagedBlocks(
       store,
@@ -366,7 +368,12 @@ async function pushPageToProjectDatabase({
     message: 'Synced thread to Notion.',
   };
 
-  async function recoverArchivedThreadContainer() {
+  async function recoverArchivedThreadContainer(error: unknown) {
+    const mappedToggleId = store.threadBlocks?.[threadKey(page.id)]?.blockId;
+    const failedBlockId = notionBlockIdFromError(error);
+    const excludedBlockIds = failedBlockId && failedBlockId === mappedToggleId
+      ? new Set([failedBlockId])
+      : undefined;
     store.threadBlocks ??= {};
     store.blockMappings ??= {};
     delete store.threadBlocks[threadKey(page.id)];
@@ -378,7 +385,9 @@ async function pushPageToProjectDatabase({
       selectedParentPageId,
       syncState: false,
     });
-    const refreshedToggle = await ensureThreadToggle(store, refreshedProjectPage.id, page);
+    const refreshedToggle = await ensureThreadToggle(store, refreshedProjectPage.id, page, {
+      excludedBlockIds,
+    });
     return { projectPage: refreshedProjectPage, toggle: refreshedToggle };
   }
 }

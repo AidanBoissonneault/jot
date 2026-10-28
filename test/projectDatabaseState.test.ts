@@ -101,3 +101,54 @@ describe('thread content reload identity', () => {
     );
   });
 });
+
+describe('thread toggle recovery', () => {
+  test('does not rediscover the rejected toggle when Notion lists it as active', async () => {
+    const oldToggle = {
+      id: 'rejected-toggle',
+      type: 'toggle',
+      toggle: { rich_text: [{ type: 'text', plain_text: 'Notes' }] },
+    };
+    const freshToggle = {
+      id: 'fresh-toggle',
+      type: 'toggle',
+      toggle: { rich_text: [{ type: 'text', plain_text: 'Notes' }] },
+    };
+    const store = {
+      blockMappings: {},
+      threadBlocks: { 'thread:page-1': { blockId: 'rejected-toggle' } },
+    };
+    const notionRequest = vi.fn(async (_store: unknown, endpoint: string) => {
+      if (endpoint === '/blocks/fresh-toggle') return freshToggle;
+      if (endpoint === '/blocks/project-row/children') return { results: [freshToggle] };
+      return oldToggle;
+    });
+    const helpers = createProjectDatabaseStateHelpers({
+      importManagedBlocks: vi.fn(async () => null),
+      listAllBlockChildren: vi.fn(async () => [oldToggle] as never[]),
+      notionBlocksToTiptapDocument: vi.fn(() => ({ type: 'doc', content: [] })),
+      notionRequest,
+      replaceManagedBlocks: vi.fn(),
+    });
+    const page = {
+      id: 'page-1',
+      title: 'Notes',
+      content: { type: 'doc', content: [] },
+    } as never;
+
+    const recovered = await helpers.ensureThreadToggle(store as never, 'project-row', page, {
+      excludedBlockIds: new Set(['rejected-toggle']),
+    });
+    const repeated = await helpers.ensureThreadToggle(store as never, 'project-row', page, {
+      excludedBlockIds: new Set(['rejected-toggle']),
+    });
+
+    expect(recovered.id).toBe('fresh-toggle');
+    expect(repeated.id).toBe('fresh-toggle');
+    expect(notionRequest).toHaveBeenCalledWith(
+      store,
+      '/blocks/project-row/children',
+      expect.objectContaining({ method: 'PATCH' }),
+    );
+  });
+});

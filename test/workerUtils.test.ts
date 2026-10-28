@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { safeNotionErrorMetadata } from '@/apps/worker/src/workerUtils';
+import { notionBlockIdFromError, safeNotionErrorMetadata } from '@/apps/worker/src/workerUtils';
 
 describe('safeNotionErrorMetadata', () => {
   test('includes the failed Notion operation without exposing quoted user content or IDs', () => {
@@ -19,5 +19,16 @@ describe('safeNotionErrorMetadata', () => {
       method: 'PATCH',
       detail: 'Invalid value [redacted] for block :id',
     });
+  });
+});
+
+describe('notionBlockIdFromError', () => {
+  test('extracts the parent block ID from failed block writes', () => {
+    expect(notionBlockIdFromError({ endpoint: '/blocks/123e4567-e89b-42d3-a456-426614174000/children' }))
+      .toBe('123e4567-e89b-42d3-a456-426614174000');
+    expect(notionBlockIdFromError({ endpoint: '/blocks/123e4567-e89b-42d3-a456-426614174000' }))
+      .toBe('123e4567-e89b-42d3-a456-426614174000');
+    expect(notionBlockIdFromError({ endpoint: '/pages/123e4567-e89b-42d3-a456-426614174000' }))
+      .toBeUndefined();
   });
 });

@@ -19,6 +19,7 @@ import type {
 } from '../types.js';
 import type { DocumentContent } from '../../../../src/types/capture.js';
 import { isArchivedBlockEditError, threadKey } from '../projectDatabaseValues.js';
+import { notionBlockIdFromError } from '../workerUtils.js';
 
 /** Queue job before the server assigns its persisted version. */
 export type EnqueueJob =
@@ -253,6 +254,11 @@ export function createWorkerQueueOperations(dependencies: WorkerQueueDependencie
           );
         } catch (error) {
           if (!isArchivedBlockEditError(error) || project.status === 'archived') throw error;
+          const mappedToggleId = freshStore.threadBlocks?.[threadKey(page.id)]?.blockId;
+          const failedBlockId = notionBlockIdFromError(error);
+          const excludedBlockIds = failedBlockId && failedBlockId === mappedToggleId
+            ? new Set([failedBlockId])
+            : undefined;
           freshStore.threadBlocks ??= {};
           freshStore.blockMappings ??= {};
           delete freshStore.threadBlocks[threadKey(page.id)];
@@ -264,7 +270,9 @@ export function createWorkerQueueOperations(dependencies: WorkerQueueDependencie
             selectedParentPageId,
             syncState: false,
           });
-          toggle = await ensureThreadToggle(freshStore, projectPage.id, page);
+          toggle = await ensureThreadToggle(freshStore, projectPage.id, page, {
+            excludedBlockIds,
+          });
           await updateThreadToggleTitle?.(freshStore, page);
           replacement = await replaceManagedBlocks(freshStore, page.id, toggle.id, content);
         }

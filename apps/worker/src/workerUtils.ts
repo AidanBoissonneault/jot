@@ -203,6 +203,12 @@ export function isNotionObjectForbidden(error: unknown): boolean {
   return numberProperty(error, 'status') === 403 || stringProperty(error, 'code') === 'restricted_resource';
 }
 
+/** Reads a block ID from a Notion block endpoint when a write fails. */
+export function notionBlockIdFromError(error: unknown): string | undefined {
+  const endpoint = stringProperty(error, 'endpoint');
+  return endpoint?.match(/^\/blocks\/([^/?#]+)(?:\/children)?(?:\?.*)?$/)?.[1];
+}
+
 /** Detects a cached page identifier that Notion rejects as an invalid page path. */
 export function isNotionPageIdValidationError(error: unknown): boolean {
   const endpoint = stringProperty(error, 'endpoint');
