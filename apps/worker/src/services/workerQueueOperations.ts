@@ -18,6 +18,7 @@ import type {
   WorkerStore,
 } from '../types.js';
 import type { DocumentContent } from '../../../../src/types/capture.js';
+import { isArchivedBlockEditError, threadKey } from '../projectDatabaseValues.js';
 
 /** Queue job before the server assigns its persisted version. */
 export type EnqueueJob =
@@ -224,7 +225,7 @@ export function createWorkerQueueOperations(dependencies: WorkerQueueDependencie
       let refreshed: NotionObject;
 
       if (ensureProjectPage && ensureThreadToggle) {
-        const projectPage = await ensureProjectPage(freshStore, project, {
+        let projectPage = await ensureProjectPage(freshStore, project, {
           isForcedMerge: page.content.attrs?.jottathingConflictResolution === true,
           selectedParentPageId,
           syncState: false,
@@ -236,19 +237,39 @@ export function createWorkerQueueOperations(dependencies: WorkerQueueDependencie
           return { page: { ...page, notionParentPageId: projectPage.id, syncState: 'saved' } };
         }
 
-        const toggle = await ensureThreadToggle(freshStore, projectPage.id, page);
-        await updateThreadToggleTitle?.(freshStore, page);
+        const content = syncContentForOps(ops, page.content);
+        let toggle: NotionObject;
+        let replacement: Awaited<ReturnType<typeof applyManagedBlockOps>>;
+        try {
+          toggle = await ensureThreadToggle(freshStore, projectPage.id, page);
+          await updateThreadToggleTitle?.(freshStore, page);
+          replacement = await applyManagedBlockOps(
+            freshStore,
+            page.id,
+            toggle.id,
+            ops,
+            content,
+            page.syncBaselineContent,
+          );
+        } catch (error) {
+          if (!isArchivedBlockEditError(error) || project.status === 'archived') throw error;
+          freshStore.threadBlocks ??= {};
+          freshStore.blockMappings ??= {};
+          delete freshStore.threadBlocks[threadKey(page.id)];
+          // The archived child IDs cannot be edited. Keep the latest durable
+          // page snapshot and rebuild it under a fresh active thread toggle.
+          delete freshStore.blockMappings[page.id];
+          appendLog(freshStore, 'sync_thread_container_repaired', 'Replaced an archived Notion thread container.');
+          projectPage = await ensureProjectPage(freshStore, project, {
+            selectedParentPageId,
+            syncState: false,
+          });
+          toggle = await ensureThreadToggle(freshStore, projectPage.id, page);
+          await updateThreadToggleTitle?.(freshStore, page);
+          replacement = await replaceManagedBlocks(freshStore, page.id, toggle.id, content);
+        }
         notionPageId = toggle.id;
         parentPageId = projectPage.id;
-        const content = syncContentForOps(ops, page.content);
-        const replacement = await applyManagedBlockOps(
-          freshStore,
-          page.id,
-          notionPageId,
-          ops,
-          content,
-          page.syncBaselineContent,
-        );
         page.content = normalizeSyncedMediaContent(content, replacement?.createdBlocks ?? []);
         page.syncBaselineContent = replacement?.baselineContent ?? page.syncBaselineContent;
         refreshed = await notionRequest(freshStore, `/blocks/${notionPageId}`).catch(() => toggle);

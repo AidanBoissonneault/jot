@@ -1,0 +1,113 @@
+import { describe, expect, test, vi } from 'vitest';
+import { createWorkerQueueOperations } from '@/apps/worker/src/services/workerQueueOperations';
+import { threadKey } from '@/apps/worker/src/projectDatabaseValues';
+import type { Project, ProjectPage } from '@/src/types/capture';
+import type { ManagedBlockOperation, NotionObject, WorkerStore } from '@/apps/worker/src/types';
+
+describe('queued Notion block operations', () => {
+  test('rebuilds an archived thread from the durable local page snapshot', async () => {
+    const installationId = 15;
+    const project = {
+      id: 'project-1',
+      name: 'My Project',
+      status: 'active',
+      stateContent: { type: 'doc', content: [] },
+    } as Project;
+    const content = {
+      type: 'doc',
+      content: [{ type: 'paragraph', content: [{ type: 'text', text: 'latest local edit' }] }],
+    } as const;
+    const page = {
+      id: 'page-1',
+      projectId: project.id,
+      title: 'Hello World',
+      status: 'active',
+      content,
+      syncBaselineContent: content,
+    } as ProjectPage;
+    const store = {
+      blockMappings: { [page.id]: [{ notionBlockId: 'archived-child' }] },
+      installationId,
+      notePages: {},
+      projectPages: {},
+      threadBlocks: { [threadKey(page.id)]: { blockId: 'archived-toggle' } },
+      tokens: { access_token: 'token' },
+    } as unknown as WorkerStore;
+    const archivedError = Object.assign(
+      new Error("Can't edit block that is archived. You must unarchive the block before editing."),
+      { code: 'validation_error', endpoint: '/blocks/archived-toggle/children', status: 400 },
+    );
+    const ensureProjectPage = vi.fn(async () => ({
+      id: 'project-row',
+      project,
+      title: project.name,
+    }));
+    const ensureThreadToggle = vi.fn(async (syncStore: WorkerStore) => {
+      if (ensureThreadToggle.mock.calls.length === 1) {
+        return { id: 'archived-toggle' } as NotionObject;
+      }
+      expect(syncStore.threadBlocks).not.toHaveProperty(threadKey(page.id));
+      expect(syncStore.blockMappings).not.toHaveProperty(page.id);
+      syncStore.threadBlocks[threadKey(page.id)] = { blockId: 'fresh-toggle' } as never;
+      return { id: 'fresh-toggle' } as NotionObject;
+    });
+    const applyManagedBlockOps = vi.fn().mockRejectedValueOnce(archivedError);
+    const replaceManagedBlocks = vi.fn(async () => ({
+      content,
+      baselineContent: content,
+      createdBlocks: [],
+      notionBlocks: [],
+    }));
+    const supabase = {
+      from: vi.fn((table: string) => {
+        const query: Record<string, ReturnType<typeof vi.fn>> = {};
+        query.select = vi.fn(() => query);
+        query.eq = vi.fn(() => query);
+        query.limit = vi.fn(() => query);
+        query.maybeSingle = vi.fn(async () => ({
+          data: table === 'notion_installations'
+            ? { id: installationId, user_id: 'notion:user' }
+            : { accessToken: 'token' },
+          error: null,
+        }));
+        return query;
+      }),
+    };
+    const operations = createWorkerQueueOperations({
+      appendLog: vi.fn(),
+      applyManagedBlockOps,
+      archiveThreadToggle: vi.fn(),
+      createChildPage: vi.fn(),
+      ensureJottathingRootPage: vi.fn(),
+      ensureProjectPage,
+      ensureProjectRootPage: vi.fn(),
+      ensureThreadToggle,
+      notionRequest: vi.fn(async () => ({ last_edited_time: '2026-10-28T12:00:00.000Z' })),
+      pushPageToNotionCore: vi.fn(),
+      readStore: () => store,
+      replaceManagedBlocks,
+      supabase,
+      updateChildNotePage: vi.fn(),
+      updateThreadToggleTitle: vi.fn(),
+      withFreshInstallationStore: async (_syncStore: WorkerStore, operation: (freshStore: WorkerStore) => Promise<unknown>) => operation(store),
+      writeStore: vi.fn(),
+      freshConnectedStore: async (syncStore: WorkerStore) => syncStore,
+      performSyncProjectFolder: vi.fn(),
+    } as never);
+    const ops = [{ type: 'block_create', payload: { block: content.content[0] } }] as unknown as ManagedBlockOperation[];
+
+    const result = await operations.applyBlockOpsToNotionForInstallation(installationId, {
+      ops,
+      page,
+      project,
+      selectedParentPageId: undefined,
+    });
+
+    expect(result.page?.notionPageId).toBe('fresh-toggle');
+    expect(result.page?.content).toEqual(content);
+    expect(applyManagedBlockOps).toHaveBeenCalledOnce();
+    expect(replaceManagedBlocks).toHaveBeenCalledWith(store, page.id, 'fresh-toggle', content);
+    expect(ensureProjectPage).toHaveBeenCalledTimes(2);
+    expect(ensureThreadToggle).toHaveBeenCalledTimes(2);
+  });
+});

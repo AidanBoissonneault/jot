@@ -257,6 +257,13 @@ export function isArchivedAncestorError(error: unknown): boolean {
     && /archived ancestor|unarchive the ancestor/i.test(errorMessage(error));
 }
 
+/** Detects Notion rejecting a write because a mapped block is already archived. */
+export function isArchivedBlockEditError(error: unknown): boolean {
+  return numberProperty(error, 'status') === 400 &&
+    errorCode(error) === 'validation_error' &&
+    /can't edit block that is archived|unarchive the block before editing/i.test(errorMessage(error));
+}
+
 /**
  * Detects a Notion validation error caused by using a block as a page.
  * @param error - Unknown thrown value.
@@ -386,6 +393,13 @@ function stringProperty(value: unknown, key: string): string | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
   const property: unknown = (value as JsonObject)[key];
   return typeof property === 'string' ? property : undefined;
+}
+
+/** Reads a finite number property from an unknown value. */
+function numberProperty(value: unknown, key: string): number | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const property: unknown = (value as JsonObject)[key];
+  return typeof property === 'number' && Number.isFinite(property) ? property : undefined;
 }
 
 /** Reads a nested string from an unknown object. @param value - Unknown root value. @param path - Property path. @returns String value when present. */

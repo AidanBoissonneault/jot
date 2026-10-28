@@ -5,6 +5,7 @@
  */
 
 import type { DocumentContent, NotionParentPage, Project, ProjectPage } from '../../../src/types/capture.js';
+import { isArchivedBlockEditError, threadKey } from './projectDatabaseValues.js';
 import type {
   AppendLog,
   ManagedBlockResult,
@@ -238,7 +239,7 @@ async function pushPageToProjectDatabase({
 }: ProjectDatabasePushOptions) {
   const isForcedMerge = page.content.attrs?.jottathingConflictResolution === true;
   // Page writes must not trigger the separate project-state conflict check.
-  const projectPage = await ensureProjectPage(store, project, {
+  let projectPage = await ensureProjectPage(store, project, {
     isForcedMerge,
     selectedParentPageId,
     syncState: false,
@@ -269,10 +270,19 @@ async function pushPageToProjectDatabase({
     };
   }
 
-  const toggle = await ensureThreadToggle(store, projectPage.id, page);
+  let toggle: NotionObject;
+  let recoveredArchivedContainer = false;
+  try {
+    toggle = await ensureThreadToggle(store, projectPage.id, page);
+  } catch (error) {
+    if (!isArchivedBlockEditError(error) || project.status === 'archived') throw error;
+    ({ projectPage, toggle } = await recoverArchivedThreadContainer());
+    recoveredArchivedContainer = true;
+  }
   const isUserReviewedReplacement = page.content.attrs?.jottathingConflictResolution === true;
 
   if (
+    !recoveredArchivedContainer &&
     !isUserReviewedReplacement &&
     !page.syncBaselineContent &&
     toggle?.last_edited_time &&
@@ -297,14 +307,28 @@ async function pushPageToProjectDatabase({
     };
   }
 
-  await updateThreadToggleTitle?.(store, page);
-  const replacement = await replaceManagedBlocks(
-    store,
-    page.id,
-    toggle.id,
-    page.content,
-    page.syncBaselineContent,
-  );
+  let replacement: ManagedBlockResult;
+  try {
+    await updateThreadToggleTitle?.(store, page);
+    replacement = await replaceManagedBlocks(
+      store,
+      page.id,
+      toggle.id,
+      page.content,
+      page.syncBaselineContent,
+    );
+  } catch (error) {
+    if (!isArchivedBlockEditError(error) || project.status === 'archived') throw error;
+    ({ projectPage, toggle } = await recoverArchivedThreadContainer());
+    await updateThreadToggleTitle?.(store, page);
+    replacement = await replaceManagedBlocks(
+      store,
+      page.id,
+      toggle.id,
+      page.content,
+      page.syncBaselineContent,
+    );
+  }
   const refreshedBlock = await notionRequest(store, `/blocks/${toggle.id}`).catch(() => toggle);
   const syncedContent = normalizeSyncedMediaContent(
     replacement?.content ?? page.content,
@@ -341,6 +365,22 @@ async function pushPageToProjectDatabase({
     status: 'saved',
     message: 'Synced thread to Notion.',
   };
+
+  async function recoverArchivedThreadContainer() {
+    store.threadBlocks ??= {};
+    store.blockMappings ??= {};
+    delete store.threadBlocks[threadKey(page.id)];
+    // Rebuild child mappings from the local snapshot in a fresh, active
+    // toggle. The archived Notion copy remains intact in trash for recovery.
+    delete store.blockMappings[page.id];
+    appendLog(store, 'sync_thread_container_repaired', 'Replaced an archived Notion thread container.');
+    const refreshedProjectPage = await ensureProjectPage(store, project, {
+      selectedParentPageId,
+      syncState: false,
+    });
+    const refreshedToggle = await ensureThreadToggle(store, refreshedProjectPage.id, page);
+    return { projectPage: refreshedProjectPage, toggle: refreshedToggle };
+  }
 }
 
 /**
