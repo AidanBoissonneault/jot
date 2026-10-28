@@ -19,7 +19,7 @@ import type {
 } from '../types.js';
 import type { DocumentContent } from '../../../../src/types/capture.js';
 import { isArchivedBlockEditError, threadKey } from '../projectDatabaseValues.js';
-import { notionBlockIdFromError } from '../workerUtils.js';
+import { notionBlockIdFromError, safeNotionErrorMetadata } from '../workerUtils.js';
 
 /** Queue job before the server assigns its persisted version. */
 export type EnqueueJob =
@@ -259,6 +259,11 @@ export function createWorkerQueueOperations(dependencies: WorkerQueueDependencie
           const excludedBlockIds = failedBlockId && failedBlockId === mappedToggleId
             ? new Set([failedBlockId])
             : undefined;
+          const initialFailureTarget = archivedWriteTarget(error, projectPage.id, mappedToggleId);
+          console.log('[queue] archived Notion write recovery started', {
+            failureTarget: initialFailureTarget,
+            rejectedThreadToggle: Boolean(excludedBlockIds?.size),
+          });
           freshStore.threadBlocks ??= {};
           freshStore.blockMappings ??= {};
           delete freshStore.threadBlocks[threadKey(page.id)];
@@ -266,15 +271,38 @@ export function createWorkerQueueOperations(dependencies: WorkerQueueDependencie
           // page snapshot and rebuild it under a fresh active thread toggle.
           delete freshStore.blockMappings[page.id];
           appendLog(freshStore, 'sync_thread_container_repaired', 'Replaced an archived Notion thread container.');
-          projectPage = await ensureProjectPage(freshStore, project, {
-            selectedParentPageId,
-            syncState: false,
+          const originalProjectPageId = projectPage.id;
+          let recoveryProjectPageId = projectPage.id;
+          let recoveryThreadToggleId: string | undefined;
+          try {
+            projectPage = await ensureProjectPage(freshStore, project, {
+              selectedParentPageId,
+              syncState: false,
+            });
+            recoveryProjectPageId = projectPage.id;
+            toggle = await ensureThreadToggle(freshStore, projectPage.id, page, {
+              excludedBlockIds,
+            });
+            recoveryThreadToggleId = toggle.id;
+            await updateThreadToggleTitle?.(freshStore, page);
+            replacement = await replaceManagedBlocks(freshStore, page.id, toggle.id, content);
+          } catch (recoveryError) {
+            console.error('[queue] archived Notion write recovery failed', {
+              failureTarget: initialFailureTarget,
+              recoveryFailureTarget: archivedWriteTarget(
+                recoveryError,
+                recoveryProjectPageId,
+                recoveryThreadToggleId,
+              ),
+              error: safeNotionErrorMetadata(recoveryError),
+            });
+            throw recoveryError;
+          }
+          console.log('[queue] archived Notion write recovery completed', {
+            failureTarget: initialFailureTarget,
+            projectRowReplaced: recoveryProjectPageId !== originalProjectPageId,
+            threadToggleReplaced: Boolean(excludedBlockIds?.size) && recoveryThreadToggleId !== failedBlockId,
           });
-          toggle = await ensureThreadToggle(freshStore, projectPage.id, page, {
-            excludedBlockIds,
-          });
-          await updateThreadToggleTitle?.(freshStore, page);
-          replacement = await replaceManagedBlocks(freshStore, page.id, toggle.id, content);
         }
         notionPageId = toggle.id;
         parentPageId = projectPage.id;
@@ -381,6 +409,19 @@ function syncContentForOps(
     .map((op) => op.payload.block)
     .filter((block): block is DocumentContent => Boolean(block));
   return blocks.length ? { type: 'doc', content: blocks } : legacyContent;
+}
+
+/** Classifies a failed archived block write without logging the block identifier. */
+function archivedWriteTarget(
+  error: unknown,
+  projectPageId: string,
+  threadToggleId: string | undefined,
+): 'project_row' | 'thread_toggle' | 'other_block' | 'unknown' {
+  const failedBlockId = notionBlockIdFromError(error);
+  if (!failedBlockId) return 'unknown';
+  if (failedBlockId === projectPageId) return 'project_row';
+  if (failedBlockId === threadToggleId) return 'thread_toggle';
+  return 'other_block';
 }
 
 /** Reads the single-operation property from legacy Queue messages. */
