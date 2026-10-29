@@ -20,7 +20,6 @@ import type { EnqueueJob } from './workerQueueOperations.js';
 import { createProjectDatabaseHelpers, projectStateKey } from '../projectDatabase.js';
 import { syncProjectFolder } from '../projectSync.js';
 import { isNotionObjectNotFound } from '../workerUtils.js';
-import type { BlockPosition } from '../workerUtils.js';
 import type { AuthService, AuthSessionResult } from '../auth.js';
 import type {
   ConnectedWorkerStore,
@@ -58,7 +57,6 @@ let workerQueueOperations: ReturnType<typeof createWorkerQueueOperations>;
 let workerInstallationState: ReturnType<typeof createWorkerInstallationState>;
 let workerNotionOperations: ReturnType<typeof createWorkerNotionOperations>;
 let archiveThreadToggle: DatabaseHelpers['archiveThreadToggle'];
-let ensureProjectDatabase: DatabaseHelpers['ensureProjectDatabase'];
 let ensureProjectPage: DatabaseHelpers['ensureProjectPage'];
 let ensureProjectStateContainer: DatabaseHelpers['ensureProjectStateContainer'];
 let ensureThreadToggle: DatabaseHelpers['ensureThreadToggle'];
@@ -100,7 +98,6 @@ function initSingletons(env: WorkerEnv): void {
     updateManagedBlock,
   });
   archiveThreadToggle = dbHelpers.archiveThreadToggle;
-  ensureProjectDatabase = dbHelpers.ensureProjectDatabase;
   ensureProjectPage = dbHelpers.ensureProjectPage;
   ensureProjectStateContainer = dbHelpers.ensureProjectStateContainer;
   ensureThreadToggle = dbHelpers.ensureThreadToggle;
@@ -145,19 +142,9 @@ function syncProjectToNotion(input: ProjectSyncInput & { c: ApiContext }) {
   return workerSyncOperations.syncProjectToNotion(input);
 }
 
-/** Synchronizes a project folder with a refreshed installation state. */
-function performSyncProjectFolder(store: WorkerStore, input: ProjectSyncInput) {
-  return workerSyncOperations.performSyncProjectFolder(store, input);
-}
-
 /** Enqueues a page or block synchronization job. */
 function enqueueSync(env: WorkerEnv, job: EnqueueJob, batchVersion?: number): Promise<number> {
   return workerQueueOperations.enqueueSync(env, job, batchVersion);
-}
-
-/** Loads fresh state and credentials for a queued installation. */
-function freshConnectedStoreForInstallation(installationId: Identifier): Promise<WorkerStore> {
-  return workerQueueOperations.freshConnectedStoreForInstallation(installationId);
 }
 
 /** Pushes a page from a background installation job. */
@@ -216,11 +203,6 @@ function getJottathingSession(c: ApiContext): Promise<AuthSessionResult | null> 
 function requireJottathingSession(c: ApiContext): Promise<AuthSessionResult | null> {
   return workerInstallationState.requireJottathingSession(c);
 }
-/** Ensures persisted synchronization state exists. @param installationId - Installation identifier. @returns Completion after upsert. */
-function ensureJottathingSyncStateRow(installationId: Identifier): Promise<void> {
-  return workerStorePersistence.ensureJottathingSyncStateRow(installationId);
-}
-
 /** Loads and normalizes persisted synchronization state. @param installationId - Installation identifier. @returns Normalized state. */
 function readJottathingSyncState(installationId: Identifier): Promise<WorkerStore> {
   return workerStorePersistence.readJottathingSyncState(installationId);
@@ -241,20 +223,6 @@ function validateNotionCache(
   },
 ) {
   return workerNotionOperations.validateNotionCache(store, entities);
-}
-
-/** Removes all cached Notion records associated with a local page. */
-function uncachePage(store: WorkerStore, pageId: string): void {
-  workerNotionOperations.uncachePage(store, pageId);
-}
-
-/** Checks whether a Notion page, block, or database still exists. */
-function notionObjectExists(
-  store: WorkerStore,
-  kind: 'block' | 'database' | 'page',
-  id: string,
-): Promise<boolean> {
-  return workerNotionOperations.notionObjectExists(store, kind, id);
 }
 
 /** Retrieves a linked page, falling back to the block endpoint for threads. */
@@ -330,65 +298,30 @@ function updateManagedBlock(
   return workerNotionOperations.updateManagedBlock(store, blockId, notionBlock);
 }
 
-/** Appends managed blocks in API-sized batches. */
-function appendManagedBlocks(
-  store: WorkerStore,
-  notionPageId: string,
-  notionBlocks: NotionBlockPayload[],
-  position?: BlockPosition,
-): Promise<NotionBlock[]> {
-  return workerNotionOperations.appendManagedBlocks(store, notionPageId, notionBlocks, position);
-}
-
-/** Appends blocks individually and substitutes unsupported media. */
-function appendBlocksWithFallback(
-  store: WorkerStore,
-  notionPageId: string,
-  blocks: NotionBlockPayload[],
-  position?: BlockPosition,
-): Promise<NotionBlock[]> {
-  return workerNotionOperations.appendBlocksWithFallback(store, notionPageId, blocks, position);
-}
 export {
-  appendBlocksWithFallback,
   appendLog,
-  appendManagedBlocks,
   applyBlockOpsToNotionForInstallation,
   applyManagedBlockOps,
-  archiveThreadToggle,
   auth,
   createWorkspacePage,
-  deleteManagedBlock,
-  ensureJottathingSyncStateRow,
-  ensureProjectDatabase,
   ensureProjectPage,
   ensureProjectStateContainer,
-  ensureThreadToggle,
-  freshConnectedStore,
-  freshConnectedStoreForInstallation,
   getJottathingSession,
   importManagedBlocks,
   initSingletons,
   enqueueSync,
-  listAllBlockChildren,
-  notionObjectExists,
   notionRequest,
-  performSyncProjectFolder,
   pushPageToNotion,
   pushPageToNotionForInstallation,
   readJottathingSyncState,
   readProjectDatabaseStructure,
-  readStore,
   reloadProjectDatabaseFromNotion,
-  replaceManagedBlocks,
   requireConnectedStore,
   requireJottathingSession,
   retrieveNotionPageOrBlock,
   supabase,
   syncProjectToNotion,
   syncProjectToNotionForInstallation,
-  uncachePage,
-  updateThreadToggleTitle,
   validateNotionCache,
   withFreshInstallationStore,
   writeStore,
