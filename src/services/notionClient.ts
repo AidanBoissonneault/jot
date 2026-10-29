@@ -2128,6 +2128,151 @@ async function refreshPageMoveContext(
   return { storage, ...context };
 }
 
+type CrossProjectPageMovePlan = {
+  archivedPage: ProjectPage;
+  movedPage: ProjectPage;
+  replacementPage: ProjectPage;
+  sourceNeedsReplacement: boolean;
+  activePageIdsByProject: Record<string, string>;
+  currentWorkspaceId: string;
+  currentProjectId: string;
+  currentProjectIdByWorkspace: Record<string, string>;
+  pages: ProjectPage[];
+};
+
+/** Builds page identities, ordering, and selections for a cross-project move. */
+function buildCrossProjectPageMovePlan(
+  storage: Required<JottathingStorage>,
+  context: PageMoveContext,
+  syncConfig: SyncConfig,
+  activeAccountId: string | undefined,
+  targetPageId: string | undefined,
+  position: 'before' | 'after',
+): CrossProjectPageMovePlan {
+  const { page, sourceProject, destinationProject, sourceWorkspace, destinationWorkspace } = context;
+  const movedAt = new Date(Math.max(Date.now(), Date.parse(page.updatedAt) + 1)).toISOString();
+  const archivedPage: ProjectPage = {
+    ...page,
+    status: 'archived',
+    updatedAt: movedAt,
+    localRevision: crypto.randomUUID(),
+    syncMessage: undefined,
+    syncState: sourceWorkspace.kind === 'notion' ? 'saving' : 'saved',
+  };
+  const remainingSourcePages = sortProjectPages(storage.pages.filter((entry) =>
+    entry.projectId === sourceProject.id && entry.status !== 'archived' && entry.id !== page.id,
+  ));
+  const destinationActivePages = sortProjectPages(storage.pages.filter((entry) =>
+    entry.projectId === destinationProject.id && entry.status !== 'archived',
+  ));
+  const targetIndex = targetPageId
+    ? destinationActivePages.findIndex((entry) => entry.id === targetPageId)
+    : -1;
+  const insertionIndex = targetIndex < 0
+    ? destinationActivePages.length
+    : targetIndex + (position === 'after' ? 1 : 0);
+  const movedPageId = `page-${destinationProject.id}-${crypto.randomUUID()}`;
+  const movedPageBase: ProjectPage = {
+    ...uncachePageNotionMetadata(page),
+    id: movedPageId,
+    projectId: destinationProject.id,
+    pageOrder: insertionIndex,
+    workspaceId: destinationWorkspace.id,
+    status: 'active',
+    syncMode: destinationWorkspace.kind,
+    syncAccountId: destinationWorkspace.kind === 'notion'
+      ? syncConfig.userId
+      : destinationWorkspace.accountId ?? activeAccountId,
+    syncWorkspaceId: destinationWorkspace.kind === 'notion'
+      ? destinationWorkspace.notionWorkspaceId
+      : undefined,
+    syncBaselineContent: undefined,
+    updatedAt: movedAt,
+    localRevision: crypto.randomUUID(),
+    syncState: destinationWorkspace.kind === 'notion' ? 'saving' : 'saved',
+  };
+  const movedPage = destinationWorkspace.kind === 'notion'
+    ? markPageDirty(movedPageBase)
+    : movedPageBase;
+  const sourceNeedsReplacement = remainingSourcePages.length === 0;
+  const replacementPage = remainingSourcePages[0] ?? {
+    ...createEmptyPage(sourceProject.id, 'Untitled Page'),
+    workspaceId: sourceWorkspace.id,
+    syncMode: sourceWorkspace.kind,
+    syncAccountId: sourceWorkspace.kind === 'notion'
+      ? syncConfig.userId
+      : sourceWorkspace.accountId ?? activeAccountId,
+    syncWorkspaceId: sourceWorkspace.kind === 'notion'
+      ? sourceWorkspace.notionWorkspaceId
+      : undefined,
+  };
+  const sourcePageIds = sourceNeedsReplacement
+    ? [replacementPage.id]
+    : remainingSourcePages.map((entry) => entry.id);
+  const destinationPageIds = destinationActivePages.map((entry) => entry.id);
+  destinationPageIds.splice(insertionIndex, 0, movedPage.id);
+  const pageOrderById = new Map<string, number>();
+  sourcePageIds.forEach((id, index) => pageOrderById.set(id, index));
+  destinationPageIds.forEach((id, index) => pageOrderById.set(id, index));
+  const orderedMovedPage = { ...movedPage, pageOrder: pageOrderById.get(movedPage.id) };
+  const orderedReplacementPage = sourceNeedsReplacement
+    ? { ...replacementPage, pageOrder: pageOrderById.get(replacementPage.id) }
+    : replacementPage;
+  const pagesAfterArchive = storage.pages.map((entry) => {
+    if (entry.id === page.id) return archivedPage;
+    const pageOrder = pageOrderById.get(entry.id);
+    return pageOrder === undefined ? entry : { ...entry, pageOrder };
+  });
+  const pages = [
+    ...pagesAfterArchive,
+    orderedMovedPage,
+    ...(sourceNeedsReplacement ? [orderedReplacementPage] : []),
+  ];
+
+  const activePageIdsByProject = { ...storage.activePageIdsByProject };
+  const rememberedSourcePage = activePageIdsByProject[sourceProject.id];
+  const movingCurrentPage =
+    (storage.currentProjectIdByWorkspace[storage.currentWorkspaceId] ?? storage.currentProjectId) === sourceProject.id &&
+    rememberedSourcePage === page.id;
+  activePageIdsByProject[sourceProject.id] = remainingSourcePages.some((entry) =>
+    entry.id === rememberedSourcePage,
+  )
+    ? rememberedSourcePage
+    : replacementPage.id;
+  const rememberedDestinationPage = activePageIdsByProject[destinationProject.id];
+  activePageIdsByProject[destinationProject.id] = movingCurrentPage
+    ? orderedMovedPage.id
+    : destinationActivePages.some((entry) => entry.id === rememberedDestinationPage)
+      ? rememberedDestinationPage
+      : destinationActivePages[0]?.id ?? orderedMovedPage.id;
+
+  const currentProjectIdByWorkspace = { ...storage.currentProjectIdByWorkspace };
+  const sourceWorkspaceProjectId = currentProjectIdByWorkspace[sourceWorkspace.id] ??
+    (storage.currentWorkspaceId === sourceWorkspace.id ? storage.currentProjectId : '');
+  const sourceWorkspaceProjects = storage.projects.filter((entry) =>
+    entry.workspaceId === sourceWorkspace.id && entry.status !== 'archived',
+  );
+  if (!sourceWorkspaceProjects.some((entry) => entry.id === sourceWorkspaceProjectId)) {
+    currentProjectIdByWorkspace[sourceWorkspace.id] = sourceProject.id;
+  }
+  if (movingCurrentPage) currentProjectIdByWorkspace[destinationWorkspace.id] = destinationProject.id;
+  else if (!storage.projects.some((entry) =>
+    entry.id === currentProjectIdByWorkspace[destinationWorkspace.id] && entry.status !== 'archived',
+  )) currentProjectIdByWorkspace[destinationWorkspace.id] = destinationProject.id;
+
+  return {
+    archivedPage,
+    movedPage: orderedMovedPage,
+    replacementPage: orderedReplacementPage,
+    sourceNeedsReplacement,
+    activePageIdsByProject,
+    currentWorkspaceId: movingCurrentPage ? destinationWorkspace.id : storage.currentWorkspaceId,
+    currentProjectId: movingCurrentPage ? destinationProject.id : storage.currentProjectId,
+    currentProjectIdByWorkspace,
+    pages,
+  };
+}
+
 /** Reorders pages in place within one project without syncing or cloning them. */
 async function reorderPageWithinProject(
   storage: Required<JottathingStorage>,
@@ -4013,122 +4158,20 @@ export const notionClient = {
       activeAccountId = syncConfig.userId ?? syncConfig.syncQueueOwnerUserId ?? undefined;
     }
 
-    const movedAt = new Date(Math.max(Date.now(), Date.parse(page.updatedAt) + 1)).toISOString();
-    const archivedPage: ProjectPage = {
-      ...page,
-      status: 'archived',
-      updatedAt: movedAt,
-      localRevision: crypto.randomUUID(),
-      syncMessage: undefined,
-      syncState: sourceWorkspace.kind === 'notion' ? 'saving' : 'saved',
-    };
-    const remainingSourcePages = sortProjectPages(storage.pages.filter((entry) =>
-      entry.projectId === sourceProject.id && entry.status !== 'archived' && entry.id !== page.id,
-    ));
-    const destinationActivePages = sortProjectPages(storage.pages.filter((entry) =>
-      entry.projectId === destinationProject.id && entry.status !== 'archived',
-    ));
-    const targetIndex = targetPageId
-      ? destinationActivePages.findIndex((entry) => entry.id === targetPageId)
-      : -1;
-    const destinationInsertionIndex = targetIndex < 0
-      ? destinationActivePages.length
-      : targetIndex + (position === 'after' ? 1 : 0);
-    const movedPageId = `page-${destinationProject.id}-${crypto.randomUUID()}`;
-    const movedPageBase: ProjectPage = {
-      ...uncachePageNotionMetadata(page),
-      id: movedPageId,
-      projectId: destinationProject.id,
-      pageOrder: destinationInsertionIndex,
-      workspaceId: destinationWorkspace.id,
-      status: 'active',
-      syncMode: destinationWorkspace.kind,
-      syncAccountId: destinationWorkspace.kind === 'notion'
-        ? syncConfig.userId
-        : destinationWorkspace.accountId ?? activeAccountId ?? undefined,
-      syncWorkspaceId: destinationWorkspace.kind === 'notion'
-        ? destinationWorkspace.notionWorkspaceId
-        : undefined,
-      syncBaselineContent: undefined,
-      updatedAt: movedAt,
-      localRevision: crypto.randomUUID(),
-      syncState: destinationWorkspace.kind === 'notion' ? 'saving' : 'saved',
-    };
-    const movedPage = destinationWorkspace.kind === 'notion'
-      ? markPageDirty(movedPageBase)
-      : movedPageBase;
-
-    const replacementPage = remainingSourcePages[0] ?? {
-      ...createEmptyPage(sourceProject.id, 'Untitled Page'),
-      workspaceId: sourceWorkspace.id,
-      syncMode: sourceWorkspace.kind,
-      syncAccountId: sourceWorkspace.kind === 'notion'
-        ? syncConfig.userId
-        : sourceWorkspace.accountId ?? activeAccountId ?? undefined,
-      syncWorkspaceId: sourceWorkspace.kind === 'notion'
-        ? sourceWorkspace.notionWorkspaceId
-        : undefined,
-    };
-    const sourceNeedsReplacement = remainingSourcePages.length === 0;
-    const sourcePageIdsInOrder = sourceNeedsReplacement
-      ? [replacementPage.id]
-      : remainingSourcePages.map((entry) => entry.id);
-    const destinationPageIdsInOrder = destinationActivePages.map((entry) => entry.id);
-    destinationPageIdsInOrder.splice(destinationInsertionIndex, 0, movedPage.id);
-    const pageOrderById = new Map<string, number>();
-    sourcePageIdsInOrder.forEach((id, index) => pageOrderById.set(id, index));
-    destinationPageIdsInOrder.forEach((id, index) => pageOrderById.set(id, index));
-    const orderedMovedPage = { ...movedPage, pageOrder: pageOrderById.get(movedPage.id) };
-    const orderedReplacementPage = sourceNeedsReplacement
-      ? { ...replacementPage, pageOrder: pageOrderById.get(replacementPage.id) }
-      : replacementPage;
-    const pagesAfterArchive = storage.pages.map((entry) => {
-      if (entry.id === page.id) return archivedPage;
-      const pageOrder = pageOrderById.get(entry.id);
-      return pageOrder === undefined ? entry : { ...entry, pageOrder };
-    });
-    const nextPages = [
-      ...pagesAfterArchive,
-      orderedMovedPage,
-      ...(sourceNeedsReplacement ? [orderedReplacementPage] : []),
-    ];
-    const activePageIdsByProject = { ...storage.activePageIdsByProject };
-    const activePageIdForSource = remainingSourcePages.some((entry) =>
-      entry.id === activePageIdsByProject[sourceProject.id],
-    )
-      ? activePageIdsByProject[sourceProject.id]
-      : replacementPage.id;
-    const destinationRememberedPageId = activePageIdsByProject[destinationProject.id];
-    const movingCurrentPage =
-      (storage.currentProjectIdByWorkspace[storage.currentWorkspaceId] ?? storage.currentProjectId) === sourceProject.id &&
-      activePageIdsByProject[sourceProject.id] === page.id;
-    activePageIdsByProject[sourceProject.id] = activePageIdForSource;
-    activePageIdsByProject[destinationProject.id] = movingCurrentPage
-      ? orderedMovedPage.id
-      : destinationActivePages.some((entry) => entry.id === destinationRememberedPageId)
-        ? destinationRememberedPageId
-        : destinationActivePages[0]?.id ?? orderedMovedPage.id;
-
-    const currentProjectIdByWorkspace = { ...storage.currentProjectIdByWorkspace };
-    const sourceWorkspaceProjectId = currentProjectIdByWorkspace[sourceWorkspace.id] ??
-      (storage.currentWorkspaceId === sourceWorkspace.id ? storage.currentProjectId : '');
-    const sourceWorkspaceProjects = storage.projects.filter((entry) =>
-      entry.workspaceId === sourceWorkspace.id && entry.status !== 'archived',
+    const plan = buildCrossProjectPageMovePlan(
+      storage,
+      { page, sourceProject, destinationProject, sourceWorkspace, destinationWorkspace },
+      syncConfig,
+      activeAccountId,
+      targetPageId,
+      position,
     );
-    if (!sourceWorkspaceProjects.some((entry) => entry.id === sourceWorkspaceProjectId)) {
-      currentProjectIdByWorkspace[sourceWorkspace.id] = sourceProject.id;
-    }
-    if (movingCurrentPage) currentProjectIdByWorkspace[destinationWorkspace.id] = destinationProject.id;
-    else if (!storage.projects.some((entry) =>
-      entry.id === currentProjectIdByWorkspace[destinationWorkspace.id] && entry.status !== 'archived',
-    )) currentProjectIdByWorkspace[destinationWorkspace.id] = destinationProject.id;
-
     await writeStorage({
-      activePageIdsByProject,
-      currentWorkspaceId: movingCurrentPage ? destinationWorkspace.id : storage.currentWorkspaceId,
-      currentProjectId: movingCurrentPage ? destinationProject.id : storage.currentProjectId,
-      currentProjectIdByWorkspace,
-      pages: nextPages,
+      activePageIdsByProject: plan.activePageIdsByProject,
+      currentWorkspaceId: plan.currentWorkspaceId,
+      currentProjectId: plan.currentProjectId,
+      currentProjectIdByWorkspace: plan.currentProjectIdByWorkspace,
+      pages: plan.pages,
     });
 
     const stalePageOps = (await listPendingSyncOps()).filter((operation) => operation.pageId === page.id);
@@ -4136,16 +4179,15 @@ export const notionClient = {
     await clearStoredPageSyncConflict(page.id);
 
     if (sourceWorkspace.kind === 'notion') {
-      await persistPage(await enqueuePageSync(archivedPage, sourceProject, page));
-      if (sourceNeedsReplacement) {
-        await persistPage(await enqueuePageSync(replacementPage, sourceProject));
+      await persistPage(await enqueuePageSync(plan.archivedPage, sourceProject, page));
+      if (plan.sourceNeedsReplacement) {
+        await persistPage(await enqueuePageSync(plan.replacementPage, sourceProject));
       }
     }
     if (destinationWorkspace.kind === 'notion') {
-      await persistPage(await enqueuePageSync(orderedMovedPage, destinationProject));
+      await persistPage(await enqueuePageSync(plan.movedPage, destinationProject));
     }
-
-    return orderedMovedPage;
+    return plan.movedPage;
   },
 
   async getCurrentProjectId(): Promise<string> {
