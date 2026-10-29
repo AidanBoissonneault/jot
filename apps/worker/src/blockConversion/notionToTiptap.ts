@@ -42,114 +42,103 @@ export function notionBlocksToTiptapDocumentStrict(blocks: NotionBlock[]): Docum
   };
 }
 
+type NotionBlockConverter = (block: NotionBlock) => DocumentContent | null;
+
+// Blocks without a handler are intentionally skipped by the document converter.
+const notionBlockConverters: Partial<Record<string, NotionBlockConverter>> = {
+  heading_1: (block) => headingNode(block, 1),
+  heading_2: (block) => headingNode(block, 2),
+  heading_3: (block) => headingNode(block, 3),
+  heading_4: (block) => headingNode(block, 4),
+  quote: quoteNode,
+  code: codeNode,
+  divider: () => ({ type: 'horizontalRule' }),
+  image: imageNode,
+  video: (block) => youtubeBlockNode(block.video),
+  embed: (block) => youtubeBlockNode(block.embed),
+  audio: audioNode,
+  paragraph: paragraphNode,
+};
+
 /**
  * Converts one Notion block to a Tiptap node.
  * @param block - Notion block to convert.
  * @returns The converted node, or null for unsupported blocks.
  */
 function notionBlockToTiptapNode(block: NotionBlock): DocumentContent | null {
-  const headingLevel = notionHeadingLevel(block.type);
-  if (headingLevel) {
-    return {
-      type: 'heading',
-      attrs: {
-        level: headingLevel,
-      },
-      content: richTextToTiptapInline(
-        richTextProperty(objectProperty(block, block.type), 'rich_text'),
-      ),
-    };
-  }
+  return notionBlockConverters[block.type]?.(block) ?? null;
+}
 
-  if (block.type === 'quote') {
-    return {
-      type: 'blockquote',
-      content: [
-        {
-          type: 'paragraph',
-          content: richTextToTiptapInline(block.quote.rich_text),
-        },
-      ],
-    };
-  }
-
-  if (block.type === 'code') {
-    return {
-      type: 'codeBlock',
-      attrs: {
-        language: normalizeCodeLanguage(block.code.language),
-      },
-      content: plainTiptapText(block.code.rich_text.map((text) => text.plain_text).join('')),
-    };
-  }
-
-  if (block.type === 'divider') {
-    return {
-      type: 'horizontalRule',
-    };
-  }
-
-  if (block.type === 'image') {
-    const url =
-      block.image?.external?.url ?? block.image?.file?.url ?? block.image?.file_upload?.url;
-    if (!url) return null;
-    const caption = richTextToTiptapInline(richTextProperty(block.image, 'caption')) ?? [];
-    const fileUploadId = stringProperty(objectProperty(block.image, 'file_upload'), 'id');
-    return {
-      type: 'image',
-      attrs: {
-        src: url,
-        ...(caption.length ? { caption } : {}),
-        ...(fileUploadId ? { notionFileUploadId: fileUploadId, uploadState: 'done' } : {}),
-        ...(block.id ? { notionBlockId: block.id } : {}),
-      },
-    };
-  }
-
-  if (block.type === 'video' || block.type === 'embed') {
-    const data = block[block.type];
-    const url = data?.external?.url ?? data?.url ?? data?.file?.url;
-    if (!url) return null;
-    return { type: 'youtube', attrs: { src: url } };
-  }
-
-  if (block.type === 'audio') {
-    const url =
-      block.audio?.external?.url ?? block.audio?.file?.url ?? block.audio?.file_upload?.url;
-    if (!url) return null;
-    return {
-      type: 'audio',
-      attrs: {
-        src: url,
-        ...(block.id ? { notionBlockId: block.id } : {}),
-      },
-    };
-  }
-
-  if (block.type !== 'paragraph') {
-    return null;
-  }
-
-  const youtubeUrl = youtubeUrlFromLinkedParagraph(block.paragraph.rich_text);
-  if (youtubeUrl) {
-    return { type: 'youtube', attrs: { src: youtubeUrl } };
-  }
-
+/** Builds a heading node from the block's rich text. */
+function headingNode(block: NotionBlock, level: 1 | 2 | 3 | 4): DocumentContent {
   return {
-    type: 'paragraph',
-    content: richTextToTiptapInline(block.paragraph.rich_text),
+    type: 'heading',
+    attrs: { level },
+    content: richTextToTiptapInline(
+      richTextProperty(objectProperty(block, block.type), 'rich_text'),
+    ),
   };
 }
 
-function notionHeadingLevel(
-  type: string | undefined,
-): 1 | 2 | 3 | 4 | undefined {
-  if (type !== 'heading_1' && type !== 'heading_2' &&
-    type !== 'heading_3' && type !== 'heading_4') {
-    return undefined;
-  }
+function quoteNode(block: NotionBlock): DocumentContent {
+  return {
+    type: 'blockquote',
+    content: [{
+      type: 'paragraph',
+      content: richTextToTiptapInline(block.quote.rich_text),
+    }],
+  };
+}
 
-  return Number(type.slice('heading_'.length)) as 1 | 2 | 3 | 4;
+function codeNode(block: NotionBlock): DocumentContent {
+  return {
+    type: 'codeBlock',
+    attrs: { language: normalizeCodeLanguage(block.code.language) },
+    content: plainTiptapText(block.code.rich_text.map((text) => text.plain_text).join('')),
+  };
+}
+
+function imageNode(block: NotionBlock): DocumentContent | null {
+  const url = block.image?.external?.url
+    ?? block.image?.file?.url
+    ?? block.image?.file_upload?.url;
+  if (!url) return null;
+
+  const caption = richTextToTiptapInline(richTextProperty(block.image, 'caption')) ?? [];
+  const fileUploadId = stringProperty(objectProperty(block.image, 'file_upload'), 'id');
+  return {
+    type: 'image',
+    attrs: {
+      src: url,
+      ...(caption.length ? { caption } : {}),
+      ...(fileUploadId ? { notionFileUploadId: fileUploadId, uploadState: 'done' } : {}),
+      ...(block.id ? { notionBlockId: block.id } : {}),
+    },
+  };
+}
+
+function youtubeBlockNode(data: NotionBlock['video']): DocumentContent | null {
+  const url = data?.external?.url ?? data?.url ?? data?.file?.url;
+  return url ? { type: 'youtube', attrs: { src: url } } : null;
+}
+
+function audioNode(block: NotionBlock): DocumentContent | null {
+  const url = block.audio?.external?.url
+    ?? block.audio?.file?.url
+    ?? block.audio?.file_upload?.url;
+  if (!url) return null;
+
+  return {
+    type: 'audio',
+    attrs: { src: url, ...(block.id ? { notionBlockId: block.id } : {}) },
+  };
+}
+
+function paragraphNode(block: NotionBlock): DocumentContent {
+  const youtubeUrl = youtubeUrlFromLinkedParagraph(block.paragraph.rich_text);
+  return youtubeUrl
+    ? { type: 'youtube', attrs: { src: youtubeUrl } }
+    : { type: 'paragraph', content: richTextToTiptapInline(block.paragraph.rich_text) };
 }
 
 /**

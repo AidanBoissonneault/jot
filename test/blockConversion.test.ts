@@ -109,12 +109,57 @@ describe('notionBlockToTiptapNode', () => {
     });
   });
 
+  it('preserves image captions and upload identity when converting a file upload', () => {
+    const doc = notionBlocksToTiptapDocument([{
+      id: 'image-block',
+      type: 'image',
+      image: {
+        file_upload: { id: 'upload-1', url: 'https://example.com/upload.png' },
+        caption: richText('Alt text'),
+      },
+    }]);
+
+    expect(doc.content[0]).toMatchObject({
+      type: 'image',
+      attrs: {
+        src: 'https://example.com/upload.png',
+        caption: [{ type: 'text', text: 'Alt text' }],
+        notionFileUploadId: 'upload-1',
+        uploadState: 'done',
+        notionBlockId: 'image-block',
+      },
+    });
+  });
+
   it('converts video block to youtube node', () => {
     const doc = notionBlocksToTiptapDocument([
       { type: 'video', video: { external: { url: 'https://www.youtube.com/watch?v=abc123' } } },
     ]);
     expect(doc.content[0]).toMatchObject({ type: 'youtube' });
     expect(doc.content[0].attrs.src).toContain('youtube.com');
+  });
+
+  it('uses embed and audio URLs from their supported Notion fields', () => {
+    const doc = notionBlocksToTiptapDocument([
+      { type: 'embed', embed: { url: 'https://www.youtube.com/watch?v=embed' } },
+      {
+        id: 'audio-block',
+        type: 'audio',
+        audio: { file_upload: { url: 'https://example.com/audio.mp3' } },
+      },
+    ]);
+
+    expect(doc.content).toEqual([
+      { type: 'youtube', attrs: { src: 'https://www.youtube.com/watch?v=embed' } },
+      { type: 'audio', attrs: { src: 'https://example.com/audio.mp3', notionBlockId: 'audio-block' } },
+    ]);
+  });
+
+  it('skips media blocks without a URL', () => {
+    expect(notionBlocksToTiptapDocument([
+      { type: 'video', video: {} },
+      { type: 'audio', audio: {} },
+    ]).content).toEqual([]);
   });
 
   it('converts an Jottathing YouTube video to a normal linked Notion paragraph', () => {
@@ -154,6 +199,26 @@ describe('notionBlockToTiptapNode', () => {
     }]);
 
     expect(doc.content[0]).toEqual({ type: 'youtube', attrs: { src: url } });
+  });
+
+  it('keeps a paragraph when its linked YouTube text differs from the URL', () => {
+    const doc = notionBlocksToTiptapDocument([{
+      type: 'paragraph',
+      paragraph: {
+        rich_text: [{
+          type: 'text',
+          plain_text: 'Watch this video',
+          href: 'https://www.youtube.com/watch?v=abc123',
+          text: {
+            content: 'Watch this video',
+            link: { url: 'https://www.youtube.com/watch?v=abc123' },
+          },
+          annotations: {},
+        }],
+      },
+    }]);
+
+    expect(doc.content[0].type).toBe('paragraph');
   });
 
   it('returns null for image block with no URL (strict mode drops it)', () => {
