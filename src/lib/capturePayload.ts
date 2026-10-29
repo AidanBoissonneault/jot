@@ -10,7 +10,7 @@ const MAX_CODE_LANGUAGE_LENGTH = 128;
 
 /** Validates data crossing from a webpage drag into the privileged sidepanel. */
 export function parseCaptureSelectionPayload(value: unknown): CaptureSelectionPayload | null {
-  if (!isRecord(value) || !isRecord(value.highlightMeta)) return null;
+  if (!isRecord(value)) return null;
 
   const { text, sourceUrl, pageTitle, highlightMeta } = value;
   if (
@@ -23,43 +23,54 @@ export function parseCaptureSelectionPayload(value: unknown): CaptureSelectionPa
   }
 
   const safeSourceUrl = safeExternalUrl(sourceUrl);
-  if (!safeSourceUrl || !boundedString(highlightMeta.text, MAX_CAPTURE_TEXT_LENGTH) || highlightMeta.text !== text) {
-    return null;
-  }
+  if (!safeSourceUrl) return null;
 
-  if (
-    !optionalBoundedString(highlightMeta.xpath, MAX_XPATH_LENGTH) ||
-    !optionalBoundedString(highlightMeta.prefix, MAX_CONTEXT_LENGTH) ||
-    !optionalBoundedString(highlightMeta.suffix, MAX_CONTEXT_LENGTH) ||
-    !optionalBoolean(highlightMeta.isHeading) ||
-    !optionalBoolean(highlightMeta.isCodeBlock) ||
-    !optionalBoundedString(highlightMeta.codeLanguage, MAX_CODE_LANGUAGE_LENGTH) ||
-    !optionalCaptureSourceBlockType(highlightMeta.sourceBlockType) ||
-    !optionalHeadingLevel(highlightMeta.headingLevel) ||
-    !optionalOffset(highlightMeta.offset)
-  ) {
-    return null;
-  }
+  const safeMeta = parseHighlightMeta(highlightMeta, text, safeSourceUrl);
+  return safeMeta ? { text, sourceUrl: safeSourceUrl, pageTitle, highlightMeta: safeMeta } : null;
+}
+
+/** Validates and copies only the highlight fields the extension consumes. */
+function parseHighlightMeta(
+  value: unknown,
+  text: string,
+  sourceUrl: string,
+): CaptureSelectionPayload['highlightMeta'] | null {
+  if (!isRecord(value) || !hasValidHighlightMeta(value, text)) return null;
 
   const safeMeta: CaptureSelectionPayload['highlightMeta'] = {
     text,
-    ...(typeof highlightMeta.xpath === 'string' ? { xpath: highlightMeta.xpath } : {}),
-    ...(typeof highlightMeta.offset === 'number' ? { offset: highlightMeta.offset } : {}),
-    ...(typeof highlightMeta.prefix === 'string' ? { prefix: highlightMeta.prefix } : {}),
-    ...(typeof highlightMeta.suffix === 'string' ? { suffix: highlightMeta.suffix } : {}),
-    ...(typeof highlightMeta.isHeading === 'boolean' ? { isHeading: highlightMeta.isHeading } : {}),
-    ...(typeof highlightMeta.headingLevel === 'number' ? { headingLevel: highlightMeta.headingLevel as 1 | 2 | 3 | 4 | 5 | 6 } : {}),
-    ...(typeof highlightMeta.isCodeBlock === 'boolean' ? { isCodeBlock: highlightMeta.isCodeBlock } : {}),
-    ...(typeof highlightMeta.codeLanguage === 'string' ? { codeLanguage: highlightMeta.codeLanguage } : {}),
-    ...(isCaptureSourceBlockType(highlightMeta.sourceBlockType)
-      ? { sourceBlockType: highlightMeta.sourceBlockType }
+    ...(typeof value.xpath === 'string' ? { xpath: value.xpath } : {}),
+    ...(typeof value.offset === 'number' ? { offset: value.offset } : {}),
+    ...(typeof value.prefix === 'string' ? { prefix: value.prefix } : {}),
+    ...(typeof value.suffix === 'string' ? { suffix: value.suffix } : {}),
+    ...(typeof value.isHeading === 'boolean' ? { isHeading: value.isHeading } : {}),
+    ...(typeof value.headingLevel === 'number' ? { headingLevel: value.headingLevel as 1 | 2 | 3 | 4 | 5 | 6 } : {}),
+    ...(typeof value.isCodeBlock === 'boolean' ? { isCodeBlock: value.isCodeBlock } : {}),
+    ...(typeof value.codeLanguage === 'string' ? { codeLanguage: value.codeLanguage } : {}),
+    ...(isCaptureSourceBlockType(value.sourceBlockType)
+      ? { sourceBlockType: value.sourceBlockType }
       : {}),
   };
 
-  const safeSourceLink = safeCaptureSourceLink(highlightMeta.sourceLink, safeSourceUrl);
+  const safeSourceLink = safeCaptureSourceLink(value.sourceLink, sourceUrl);
   if (safeSourceLink) safeMeta.sourceLink = safeSourceLink;
 
-  return { text, sourceUrl: safeSourceUrl, pageTitle, highlightMeta: safeMeta };
+  return safeMeta;
+}
+
+/** Checks every bounded optional field before the metadata is copied. */
+function hasValidHighlightMeta(value: Record<string, unknown>, text: string): boolean {
+  return boundedString(value.text, MAX_CAPTURE_TEXT_LENGTH) &&
+    value.text === text &&
+    optionalBoundedString(value.xpath, MAX_XPATH_LENGTH) &&
+    optionalBoundedString(value.prefix, MAX_CONTEXT_LENGTH) &&
+    optionalBoundedString(value.suffix, MAX_CONTEXT_LENGTH) &&
+    optionalBoolean(value.isHeading) &&
+    optionalBoolean(value.isCodeBlock) &&
+    optionalBoundedString(value.codeLanguage, MAX_CODE_LANGUAGE_LENGTH) &&
+    optionalCaptureSourceBlockType(value.sourceBlockType) &&
+    optionalHeadingLevel(value.headingLevel) &&
+    optionalOffset(value.offset);
 }
 
 function safeCaptureSourceLink(value: unknown, sourceUrl: string): string | undefined {
