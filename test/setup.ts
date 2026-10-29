@@ -141,7 +141,7 @@ export function resetBrowserStorage(values: StorageData = {}) {
   }
   Object.assign(storageData, values);
 
-  // Seed IDB directly and mark migration done so readStorage() skips migration
+  // App state is seeded directly in IndexedDB, its only persistence store.
   for (const key of Object.keys(idbData)) {
     delete idbData[key];
   }
@@ -149,14 +149,12 @@ export function resetBrowserStorage(values: StorageData = {}) {
     idbData[IDB_WRITE_CONTROL_KEY] = idbWriteControl;
   }
   Object.assign(idbData, values);
-  idbData['__idb_migrated__'] = true;
 }
 
 export function readBrowserStorage() {
   // notionClient writes to IDB now — read from there
   return Object.fromEntries(Object.entries(idbData).filter(([key]) =>
     key !== IDB_WRITE_CONTROL_KEY &&
-    key !== '__idb_migrated__' &&
     key !== '__legacy_sync_credentials_scrubbed__',
   ));
 }

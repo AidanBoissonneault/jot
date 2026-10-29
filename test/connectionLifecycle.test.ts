@@ -136,8 +136,8 @@ describe('Jottathing connection data lifecycle', () => {
     expect(readBrowserStorage().pages).toEqual([page]);
   });
 
-  it('scrubs legacy extension token copies on logout when the migration marker already exists', async () => {
-    seedLocalWorkspace();
+  it('scrubs legacy extension token copies on logout when the credential scrub marker already exists', async () => {
+    seedLocalWorkspace({ ...connectedConfig, connected: false });
     await idbSet('__legacy_sync_credentials_scrubbed__', true);
     await browser.storage.local.set({
       syncConfig: {
@@ -163,8 +163,11 @@ describe('Jottathing connection data lifecycle', () => {
     expect(extensionConfig).not.toHaveProperty('legacyCredentials.nested.authorization');
     expect(indexedDbConfig).not.toHaveProperty('accessToken');
     expect(indexedDbConfig).not.toHaveProperty('legacyCredentials');
-    expect(readBrowserStorage().projects).toMatchObject([project]);
-    expect(readBrowserStorage().pages).toEqual([page]);
+    expect(readBrowserStorage().projects).toContainEqual(expect.objectContaining({
+      id: project.id,
+      name: project.name,
+    }));
+    expect(readBrowserStorage().pages).toContainEqual(expect.objectContaining({ id: page.id }));
   });
 
   it('removes all local Jottathing data after the server confirms connection deletion', async () => {
@@ -408,7 +411,7 @@ describe('Jottathing connection data lifecycle', () => {
     expect(config).toMatchObject({ authenticated: false, connected: false });
   });
 
-  it('recognizes previously persisted signed-out state after upgrading', async () => {
+  it('keeps previously persisted signed-out state', async () => {
     resetBrowserStorage({
       syncConfig: {
         serverUrl: 'https://sync.example.test',
@@ -423,6 +426,17 @@ describe('Jottathing connection data lifecycle', () => {
 
     expect(fetchMock).not.toHaveBeenCalled();
     expect(config).toMatchObject({ authenticated: false, connected: false });
+  });
+
+  it('does not import app state from extension storage', async () => {
+    resetIdbStorage();
+    await browser.storage.local.set({ projects: [project], syncConfig: connectedConfig });
+
+    const config = await notionClient.getSyncConfig();
+    const projects = await notionClient.listWorkspaceProjects();
+
+    expect(config).toMatchObject({ authenticated: false, connected: false });
+    expect(projects).not.toContainEqual(expect.objectContaining({ id: project.id }));
   });
 
   it('allows session polling after the user explicitly starts Notion sign-in', async () => {
@@ -572,15 +586,9 @@ describe('Jottathing connection data lifecycle', () => {
     });
   });
 
-  it('scrubs legacy extension-storage token copies during logout migration and preserves documents', async () => {
-    resetBrowserStorage();
-    resetIdbStorage();
+  it('scrubs legacy extension-storage token copies during logout and preserves documents', async () => {
+    seedLocalWorkspace({ ...connectedConfig, connected: false });
     await browser.storage.local.set({
-      activePageIdsByProject: { [project.id]: page.id },
-      currentProjectId: project.id,
-      hasMigratedCapturesToPages: true,
-      pages: [page],
-      projects: [project],
       syncConfig: {
         ...connectedConfig,
         accessToken: 'legacy-extension-access-token',
@@ -601,7 +609,17 @@ describe('Jottathing connection data lifecycle', () => {
     const legacyStorage = await browser.storage.local.get('syncConfig');
     expect(legacyStorage.syncConfig).not.toHaveProperty('accessToken');
     expect(legacyStorage.syncConfig).not.toHaveProperty('refresh_token');
-    expect(readBrowserStorage().projects).toMatchObject([project]);
-    expect(readBrowserStorage().pages).toMatchObject([page]);
+    expect(readBrowserStorage().projects).toContainEqual(expect.objectContaining({
+      id: project.id,
+      name: project.name,
+    }));
+    expect(readBrowserStorage().pages).toContainEqual(expect.objectContaining({
+      id: page.id,
+      content: expect.objectContaining({
+        content: [expect.objectContaining({
+          content: [expect.objectContaining({ text: 'Keep me' })],
+        })],
+      }),
+    }));
   });
 });

@@ -405,18 +405,9 @@ function summarizeSyncState(items: SyncStateCarrier[]) {
   return { syncState: worstState ?? 'saved', syncMessage: worstMessage };
 }
 
-async function migrateStorageToIdb(): Promise<void> {
-  const done = await idbGet<boolean>('__idb_migrated__');
-  if (!done) {
-    const existing = (await browser.storage.local.get(STORAGE_KEYS)) as JottathingStorage;
-    if (Object.keys(existing).length > 0) {
-      await idbSetMany(existing as Record<string, unknown>);
-    }
-    await idbSet('__idb_migrated__', true);
-  }
-
-  // Older releases mirrored syncConfig in extension storage. Scrub this copy
-  // once during migration; logout rechecks it in case an older build restored it.
+async function scrubLegacySyncCredentialsOnce(): Promise<void> {
+  // Older releases mirrored syncConfig in extension storage. Remove credentials
+  // from that copy once; logout rechecks it in case an older build restored it.
   const credentialsAlreadyScrubbed = await idbGet<boolean>(LEGACY_SYNC_CREDENTIALS_SCRUBBED_KEY);
   if (credentialsAlreadyScrubbed) return;
   await scrubLegacyExtensionSyncCredentials();
@@ -820,7 +811,7 @@ async function persistReadStorageState(
 
 async function readStorage(): Promise<Required<JottathingStorage>> {
   await recoverIdbWriteFence();
-  await migrateStorageToIdb();
+  await scrubLegacySyncCredentialsOnce();
   const stored = (await idbGetMany(STORAGE_KEYS)) as JottathingStorage;
 
   const storedProjects = stored.projects !== undefined ? stored.projects : defaultProjects;
