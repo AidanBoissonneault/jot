@@ -105,3 +105,5 @@ Core app state now reads only from IndexedDB; the one-time extension-storage-to-
 Worker authentication no longer accepts old Inkwell session cookies, OAuth state cookies, or account-binding headers. Logout still expires stale cookie names. Worker security tests cover the current account binding and reject old cookie/header values. Supabase sessions must already store a hash of the browser token; the raw-token lookup and rewrite are removed.
 
 The page-addition auto-merge now separates eligibility checks, shared-block checks, and remote-addition collection. It fell below Fallow's configured complexity thresholds from 30 cyclomatic / 29 cognitive; Fallow now reports 259 threshold findings, down from 262. Six focused tests cover duplicate content, missing IDs, deletion/edit conflicts, independent additions, and expiring media URLs. Root and Worker typechecks and the extension production build pass.
+
+The unused-dependency audit removed `vite-plugin-vue-devtools` from the marketing app and its importer entry in the pnpm lockfile. Marketing typecheck and production build pass. The two remaining Fallow dependency warnings are required Vue/WXT integration packages.
