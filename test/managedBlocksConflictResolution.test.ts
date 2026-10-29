@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { applyManagedBlockOps } from '@/apps/worker/src/managedBlockOperations';
 import { replaceManagedBlocks } from '@/apps/worker/src/managedBlocks';
 
 function notionParagraph(text: string) {
@@ -80,6 +81,57 @@ function runReviewedMerge({
     hash: (value) => value,
   });
   return { result, store, listAllBlockChildren, appendManagedBlocks, deleteManagedBlock, updateManagedBlock };
+}
+
+function runGranularUpdate({
+  localText,
+  remoteBlocks,
+  conflictResolution = false,
+}: {
+  localText: string;
+  remoteBlocks: ReturnType<typeof remoteParagraph>[];
+  conflictResolution?: boolean;
+}) {
+  const baseState = notionParagraph('Before');
+  const localBlock = localParagraph('local-a', localText);
+  if (conflictResolution) localBlock.attrs.jottathingConflictResolution = true;
+  const store = {
+    blockMappings: {
+      'local-page': [{
+        localPageId: 'local-page',
+        jottathingBlockId: 'local-a',
+        localNodeId: 'local-a',
+        notionBlockId: 'remote-a',
+        kind: 'paragraph',
+        order: 0,
+        lastSyncedHash: 'before-hash',
+        oldState: baseState,
+        newState: baseState,
+      }],
+    },
+  };
+  const updateManagedBlock = vi.fn(async () => undefined);
+  const listAllBlockChildren = vi.fn(async () => remoteBlocks);
+  const result = applyManagedBlockOps({
+    store: store as never,
+    localPageId: 'local-page',
+    notionPageId: 'notion-page',
+    ops: [{
+      type: 'block_update',
+      jottathingBlockId: 'local-a',
+      payload: { block: localBlock },
+    }],
+    content: { type: 'doc', content: [localBlock] },
+    appendManagedBlocks: vi.fn(async () => []),
+    deleteManagedBlock: vi.fn(async () => undefined),
+    updateManagedBlock,
+    replaceManagedBlocks: vi.fn(async () => ({ createdBlocks: [] })),
+    listAllBlockChildren,
+    tiptapDocumentToNotionBlocks: () => [notionParagraph(localText) as never],
+    kindFromNotionBlock: ({ type }) => type,
+    hash: () => 'after-hash',
+  });
+  return { result, store, updateManagedBlock, listAllBlockChildren };
 }
 
 describe('reviewed conflict merge block reconciliation', () => {
@@ -210,5 +262,50 @@ describe('reviewed conflict merge block reconciliation', () => {
     expect(listAllBlockChildren).toHaveBeenCalledTimes(2);
     expect(appendManagedBlocks).toHaveBeenCalledOnce();
     expect(store.blockMappings['local-page'][0].notionBlockId).toBe('remote-created');
+  });
+});
+
+describe('granular conflict resolution races', () => {
+  it('stops when Notion changes after the reviewed merge was prepared', async () => {
+    const { result, updateManagedBlock } = runGranularUpdate({
+      localText: 'Local edit',
+      remoteBlocks: [remoteParagraph('remote-a', 'Remote edit')],
+    });
+
+    await expect(result).rejects.toMatchObject({
+      name: 'UnmappedNotionContentError',
+      code: 'unmapped_notion_content',
+    });
+    expect(updateManagedBlock).not.toHaveBeenCalled();
+  });
+
+  it('accepts the current Notion state when the operation carries the reviewed marker', async () => {
+    const { result, updateManagedBlock, store } = runGranularUpdate({
+      localText: 'Reviewed edit',
+      remoteBlocks: [remoteParagraph('remote-a', 'Remote edit')],
+      conflictResolution: true,
+    });
+
+    await result;
+    expect(updateManagedBlock).toHaveBeenCalledWith(
+      store,
+      'remote-a',
+      notionParagraph('Reviewed edit'),
+    );
+  });
+
+  it('reattaches a missing mapping to an already-present block before updating', async () => {
+    const { result, updateManagedBlock, store } = runGranularUpdate({
+      localText: 'Recovered edit',
+      remoteBlocks: [remoteParagraph('remote-recovered', 'Before')],
+    });
+
+    await result;
+    expect(updateManagedBlock).toHaveBeenCalledWith(
+      store,
+      'remote-recovered',
+      notionParagraph('Recovered edit'),
+    );
+    expect(store.blockMappings['local-page'][0].notionBlockId).toBe('remote-recovered');
   });
 });

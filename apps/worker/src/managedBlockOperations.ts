@@ -306,9 +306,10 @@ async function applySingleManagedBlockOp({
   }
 
   if (!op.jottathingBlockId || !op.payload?.block) return { createdBlocks: [] };
+  const localBlock = op.payload.block;
   const [notionBlock] = tiptapDocumentToNotionBlocks({
     type: 'doc',
-    content: [op.payload.block],
+    content: [localBlock],
   });
   if (!notionBlock) return { createdBlocks: [] };
 
@@ -339,41 +340,17 @@ async function applySingleManagedBlockOp({
   let createdBlock: NotionBlock | undefined;
 
   if (existing?.notionBlockId) {
-    const remoteBlocks = await listAllBlockChildren(store, notionPageId);
-    const current = remoteBlocks.find((block) => block.id === existing.notionBlockId);
-    if (current && op.payload.block.attrs?.jottathingConflictResolution === true) {
-      existing.newState = current as unknown as NotionBlockPayload;
-    }
-    const baseSignature = existing.newState ? managedBlockSignature(existing.newState) : undefined;
-    const currentSignature = current ? managedBlockSignature(current) : undefined;
-    const desiredSignature = managedBlockSignature(notionBlock);
-    const localChanged = existing.lastSyncedHash !== desired.lastSyncedHash;
-    const remoteChanged = !current || (
-      baseSignature !== undefined && currentSignature !== baseSignature
-    );
-    if (
-      existing.newState &&
-      localChanged &&
-      remoteChanged &&
-      currentSignature !== desiredSignature
-    ) {
-      const replacement = !current && remoteBlocks.find((block) =>
-        managedBlockSignature(block) === (baseSignature ?? desiredSignature),
-      );
-      if (replacement) {
-        existing.notionBlockId = replacement.id;
-      } else {
-        throw createBlockOperationConflict({
-          blockId: desired.jottathingBlockId,
-          baseState: existing.newState,
-          current,
-          localContent: content,
-          mappings,
-          localBlock: op.payload.block,
-          remoteBlocks,
-        });
-      }
-    }
+    await checkConflictResolutionRace({
+      content,
+      desired,
+      existing,
+      listAllBlockChildren,
+      localBlock,
+      mappings,
+      notionBlockId: existing.notionBlockId,
+      notionPageId,
+      store,
+    });
   }
 
   if (!existing?.notionBlockId) {
@@ -405,6 +382,64 @@ async function applySingleManagedBlockOp({
   mappings.splice(insertionIndex, 0, nextMapping);
   store.blockMappings[localPageId] = normalizeMappingOrder(mappings);
   return { createdBlocks: createdBlock ? [createdBlock] : [], notionBlocks: [notionBlock] };
+}
+
+/** Rejects a reviewed edit if either side changed again while it was queued. */
+async function checkConflictResolutionRace({
+  content,
+  desired,
+  existing,
+  listAllBlockChildren,
+  localBlock,
+  mappings,
+  notionBlockId,
+  notionPageId,
+  store,
+}: {
+  content: DocumentContent;
+  desired: DesiredManagedBlock;
+  existing: BlockMapping;
+  listAllBlockChildren: ListAllBlockChildren;
+  localBlock: DocumentContent;
+  mappings: BlockMapping[];
+  notionBlockId: string;
+  notionPageId: string;
+  store: WorkerStore;
+}): Promise<void> {
+  const remoteBlocks = await listAllBlockChildren(store, notionPageId);
+  const current = remoteBlocks.find((block) => block.id === notionBlockId);
+  if (current && localBlock.attrs?.jottathingConflictResolution === true) {
+    existing.newState = current as unknown as NotionBlockPayload;
+  }
+
+  const baseState = existing.newState;
+  if (!baseState || existing.lastSyncedHash === desired.lastSyncedHash) return;
+
+  const baseSignature = managedBlockSignature(baseState);
+  const currentSignature = current ? managedBlockSignature(current) : undefined;
+  const desiredSignature = managedBlockSignature(desired.notionBlock);
+  const remoteChanged = !current || (
+    baseSignature !== undefined && currentSignature !== baseSignature
+  );
+  if (!remoteChanged || currentSignature === desiredSignature) return;
+
+  const replacement = !current && remoteBlocks.find((block) =>
+    managedBlockSignature(block) === (baseSignature ?? desiredSignature),
+  );
+  if (replacement) {
+    existing.notionBlockId = replacement.id;
+    return;
+  }
+
+  throw createBlockOperationConflict({
+    blockId: desired.jottathingBlockId,
+    baseState,
+    current,
+    localContent: content,
+    mappings,
+    localBlock,
+    remoteBlocks,
+  });
 }
 
 /** Recovers an earlier queue write or appends the block after its mapped anchor. */
