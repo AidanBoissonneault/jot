@@ -260,7 +260,6 @@ export interface SyncQueueReference {
 /** Describes Cloudflare bindings and configuration required by the API worker. */
 export interface WorkerEnv {
   JOTTATHING_EXTENSION_ORIGIN: string | undefined;
-  INKWELL_EXTENSION_ORIGIN?: string | undefined;
   NOTION_OAUTH_CLIENT_ID: string | undefined;
   NOTION_OAUTH_CLIENT_SECRET: string | undefined;
   NOTION_VERSION: string | undefined;

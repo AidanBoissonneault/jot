@@ -299,6 +299,15 @@ describe('worker request origin policy', () => {
     expect(isTrustedOrigin(env, 'chrome-extension://jottathingdevextension.evil')).toBe(false);
     expect(isTrustedOrigin(env, 'https://sync.example.test.evil')).toBe(false);
     expect(isTrustedOrigin(env, 'null')).toBe(false);
+
+    const legacyEnv = {
+      ...env,
+      INKWELL_EXTENSION_ORIGIN: 'chrome-extension://legacyextension',
+      JOTTATHING_EXTENSION_ORIGIN: undefined,
+      TRUSTED_ORIGINS: undefined,
+      WORKER_URL: undefined,
+    } as WorkerEnv;
+    expect(isTrustedOrigin(legacyEnv, 'chrome-extension://legacyextension')).toBe(false);
   });
 
   it('bounds JSON bodies when Content-Length is missing', async () => {
