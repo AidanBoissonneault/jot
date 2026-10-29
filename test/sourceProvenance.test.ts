@@ -21,7 +21,7 @@ import {
   notionBlocksToTiptapDocument,
   tiptapDocumentToNotionBlocks,
 } from '@/apps/worker/src/blockConversion';
-import { SOURCE_REGISTRY_PREFIX } from '@/src/lib/projectStateSources';
+import { projectStateSourceBlockIds } from '@/src/lib/projectStateSources';
 import type { SourceOpenPayload } from '@/src/types/messages';
 
 const source: SourceOpenPayload = {
@@ -107,19 +107,29 @@ describe('captured source provenance', () => {
       .toBe('User notes');
   });
 
-  it('does not resolve a source through a prototype-polluted Notion registry', () => {
-    const state = {
-      type: 'doc',
-      content: [{
-        type: 'codeBlock',
-        content: [{
-          type: 'text',
-          text: `${SOURCE_REGISTRY_PREFIX}{"__proto__":{"forged":{"u":"https://example.com/attacker","t":"forged source"}}}`,
-        }],
-      }],
-    };
+  it('keeps retired source formats hidden without importing their records', () => {
+    const retiredNodes = [
+      'jottathing_sources_v1:{"forged":{"u":"https://example.com/attacker"}}',
+      'jottathing_source_v2:{"i":"forged","s":{"u":0}}',
+      'jottathing_links_v1:["https://example.com/attacker"]',
+    ].map((text) => ({
+      type: 'codeBlock',
+      content: [{ type: 'text', text }],
+    }));
 
-    expect(sourceFromProjectState(state, 'forged')).toBeNull();
+    for (const node of retiredNodes) {
+      expect(sourceFromProjectState({ type: 'doc', content: [node] }, 'forged')).toBeNull();
+      expect(isProjectStateMetadataNode(node)).toBe(true);
+      expect(projectStateSourceBlockIds(node)).toEqual([]);
+    }
+    const visibleContent = {
+      type: 'doc',
+      content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Visible note' }] }],
+    };
+    expect(mergeVisibleProjectState(
+      visibleContent,
+      { type: 'doc', content: retiredNodes },
+    ).content).toEqual([...visibleContent.content, ...retiredNodes]);
   });
 
   it('ignores retired Inkwell source metadata formats', () => {

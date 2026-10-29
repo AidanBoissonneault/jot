@@ -177,21 +177,20 @@ describe('project state source cleanup', () => {
     );
   });
 
-  test('updates a source registry when only some referenced blocks remain', async () => {
+  test('leaves retired source registry blocks opaque', async () => {
     const registry = sourceNode(
       'jottathing_sources_v1:{"live-block":{},"orphan-block":{}}',
     );
     const remoteBlock = { id: 'remote-source', node: registry };
     const rig = projectStateHarness([remoteBlock], ['live-block']);
-    const replacement = { object: 'block', type: 'code', code: { rich_text: [] } };
 
     await rig.helpers.syncProjectState(rig.store as never, 'project-row', {
       id: 'project-1',
       stateContent: { type: 'doc', content: [registry] },
     } as never);
 
-    expect(rig.updateManagedBlock).toHaveBeenCalledWith(rig.store, 'remote-source', replacement);
-    expect(rig.store.blockMappings[rig.key][0].newState).toEqual(replacement);
+    expect(rig.updateManagedBlock).not.toHaveBeenCalled();
+    expect(rig.store.blockMappings[rig.key][0].newState).toBeNull();
     expect(rig.deleteManagedBlock).not.toHaveBeenCalled();
   });
 

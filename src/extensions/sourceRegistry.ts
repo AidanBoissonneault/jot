@@ -9,12 +9,14 @@ import {
 import {
   SOURCE_BLOCK_ID_PREFIX,
   SOURCE_ENTRY_PREFIX,
-  SOURCE_V2_PREFIX,
-  LINKS_V1_PREFIX,
-  SOURCE_REGISTRY_PREFIX,
 } from '@/src/lib/projectStateSources';
 
 type SourceRegistry = Record<string, StoredJottathingSource>;
+const RETIRED_SOURCE_METADATA_PREFIXES = [
+  'jottathing_sources_v1:',
+  'jottathing_source_v2:',
+  'jottathing_links_v1:',
+];
 
 export function sourceFromProjectState(
   stateContent: DocumentContent | undefined,
@@ -60,20 +62,19 @@ export function mergeVisibleProjectState(
   previousState: DocumentContent | undefined,
 ): DocumentContent {
   const registry = readSourceRegistry(previousState);
-  const legacyMetadata = (previousState?.content ?? []).filter((node) =>
+  const retiredMetadata = (previousState?.content ?? []).filter((node) =>
     isProjectStateMetadataNode(node) &&
-    sourceRegistryText(node) === null &&
     sourceEntryText(node) === null,
   );
 
-  return Object.keys(registry).length || legacyMetadata.length
+  return Object.keys(registry).length || retiredMetadata.length
     ? {
         ...visibleContent,
         type: 'doc',
         content: [
           ...stateNodesForStorage(visibleContent),
           ...sourceEntryNodes(registry),
-          ...legacyMetadata,
+          ...retiredMetadata,
         ],
       }
     : visibleContent;
@@ -114,9 +115,9 @@ export function migratePageSourcesToProjectState(
     if (source && typeof blockId === 'string' && blockId) {
       const storedSource = sourceFromProjectState(nextState, blockId);
       if (
-        JSON.stringify(storeJottathingSource(storedSource ?? source)) !==
-        JSON.stringify(storeJottathingSource(source)) ||
-        !storedSource
+        !storedSource ||
+        JSON.stringify(storeJottathingSource(storedSource)) !==
+          JSON.stringify(storeJottathingSource(source))
       ) {
         nextState = addSourceToProjectState(nextState, blockId, source);
         changed = true;
@@ -152,26 +153,7 @@ function readSourceRegistry(
 
   for (const node of stateContent?.content ?? []) {
     const entry = sourceEntry(node);
-    if (entry) {
-      registry[entry.blockId] = entry.source;
-      continue;
-    }
-
-    const raw = sourceRegistryText(node);
-    if (!raw) {
-      continue;
-    }
-
-    try {
-      const parsed = JSON.parse(raw) as SourceRegistry;
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        for (const [blockId, source] of Object.entries(parsed)) {
-          registry[blockId] = source;
-        }
-      }
-    } catch {
-      // Leave a malformed state block untouched and start a valid registry.
-    }
+    if (entry) registry[entry.blockId] = entry.source;
   }
 
   return registry;
@@ -229,8 +211,9 @@ function stateNodesForStorage(content: DocumentContent) {
 
 export function isProjectStateMetadataNode(node: DocumentContent) {
   const text = codeBlockText(node);
-  return sourceRegistryText(node) !== null || sourceEntryText(node) !== null ||
-    Boolean(text?.startsWith(SOURCE_V2_PREFIX) || text?.startsWith(LINKS_V1_PREFIX));
+  return sourceEntryText(node) !== null || Boolean(
+    text && RETIRED_SOURCE_METADATA_PREFIXES.some((prefix) => text.startsWith(prefix)),
+  );
 }
 
 function sourceEntry(node: DocumentContent): {
@@ -255,11 +238,6 @@ function sourceEntry(node: DocumentContent): {
 function sourceEntryText(node: DocumentContent) {
   const text = codeBlockText(node);
   return text?.startsWith(SOURCE_ENTRY_PREFIX) ? text.slice(SOURCE_ENTRY_PREFIX.length) : null;
-}
-
-function sourceRegistryText(node: DocumentContent) {
-  const text = codeBlockText(node);
-  return text?.startsWith(SOURCE_REGISTRY_PREFIX) ? text.slice(SOURCE_REGISTRY_PREFIX.length) : null;
 }
 
 function codeBlockText(node: DocumentContent) {
