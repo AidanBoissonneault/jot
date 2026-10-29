@@ -1,7 +1,7 @@
 /** @file Creates the Tiptap editor with Jottathing extensions and event hooks. */
 import { useEditor } from '@tiptap/vue-3';
 import StarterKit from '@tiptap/starter-kit';
-import { ref } from 'vue';
+import { getCurrentInstance, onBeforeUnmount, ref } from 'vue';
 import type { Editor } from '@tiptap/core';
 import type { Ref } from 'vue';
 import type { EditorView } from '@tiptap/pm/view';
@@ -41,6 +41,8 @@ interface JottathingEditorOptions {
   ) => Promise<DocumentContent | null | void>;
 }
 
+const EDITOR_AUTOSAVE_DELAY_MS = 500;
+
 /** Builds the primary editor with supported content extensions and interaction hooks. */
 export function useJottathingEditor({
   editorStateVersion,
@@ -51,11 +53,26 @@ export function useJottathingEditor({
 }: JottathingEditorOptions) {
   const shouldSkipNextUpdateSave = ref(false);
   let focusedBlockKey: string | undefined;
+  let editorSaveTimer: ReturnType<typeof setTimeout> | undefined;
 
   function flushEditorSave() {
+    clearTimeout(editorSaveTimer);
+    editorSaveTimer = undefined;
     void saveEditorContent()
       .then(() => notionClient.flushPendingSyncOps({ force: true }))
       .catch(() => undefined);
+  }
+
+  function scheduleEditorSave() {
+    clearTimeout(editorSaveTimer);
+    editorSaveTimer = setTimeout(flushEditorSave, EDITOR_AUTOSAVE_DELAY_MS);
+  }
+
+  if (getCurrentInstance()) {
+    onBeforeUnmount(() => {
+      if (editorSaveTimer === undefined) return;
+      flushEditorSave();
+    });
   }
 
   const editor = useEditor({
@@ -153,6 +170,8 @@ export function useJottathingEditor({
         shouldSkipNextUpdateSave.value = false;
         return;
       }
+
+      scheduleEditorSave();
     },
     onSelectionUpdate: ({ editor: activeEditor }) => {
       editorStateVersion.value += 1;

@@ -35,11 +35,13 @@ import { useEditorPersistence } from '@/entrypoints/sidepanel/composables/useEdi
 afterEach(() => {
   editorHarness.options = null;
   vi.unstubAllGlobals();
+  vi.useRealTimers();
   vi.clearAllMocks();
 });
 
 describe('editor block-focus autosave', () => {
-  it('saves and flushes sync when focus leaves a block or the editor, but not on typing within a block', async () => {
+  it('saves and flushes after typing settles even while focus stays in the same block', async () => {
+    vi.useFakeTimers();
     const schema = new Schema({
       nodes: {
         doc: { content: 'block+' },
@@ -87,13 +89,21 @@ describe('editor block-focus autosave', () => {
     callbacks.onSelectionUpdate({ editor: { state: movedWithinBlockState } });
     expect(saveEditorContent).not.toHaveBeenCalled();
 
-    callbacks.onSelectionUpdate({ editor: { state: secondBlockState } });
+    await vi.advanceTimersByTimeAsync(499);
+    expect(saveEditorContent).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
     expect(saveEditorContent).toHaveBeenCalledTimes(1);
-    await vi.waitFor(() => expect(syncHarness.flushPendingSyncOps).toHaveBeenCalledWith({ force: true }));
+    await vi.runAllTimersAsync();
+    expect(syncHarness.flushPendingSyncOps).toHaveBeenCalledWith({ force: true });
+
+    callbacks.onSelectionUpdate({ editor: { state: secondBlockState } });
+    expect(saveEditorContent).toHaveBeenCalledTimes(2);
 
     callbacks.onBlur();
-    expect(saveEditorContent).toHaveBeenCalledTimes(2);
-    await vi.waitFor(() => expect(syncHarness.flushPendingSyncOps).toHaveBeenCalledTimes(2));
+    expect(saveEditorContent).toHaveBeenCalledTimes(3);
+    await vi.runAllTimersAsync();
+    expect(syncHarness.flushPendingSyncOps).toHaveBeenCalledTimes(3);
   });
 
   it('retries the same block after local persistence fails', async () => {
