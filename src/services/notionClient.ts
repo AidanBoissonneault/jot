@@ -1040,6 +1040,14 @@ function projectUsesNotionWorkspace(project: Project, workspaces: Workspace[]): 
   return workspace ? workspace.kind === 'notion' : project.syncMode === 'notion';
 }
 
+function pageEditIsNewerThanProjectArchive(page: ProjectPage, project: Project): boolean {
+  if (project.status !== 'archived') return false;
+  const pageEditedAt = Date.parse(page.updatedAt);
+  const projectArchivedAt = Date.parse(project.updatedAt);
+  return Number.isFinite(pageEditedAt) && Number.isFinite(projectArchivedAt) &&
+    pageEditedAt > projectArchivedAt;
+}
+
 function withoutJottathingBlockIds(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(withoutJottathingBlockIds);
   if (!value || typeof value !== 'object') return value;
@@ -3045,7 +3053,7 @@ export const notionClient = {
         return Boolean(
           project &&
           page.status !== 'archived' &&
-          project.status !== 'archived' &&
+          (project.status !== 'archived' || pageEditIsNewerThanProjectArchive(page, project)) &&
           projectUsesNotionWorkspace(project, workspace.workspaces) &&
           ((page.syncState !== undefined && page.syncState !== 'saved') ||
             hasUnuploadedSnapshot(page.content, page.syncBaselineContent) ||
@@ -3063,7 +3071,10 @@ export const notionClient = {
     for (const pageId of pageIdsToReconcile) {
       const page = workspace.pages.find((entry) => entry.id === pageId);
       const project = page && workspace.projects.find((entry) => entry.id === page.projectId);
-      if (!page || !project || page.status === 'archived' || project.status === 'archived') {
+      if (
+        !page || !project || page.status === 'archived' ||
+        (project.status === 'archived' && !pageEditIsNewerThanProjectArchive(page, project))
+      ) {
         reconciledPageCount += 1;
         onProgress?.({ phase: 'syncing_pages', completed: reconciledPageCount, total: pageIdsToReconcile.size });
         continue;

@@ -1041,6 +1041,101 @@ describe('project metadata', () => {
     expect(callsAfterSecondSync.filter((url) => url.endsWith('/sync/page/resync'))).toHaveLength(1);
   });
 
+  test('manual resync restores an archived project for a newer active page edit', async () => {
+    const workspace: Workspace = {
+      id: 'workspace-notion-archive-resync',
+      name: 'Notion',
+      kind: 'notion',
+      accountId: connectedConfig.userId,
+      notionWorkspaceId: 'notion-workspace-archive-resync',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    };
+    const archivedAt = '2026-10-27T12:00:00.000Z';
+    const editedAt = '2026-10-28T12:00:00.000Z';
+    const archivedProject: Project = {
+      ...baseProject,
+      id: 'project-archived-before-local-edit',
+      name: 'Archived project',
+      workspaceId: workspace.id,
+      syncMode: 'notion',
+      status: 'archived',
+      updatedAt: archivedAt,
+    };
+    const editedPage: ProjectPage = {
+      ...basePage,
+      id: 'page-edited-after-project-archive',
+      projectId: archivedProject.id,
+      workspaceId: workspace.id,
+      syncMode: 'notion',
+      content: docWithText('edit after archive'),
+      syncBaselineContent: docWithText('before archive'),
+      updatedAt: editedAt,
+      localSyncVersion: 2,
+      knownSyncVersion: 1,
+    };
+    resetBrowserStorage({
+      activePageIdsByProject: { [archivedProject.id]: editedPage.id },
+      currentProjectId: archivedProject.id,
+      currentProjectIdByWorkspace: { [workspace.id]: archivedProject.id },
+      currentWorkspaceId: workspace.id,
+      hasMigratedCapturesToPages: true,
+      pages: [editedPage],
+      projects: [archivedProject],
+      syncConfig: {
+        ...connectedConfig,
+        workspaceId: workspace.notionWorkspaceId,
+        workspaceName: workspace.name,
+      },
+      workspaces: [workspace],
+    });
+
+    let pageRequest: ProjectPage | undefined;
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      const route = String(url).replace(connectedConfig.serverUrl, '');
+      if (route === '/sync/retry') return jsonResponse({ requeuedCount: 0 });
+      if (route === '/sync/page/resync') {
+        const request = JSON.parse(String(init?.body)) as { page: ProjectPage };
+        pageRequest = request.page;
+        return jsonResponse({
+          status: 'saved',
+          page: { ...request.page, syncBaselineContent: request.page.content },
+        });
+      }
+      if (route === '/sync/status') return jsonResponse({ hasPending: false });
+      if (route === '/sync/validate') {
+        return jsonResponse({
+          aheadPageIds: [],
+          failedPageIds: [],
+          newPageIds: [],
+          stalePageIds: [],
+          workspaceChanged: false,
+        });
+      }
+      if (route === '/sync/reload') {
+        return jsonResponse({
+          activePageIdsByProject: { [archivedProject.id]: editedPage.id },
+          currentProjectId: archivedProject.id,
+          pages: [{ ...editedPage, syncBaselineContent: editedPage.content }],
+          projects: [{ ...archivedProject, status: 'active', updatedAt: editedAt }],
+          status: 'saved',
+        });
+      }
+      throw new Error(`Unexpected sync request: ${String(url)}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await notionClient.resyncPendingChanges();
+
+    expect(result.reloadedFromNotion).toBe(true);
+    expect(pageRequest?.updatedAt).toBe(editedAt);
+    expect(stripJottathingBlockIds(pageRequest?.content)).toEqual(
+      stripJottathingBlockIds(editedPage.content),
+    );
+    expect(fetchMock.mock.calls.map(([url]) => String(url)))
+      .toContain('http://localhost:8787/sync/page/resync');
+  });
+
   test('manual resync continues project state delivery when a parked upload exists', async () => {
     await addPendingProjectSyncEvent(baseProject);
     const fetchMock = vi.fn(async (url: string) => {
