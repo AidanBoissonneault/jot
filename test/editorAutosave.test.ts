@@ -132,6 +132,46 @@ describe('editor block-focus autosave', () => {
 
     expect(savePageContentSnapshot).toHaveBeenCalledTimes(2);
   });
+
+  it('preserves text and the edited title when a new page gets its durable ID', async () => {
+    const saveCurrentPageContent = vi.fn(async () => true);
+    const persistence = createPersistenceHarness({ saveCurrentPageContent });
+    const temporaryPage = {
+      ...persistence.page,
+      id: 'temp-page-new-note',
+      title: 'Page 2',
+      createdAt: '2026-10-29T10:00:00.000Z',
+      localRevision: 'temp-revision',
+    };
+    const durablePage = {
+      ...temporaryPage,
+      id: 'page-new-note',
+      title: 'First Note',
+      localRevision: 'durable-revision',
+    };
+    const typedContent = {
+      type: 'doc',
+      content: [{ type: 'paragraph', content: [{ type: 'text', text: 'quick note text' }] }],
+    };
+    await persistence.hydratePage(temporaryPage);
+    persistence.setEditorContent(typedContent);
+    persistence.pageTitleDraft.value = 'First Note';
+    persistence.isPageTitleDraftDirty.value = true;
+    const hydrationCount = persistence.editorCommands.setContent.mock.calls.length;
+
+    persistence.setCurrentPage(durablePage);
+    await nextTick();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(persistence.editorCommands.setContent).toHaveBeenCalledTimes(hydrationCount);
+    expect(persistence.getEditorContent()).toEqual(typedContent);
+    expect(persistence.pageTitleDraft.value).toBe('First Note');
+    expect(saveCurrentPageContent).toHaveBeenCalledWith(typedContent, {
+      preserveLocalContent: true,
+      title: 'First Note',
+    });
+  });
 });
 
 function createPersistenceHarness(saveMethods: {
@@ -145,6 +185,8 @@ function createPersistenceHarness(saveMethods: {
   const page = {
     id: 'page-1',
     projectId: 'project-1',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    localRevision: 'initial-revision',
     title: 'Untitled Page',
     content: { type: 'doc', content: [{ type: 'paragraph' }] },
   };
@@ -154,22 +196,41 @@ function createPersistenceHarness(saveMethods: {
     saveCurrentPageContent: saveMethods.saveCurrentPageContent ?? vi.fn(async () => true),
     savePageContentSnapshot: saveMethods.savePageContentSnapshot ?? vi.fn(async () => true),
   }) as never;
-  const editor = shallowRef({ getJSON: () => content, commands: { setContent: vi.fn() } }) as never;
+  let currentEditorContent = content;
+  const editorCommands = { setContent: vi.fn() };
+  const editorInstance = { getJSON: () => currentEditorContent, commands: editorCommands };
+  const editor = shallowRef(editorInstance) as never;
+  const pageTitleDraft = ref(page.title);
+  const isPageTitleEditing = ref(false);
+  const isPageTitleDraftDirty = ref(false);
 
   const persistence = useEditorPersistence(
     editor,
     store,
-    ref(page.title),
-    ref(false),
-    ref(false),
+    pageTitleDraft,
+    isPageTitleEditing,
+    isPageTitleDraftDirty,
     ref(0),
     ref(false),
     ref(undefined),
   );
-  const hydratePage = async () => {
-    (store as { currentPage?: typeof page }).currentPage = page;
+  const hydratePage = async (pageToHydrate = page) => {
+    (store as { currentPage?: typeof page }).currentPage = pageToHydrate;
     await nextTick();
   };
+  const setCurrentPage = (pageToSet: typeof page) => {
+    (store as { currentPage?: typeof page }).currentPage = pageToSet;
+  };
 
-  return { ...persistence, hydratePage };
+  return {
+    ...persistence,
+    editorCommands,
+    hydratePage,
+    isPageTitleDraftDirty,
+    page,
+    pageTitleDraft,
+    setEditorContent: (nextContent: typeof content) => { currentEditorContent = nextContent; },
+    getEditorContent: () => editorInstance.getJSON(),
+    setCurrentPage,
+  };
 }

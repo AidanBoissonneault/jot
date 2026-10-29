@@ -48,8 +48,25 @@ export function useEditorPersistence(
 
   watch(
     () => [store.currentPage, store.currentProject?.syncConflicts] as const,
-    ([page, syncConflicts]) => {
-      synchronizePageTitleDraft(page);
+    ([page, syncConflicts], [previousPage]) => {
+      const isTemporaryPageHandoff = Boolean(
+        page &&
+        previousPage?.id.startsWith('temp-page-') &&
+        page.id.startsWith('page-') &&
+        page.projectId === previousPage.projectId &&
+        page.createdAt === previousPage.createdAt,
+      );
+
+      if (isTemporaryPageHandoff && page) {
+        // Preserve a title the user is still editing while the optimistic ID
+        // becomes durable; this is the same logical page, not a page switch.
+        titleDraftPageId = page.id;
+        if (!isPageTitleDraftDirty.value && !isPageTitleEditing.value) {
+          pageTitleDraft.value = page.title;
+        }
+      } else {
+        synchronizePageTitleDraft(page);
+      }
       if (!editor.value || !page) {
         return;
       }
@@ -74,6 +91,22 @@ export function useEditorPersistence(
       }
 
       if (!isPageChange && hasUnsavedEditorContent) {
+        return;
+      }
+
+      if (isPageChange && isTemporaryPageHandoff && hasUnsavedEditorContent) {
+        // Text typed during the autosave debounce may exist only in Tiptap.
+        // Do not hydrate the durable row over it; attach the editor to the new
+        // ID and save its latest snapshot immediately.
+        activePageId = page.id;
+        lastAppliedContent = JSON.stringify(page.content);
+        if (isEditorSaveInFlight) {
+          shouldSaveAgainAfterCurrentSave = true;
+        } else {
+          void Promise.resolve()
+            .then(() => saveEditorContentOptimistically())
+            .catch(() => undefined);
+        }
         return;
       }
 
