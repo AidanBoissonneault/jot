@@ -2140,18 +2140,27 @@ type CrossProjectPageMovePlan = {
   pages: ProjectPage[];
 };
 
-/** Builds page identities, ordering, and selections for a cross-project move. */
-function buildCrossProjectPageMovePlan(
-  storage: Required<JottathingStorage>,
-  context: PageMoveContext,
-  syncConfig: SyncConfig,
-  activeAccountId: string | undefined,
-  targetPageId: string | undefined,
-  position: 'before' | 'after',
-): CrossProjectPageMovePlan {
-  const { page, sourceProject, destinationProject, sourceWorkspace, destinationWorkspace } = context;
-  const movedAt = new Date(Math.max(Date.now(), Date.parse(page.updatedAt) + 1)).toISOString();
-  const archivedPage: ProjectPage = {
+type CrossProjectPageMoveRecords = {
+  archivedPage: ProjectPage;
+  movedPage: ProjectPage;
+  replacementPage: ProjectPage;
+  sourcePages: ProjectPage[];
+  destinationPages: ProjectPage[];
+  insertionIndex: number;
+};
+
+type OrderedCrossProjectPageMove = Pick<
+  CrossProjectPageMovePlan,
+  'movedPage' | 'replacementPage' | 'pages'
+>;
+
+/** Marks the original page as archived while retaining its Notion identity. */
+function createArchivedMovePage(
+  page: ProjectPage,
+  sourceWorkspace: Workspace,
+  movedAt: string,
+): ProjectPage {
+  return {
     ...page,
     status: 'archived',
     updatedAt: movedAt,
@@ -2159,24 +2168,23 @@ function buildCrossProjectPageMovePlan(
     syncMessage: undefined,
     syncState: sourceWorkspace.kind === 'notion' ? 'saving' : 'saved',
   };
-  const remainingSourcePages = sortProjectPages(storage.pages.filter((entry) =>
-    entry.projectId === sourceProject.id && entry.status !== 'archived' && entry.id !== page.id,
-  ));
-  const destinationActivePages = sortProjectPages(storage.pages.filter((entry) =>
-    entry.projectId === destinationProject.id && entry.status !== 'archived',
-  ));
-  const targetIndex = targetPageId
-    ? destinationActivePages.findIndex((entry) => entry.id === targetPageId)
-    : -1;
-  const insertionIndex = targetIndex < 0
-    ? destinationActivePages.length
-    : targetIndex + (position === 'after' ? 1 : 0);
-  const movedPageId = `page-${destinationProject.id}-${crypto.randomUUID()}`;
-  const movedPageBase: ProjectPage = {
+}
+
+/** Creates the destination copy with ownership and sync metadata for its workspace. */
+function createDestinationMovePage(
+  page: ProjectPage,
+  destinationProject: Project,
+  destinationWorkspace: Workspace,
+  syncConfig: SyncConfig,
+  activeAccountId: string | undefined,
+  movedAt: string,
+  pageOrder: number,
+): ProjectPage {
+  const movedPage: ProjectPage = {
     ...uncachePageNotionMetadata(page),
-    id: movedPageId,
+    id: `page-${destinationProject.id}-${crypto.randomUUID()}`,
     projectId: destinationProject.id,
-    pageOrder: insertionIndex,
+    pageOrder,
     workspaceId: destinationWorkspace.id,
     status: 'active',
     syncMode: destinationWorkspace.kind,
@@ -2191,11 +2199,21 @@ function buildCrossProjectPageMovePlan(
     localRevision: crypto.randomUUID(),
     syncState: destinationWorkspace.kind === 'notion' ? 'saving' : 'saved',
   };
-  const movedPage = destinationWorkspace.kind === 'notion'
-    ? markPageDirty(movedPageBase)
-    : movedPageBase;
-  const sourceNeedsReplacement = remainingSourcePages.length === 0;
-  const replacementPage = remainingSourcePages[0] ?? {
+  return destinationWorkspace.kind === 'notion' ? markPageDirty(movedPage) : movedPage;
+}
+
+/** Keeps a blank active page in the source if moving its last active page. */
+function createSourceReplacementPage(
+  sourcePages: ProjectPage[],
+  sourceProject: Project,
+  sourceWorkspace: Workspace,
+  syncConfig: SyncConfig,
+  activeAccountId: string | undefined,
+): ProjectPage {
+  const existingPage = sourcePages[0];
+  if (existingPage) return existingPage;
+
+  return {
     ...createEmptyPage(sourceProject.id, 'Untitled Page'),
     workspaceId: sourceWorkspace.id,
     syncMode: sourceWorkspace.kind,
@@ -2206,46 +2224,125 @@ function buildCrossProjectPageMovePlan(
       ? sourceWorkspace.notionWorkspaceId
       : undefined,
   };
+}
+
+/** Resolves page records and the requested insertion point before building state. */
+function createCrossProjectPageMoveRecords(
+  storage: Required<JottathingStorage>,
+  context: PageMoveContext,
+  syncConfig: SyncConfig,
+  activeAccountId: string | undefined,
+  targetPageId: string | undefined,
+  position: 'before' | 'after',
+): CrossProjectPageMoveRecords {
+  const { page, sourceProject, destinationProject, sourceWorkspace, destinationWorkspace } = context;
+  const movedAt = new Date(Math.max(Date.now(), Date.parse(page.updatedAt) + 1)).toISOString();
+  const sourcePages = sortProjectPages(storage.pages.filter((entry) =>
+    entry.projectId === sourceProject.id && entry.status !== 'archived' && entry.id !== page.id,
+  ));
+  const destinationPages = sortProjectPages(storage.pages.filter((entry) =>
+    entry.projectId === destinationProject.id && entry.status !== 'archived',
+  ));
+  const targetIndex = targetPageId
+    ? destinationPages.findIndex((entry) => entry.id === targetPageId)
+    : -1;
+  const insertionIndex = targetIndex < 0
+    ? destinationPages.length
+    : targetIndex + (position === 'after' ? 1 : 0);
+
+  return {
+    archivedPage: createArchivedMovePage(page, sourceWorkspace, movedAt),
+    movedPage: createDestinationMovePage(
+      page,
+      destinationProject,
+      destinationWorkspace,
+      syncConfig,
+      activeAccountId,
+      movedAt,
+      insertionIndex,
+    ),
+    replacementPage: createSourceReplacementPage(
+      sourcePages,
+      sourceProject,
+      sourceWorkspace,
+      syncConfig,
+      activeAccountId,
+    ),
+    sourcePages,
+    destinationPages,
+    insertionIndex,
+  };
+}
+
+/** Applies independent source and destination orders to the moved page set. */
+function orderCrossProjectPageMove(
+  storage: Required<JottathingStorage>,
+  page: ProjectPage,
+  records: CrossProjectPageMoveRecords,
+): OrderedCrossProjectPageMove {
+  const sourceNeedsReplacement = records.sourcePages.length === 0;
   const sourcePageIds = sourceNeedsReplacement
-    ? [replacementPage.id]
-    : remainingSourcePages.map((entry) => entry.id);
-  const destinationPageIds = destinationActivePages.map((entry) => entry.id);
-  destinationPageIds.splice(insertionIndex, 0, movedPage.id);
+    ? [records.replacementPage.id]
+    : records.sourcePages.map((entry) => entry.id);
+  const destinationPageIds = records.destinationPages.map((entry) => entry.id);
+  destinationPageIds.splice(records.insertionIndex, 0, records.movedPage.id);
   const pageOrderById = new Map<string, number>();
   sourcePageIds.forEach((id, index) => pageOrderById.set(id, index));
   destinationPageIds.forEach((id, index) => pageOrderById.set(id, index));
-  const orderedMovedPage = { ...movedPage, pageOrder: pageOrderById.get(movedPage.id) };
-  const orderedReplacementPage = sourceNeedsReplacement
-    ? { ...replacementPage, pageOrder: pageOrderById.get(replacementPage.id) }
-    : replacementPage;
-  const pagesAfterArchive = storage.pages.map((entry) => {
-    if (entry.id === page.id) return archivedPage;
-    const pageOrder = pageOrderById.get(entry.id);
-    return pageOrder === undefined ? entry : { ...entry, pageOrder };
-  });
+
+  const movedPage = { ...records.movedPage, pageOrder: pageOrderById.get(records.movedPage.id) };
+  const replacementPage = sourceNeedsReplacement
+    ? { ...records.replacementPage, pageOrder: pageOrderById.get(records.replacementPage.id) }
+    : records.replacementPage;
   const pages = [
-    ...pagesAfterArchive,
-    orderedMovedPage,
-    ...(sourceNeedsReplacement ? [orderedReplacementPage] : []),
+    ...storage.pages.map((entry) => {
+      if (entry.id === page.id) return records.archivedPage;
+      const pageOrder = pageOrderById.get(entry.id);
+      return pageOrder === undefined ? entry : { ...entry, pageOrder };
+    }),
+    movedPage,
+    ...(sourceNeedsReplacement ? [replacementPage] : []),
   ];
 
+  return { movedPage, replacementPage, pages };
+}
+
+/** Preserves page selections unless the moved page was the current selection. */
+function repairActivePageMoveSelections(
+  storage: Required<JottathingStorage>,
+  context: PageMoveContext,
+  records: CrossProjectPageMoveRecords,
+  movedPage: ProjectPage,
+  replacementPage: ProjectPage,
+): { activePageIdsByProject: Record<string, string>; movingCurrentPage: boolean } {
+  const { page, sourceProject, destinationProject } = context;
   const activePageIdsByProject = { ...storage.activePageIdsByProject };
   const rememberedSourcePage = activePageIdsByProject[sourceProject.id];
   const movingCurrentPage =
     (storage.currentProjectIdByWorkspace[storage.currentWorkspaceId] ?? storage.currentProjectId) === sourceProject.id &&
     rememberedSourcePage === page.id;
-  activePageIdsByProject[sourceProject.id] = remainingSourcePages.some((entry) =>
+  activePageIdsByProject[sourceProject.id] = records.sourcePages.some((entry) =>
     entry.id === rememberedSourcePage,
   )
     ? rememberedSourcePage
     : replacementPage.id;
+
   const rememberedDestinationPage = activePageIdsByProject[destinationProject.id];
   activePageIdsByProject[destinationProject.id] = movingCurrentPage
-    ? orderedMovedPage.id
-    : destinationActivePages.some((entry) => entry.id === rememberedDestinationPage)
+    ? movedPage.id
+    : records.destinationPages.some((entry) => entry.id === rememberedDestinationPage)
       ? rememberedDestinationPage
-      : destinationActivePages[0]?.id ?? orderedMovedPage.id;
+      : records.destinationPages[0]?.id ?? movedPage.id;
+  return { activePageIdsByProject, movingCurrentPage };
+}
 
+/** Keeps each workspace's remembered project valid after a page move. */
+function repairProjectMoveSelections(
+  storage: Required<JottathingStorage>,
+  context: PageMoveContext,
+  movingCurrentPage: boolean,
+): Pick<CrossProjectPageMovePlan, 'currentWorkspaceId' | 'currentProjectId' | 'currentProjectIdByWorkspace'> {
+  const { sourceProject, destinationProject, sourceWorkspace, destinationWorkspace } = context;
   const currentProjectIdByWorkspace = { ...storage.currentProjectIdByWorkspace };
   const sourceWorkspaceProjectId = currentProjectIdByWorkspace[sourceWorkspace.id] ??
     (storage.currentWorkspaceId === sourceWorkspace.id ? storage.currentProjectId : '');
@@ -2255,21 +2352,61 @@ function buildCrossProjectPageMovePlan(
   if (!sourceWorkspaceProjects.some((entry) => entry.id === sourceWorkspaceProjectId)) {
     currentProjectIdByWorkspace[sourceWorkspace.id] = sourceProject.id;
   }
-  if (movingCurrentPage) currentProjectIdByWorkspace[destinationWorkspace.id] = destinationProject.id;
-  else if (!storage.projects.some((entry) =>
-    entry.id === currentProjectIdByWorkspace[destinationWorkspace.id] && entry.status !== 'archived',
-  )) currentProjectIdByWorkspace[destinationWorkspace.id] = destinationProject.id;
+
+  const destinationProjectId = currentProjectIdByWorkspace[destinationWorkspace.id];
+  const destinationProjectIsValid = storage.projects.some((entry) =>
+    entry.id === destinationProjectId && entry.status !== 'archived',
+  );
+  if (movingCurrentPage || !destinationProjectIsValid) {
+    currentProjectIdByWorkspace[destinationWorkspace.id] = destinationProject.id;
+  }
 
   return {
-    archivedPage,
-    movedPage: orderedMovedPage,
-    replacementPage: orderedReplacementPage,
-    sourceNeedsReplacement,
-    activePageIdsByProject,
     currentWorkspaceId: movingCurrentPage ? destinationWorkspace.id : storage.currentWorkspaceId,
     currentProjectId: movingCurrentPage ? destinationProject.id : storage.currentProjectId,
     currentProjectIdByWorkspace,
-    pages,
+  };
+}
+
+/** Builds page identities, ordering, and selections for a cross-project move. */
+function buildCrossProjectPageMovePlan(
+  storage: Required<JottathingStorage>,
+  context: PageMoveContext,
+  syncConfig: SyncConfig,
+  activeAccountId: string | undefined,
+  targetPageId: string | undefined,
+  position: 'before' | 'after',
+): CrossProjectPageMovePlan {
+  const records = createCrossProjectPageMoveRecords(
+    storage,
+    context,
+    syncConfig,
+    activeAccountId,
+    targetPageId,
+    position,
+  );
+  const ordered = orderCrossProjectPageMove(storage, context.page, records);
+  const pageSelections = repairActivePageMoveSelections(
+    storage,
+    context,
+    records,
+    ordered.movedPage,
+    ordered.replacementPage,
+  );
+  const projectSelections = repairProjectMoveSelections(
+    storage,
+    context,
+    pageSelections.movingCurrentPage,
+  );
+
+  return {
+    archivedPage: records.archivedPage,
+    movedPage: ordered.movedPage,
+    replacementPage: ordered.replacementPage,
+    sourceNeedsReplacement: records.sourcePages.length === 0,
+    activePageIdsByProject: pageSelections.activePageIdsByProject,
+    ...projectSelections,
+    pages: ordered.pages,
   };
 }
 

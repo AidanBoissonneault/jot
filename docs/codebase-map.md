@@ -78,6 +78,6 @@ Before simplification, on this checkout:
 
 After the queue consumer refactor, the focused queue suites pass (15 tests), root typecheck and the extension production build pass, and the full suite reports 58 failures / 330 passes across 388 tests with one unhandled rejection. The remaining failing files are `connectionLifecycle.test.ts`, `jottathingStore.optimistic.test.ts`, `managedBlocks.test.ts`, and `mediaUploadValidation.test.ts`; the queue consumer and payload-security tests pass. The full suite remains red.
 
-The earlier post-queue Fallow scan reported `movePageToProject` at 76 / 76 complexity. After the move plan extraction, Fallow reports 56,133 LOC, a 66/C health score, and 259 functions above thresholds; the plan helper is 31 / 30, with `readStorage` (75 / 52) and `resyncPendingChanges` (68 / 67) now leading the service hotspots.
+The earlier post-queue Fallow scan reported `movePageToProject` at 76 / 76 complexity. After decomposing move record creation, ordering, and selection repair, the page-move helpers fall below Fallow?s top 25 complexity findings. The scan reports 56,270 LOC and 258 functions above thresholds; `readStorage` (75 / 52) and `resyncPendingChanges` (68 / 67) lead the remaining service hotspots.
 
 The subsequent storage changes pass two focused workspace tests and root typecheck. The page-move tests pass five focused cases and root typecheck, including after the cross-project plan extraction. The extension build passes with its existing large-chunk warning.
