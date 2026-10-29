@@ -490,6 +490,29 @@ describe('Jottathing connection data lifecycle', () => {
     expect(readBrowserStorage().pages).toEqual([page]);
   });
 
+  it('does not assign ownerless work by matching an old email address', async () => {
+    seedLocalWorkspace({
+      ...connectedConfig,
+      authenticated: true,
+      userId: undefined,
+      syncQueueOwnerUserId: undefined,
+    });
+    await addPendingSyncOps(buildPageSyncOps({ page, project }));
+    stubJsonResponse({
+      authenticated: true,
+      userId: 'notion:original-account',
+      userEmail: 'user@example.test',
+      workspaceId: 'workspace-test',
+      connected: true,
+    });
+
+    const config = await notionClient.refreshSyncSession(true);
+
+    expect(config.syncQueueOwnerUserId).toBeNull();
+    expect(await notionClient.pendingSyncEventCount()).toBeGreaterThan(0);
+    await expect(notionClient.validateNotionCache()).rejects.toThrow('locked to its original Notion account');
+  });
+
   it('quarantines legacy queued edits until the user assigns them to an account', async () => {
     seedLocalWorkspace();
     await addPendingSyncOps(buildPageSyncOps({ page, project }));

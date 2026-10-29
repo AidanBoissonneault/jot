@@ -4965,7 +4965,7 @@ export const notionClient = {
     if (session.authenticated && session.userId) {
       const previousQueueOwner = syncConfig.syncQueueOwnerUserId ?? syncConfig.userId;
       const previousWorkspaceOwner = syncConfig.syncQueueOwnerWorkspaceId ??
-        syncConfig.workspaceId ?? workspaceFromHydrationSource(workspace.notionHydrationSource);
+        syncConfig.workspaceId;
       const previousQueueScope = previousQueueOwner
         ? `${previousQueueOwner}::${previousWorkspaceOwner ?? 'connected-workspace'}`
         : '';
@@ -4983,20 +4983,12 @@ export const notionClient = {
         syncQueueOwnerUserId = session.userId;
         syncQueueOwnerWorkspaceId = session.workspaceId;
       } else if (syncQueueOwnerUserId === undefined) {
-        const matchesLegacyAccount = syncConfig.authenticated &&
-          syncConfig.userEmail === session.userEmail &&
-          (!syncConfig.workspaceId || syncConfig.workspaceId === session.workspaceId);
         if (syncConfig.userId) {
           syncQueueOwnerUserId = syncConfig.userId;
-        } else if (matchesLegacyAccount) {
-          syncQueueOwnerUserId = session.userId;
         } else if (hasExplicitlyLoggedOut || syncConfig.userEmail || syncConfig.workspaceId) {
-          // Older releases cleared account identity on logout. Keep their queued
-          // content local until the user explicitly assigns it to this account.
+          // Keep unowned work local when prior account details exist.
           syncQueueOwnerUserId = null;
         } else {
-          // Local-only work created before the first Notion connection belongs
-          // to the account the user is connecting now.
           syncQueueOwnerUserId = session.userId;
         }
       }
@@ -5009,13 +5001,12 @@ export const notionClient = {
       }
     }
 
+    const accountConfig = session.authenticated && session.userId
+      ? { userId: session.userId, syncQueueOwnerUserId, syncQueueOwnerWorkspaceId }
+      : {};
     const nextConfig = await updateStoredSyncConfig({
       authenticated: session.authenticated,
-      ...(session.authenticated && session.userId ? { userId: session.userId } : {}),
-      ...(session.authenticated && session.userId ? { syncQueueOwnerUserId } : {}),
-      ...(session.authenticated && session.userId
-        ? { syncQueueOwnerWorkspaceId }
-        : {}),
+      ...accountConfig,
       userName: session.userName,
       userEmail: session.userEmail,
       connected: session.connected,
