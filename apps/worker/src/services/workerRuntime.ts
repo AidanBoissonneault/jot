@@ -38,7 +38,6 @@ import type {
 import type { DocumentContent, Project, ProjectPage } from '../../../../src/types/capture.js';
 
 export const JOTTATHING_SESSION_COOKIE = 'jottathing_session';
-export const LEGACY_SESSION_COOKIE = 'inkwell_session';
 
 export type { BlockOpsInput, PageSyncInput, ProjectSyncInput } from './workerSyncOperations.js';
 export type { EnqueueJob } from './workerQueueOperations.js';
@@ -81,7 +80,6 @@ function initSingletons(env: WorkerEnv): void {
   workerInstallationState = createWorkerInstallationState({
     auth,
     cookieName: JOTTATHING_SESSION_COOKIE,
-    legacyCookieName: LEGACY_SESSION_COOKIE,
     readJottathingSyncState,
     readStore,
   });

@@ -1,6 +1,6 @@
 /** @file Resolves authenticated installations and serializes per-installation state updates. */
 import type { Context } from 'hono';
-import { getCookie, setCookie } from 'hono/cookie';
+import { getCookie } from 'hono/cookie';
 import { HTTPException } from 'hono/http-exception';
 import type { AuthService, AuthSessionResult } from '../auth.js';
 import type { ConnectedWorkerStore, Identifier, WorkerEnv, WorkerStore } from '../types.js';
@@ -11,7 +11,6 @@ type ApiContext = Context<{ Bindings: WorkerEnv }>;
 interface WorkerInstallationStateDependencies {
   auth: AuthService;
   cookieName: string;
-  legacyCookieName?: string;
   readJottathingSyncState: (installationId: Identifier) => Promise<WorkerStore>;
   readStore: () => WorkerStore;
 }
@@ -23,27 +22,12 @@ const installationMutationLocks = new Map<string, Promise<unknown>>();
 export function createWorkerInstallationState({
   auth,
   cookieName,
-  legacyCookieName,
   readJottathingSyncState,
   readStore,
 }: WorkerInstallationStateDependencies) {
   /** Reads the application session cookie from an API request. */
   async function getJottathingSession(context: ApiContext): Promise<AuthSessionResult | null> {
-    const currentToken = getCookie(context, cookieName);
-    const token = currentToken ?? (legacyCookieName ? getCookie(context, legacyCookieName) : undefined);
-    const requestUrl = new URL(context.req.url);
-    const sharedDomain = requestUrl.hostname.endsWith('.byaidan.com') ? '.byaidan.com' : undefined;
-    if (token && !currentToken) {
-      setCookie(context, cookieName, token, {
-        httpOnly: true,
-        maxAge: 60 * 60 * 24 * 30,
-        path: '/',
-        sameSite: 'Lax',
-        secure: requestUrl.protocol === 'https:',
-        ...(sharedDomain ? { domain: sharedDomain } : {}),
-      });
-    }
-    return auth.getCustomSession(token);
+    return auth.getCustomSession(getCookie(context, cookieName));
   }
 
   /** Requires an application session or sets an unauthorized response. */

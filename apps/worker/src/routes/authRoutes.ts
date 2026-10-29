@@ -25,7 +25,6 @@ import {
 } from '../workerUtils.js';
 import {
   JOTTATHING_SESSION_COOKIE,
-  LEGACY_SESSION_COOKIE,
   auth,
   getJottathingSession,
   readJottathingSyncState,
@@ -36,6 +35,7 @@ import type { WorkerEnv } from '../types.js';
 
 const JOTTATHING_OAUTH_STATE_COOKIE = 'jottathing_notion_oauth_state';
 const LEGACY_OAUTH_STATE_COOKIE = 'inkwell_notion_oauth_state';
+const LEGACY_SESSION_COOKIE = 'inkwell_session';
 const SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 30;
 type AuthContext = Context<{ Bindings: WorkerEnv }>;
 
@@ -44,6 +44,7 @@ function sharedCookieDomain(requestUrl: string): string | undefined {
 }
 
 function clearSessionCookies(c: AuthContext): void {
+  // Expire old cookies without accepting them as authenticated sessions.
   for (const name of [JOTTATHING_SESSION_COOKIE, LEGACY_SESSION_COOKIE]) {
     deleteCookie(c, name, { path: '/' });
     const domain = sharedCookieDomain(c.req.url);
@@ -91,7 +92,7 @@ export function registerAuthRoutes(app: Hono<{ Bindings: WorkerEnv }>): void {
       c.header('Access-Control-Allow-Methods', 'GET,POST,DELETE,OPTIONS');
       c.header(
         'Access-Control-Allow-Headers',
-        'Content-Type, Authorization, X-Requested-With, X-Jottathing-Account, X-Inkwell-Account',
+        'Content-Type, Authorization, X-Requested-With, X-Jottathing-Account',
       );
       c.header('Access-Control-Allow-Credentials', 'true');
       c.header('Vary', 'Origin');
@@ -111,8 +112,7 @@ export function registerAuthRoutes(app: Hono<{ Bindings: WorkerEnv }>): void {
     if (requiresAccountBinding && c.req.method !== 'OPTIONS') {
       const session = await getJottathingSession(c);
       if (!session) return c.json({ error: 'Unauthorized' }, 401);
-      const expectedAccountId =
-        c.req.header('x-jottathing-account') ?? c.req.header('x-inkwell-account');
+      const expectedAccountId = c.req.header('x-jottathing-account');
       if (!expectedAccountId) {
         return c.json({ error: 'Refresh the Jottathing session before syncing.' }, 428);
       }
@@ -183,8 +183,7 @@ export function registerAuthRoutes(app: Hono<{ Bindings: WorkerEnv }>): void {
     if (!env.NOTION_OAUTH_CLIENT_SECRET) {
       return c.html(closePage('Notion login is not configured on the sync server yet.'), 503);
     }
-    const expectedState =
-      getCookie(c, JOTTATHING_OAUTH_STATE_COOKIE) ?? getCookie(c, LEGACY_OAUTH_STATE_COOKIE);
+    const expectedState = getCookie(c, JOTTATHING_OAUTH_STATE_COOKIE);
     const state = c.req.query('state') ?? '';
     const code = c.req.query('code') ?? '';
     const error = c.req.query('error') ?? '';
@@ -274,7 +273,7 @@ export function registerAuthRoutes(app: Hono<{ Bindings: WorkerEnv }>): void {
       return c.json({ connected: false, loggedOut: false, notionTokenRevoked: false, retryable: false }, 401);
     }
 
-    const token = getCookie(c, JOTTATHING_SESSION_COOKIE) ?? getCookie(c, LEGACY_SESSION_COOKIE);
+    const token = getCookie(c, JOTTATHING_SESSION_COOKIE);
     if (!token) {
       clearSessionCookies(c);
       return c.json({ connected: false, loggedOut: false, notionTokenRevoked: false, retryable: false }, 401);

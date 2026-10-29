@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import {
   computeHmacSignature,
+  createNotionOAuthState,
   notionOAuthGenerationFromState,
   revokeNotionToken,
   verifyNotionWebhookSignature,
@@ -185,6 +186,35 @@ describe('Notion OAuth generation binding', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it('does not accept the old OAuth state cookie', async () => {
+    const state = await createNotionOAuthState(env.NOTION_OAUTH_CLIENT_SECRET!, '7');
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ generation: '7' })));
+    vi.stubGlobal('fetch', fetchMock);
+    initSingletons(env);
+
+    const response = await workerApp.request(
+      `/auth/notion/callback?code=authorization-code&state=${encodeURIComponent(state)}`,
+      { headers: { Cookie: `inkwell_notion_oauth_state=${encodeURIComponent(state)}` } },
+      env,
+    );
+
+    expect(response.status).toBe(400);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('does not accept the old session cookie', async () => {
+    const sessionToken = 'old-session-cookie-token-test';
+    stubAuthenticatedJottathingSession(sessionToken, 'notion:old-session-cookie-test');
+    initSingletons(env);
+
+    const response = await workerApp.request('/session', {
+      headers: { Cookie: `inkwell_session=${sessionToken}` },
+    }, env);
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ authenticated: false, connected: false });
+  });
+
   it('revokes a newly exchanged token when deletion invalidates its OAuth generation', async () => {
     let generation = '7';
     const revokedTokens: string[] = [];
@@ -359,6 +389,23 @@ describe('connected route authorization', () => {
 
     expect(response.status).toBe(409);
     await expect(response.json()).resolves.toMatchObject({ error: expect.stringContaining('account changed') });
+  });
+
+  it('does not accept the old account-binding header', async () => {
+    const sessionToken = 'old-account-header-session-token-test';
+    const accountId = 'notion:old-account-header-test';
+    stubAuthenticatedJottathingSession(sessionToken, accountId);
+
+    const response = await workerApp.request('/sync/status?pageId=private-local-page', {
+      headers: {
+        Origin: 'http://localhost:3000',
+        Cookie: `jottathing_session=${sessionToken}`,
+        'X-Inkwell-Account': accountId,
+      },
+    }, env);
+
+    expect(response.status).toBe(428);
+    expect(response.headers.get('access-control-allow-headers')).not.toContain('X-Inkwell-Account');
   });
 
   it('expires the session cookie when logout is requested without a valid session', async () => {
