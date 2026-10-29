@@ -12,7 +12,7 @@ export { youtubeEmbedUrl } from '@/src/lib/youtubeUtils';
 const YOUTUBE_ALLOW =
   'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share';
 
-export const JottathingImage = Image.extend({
+const JottathingImage = Image.extend({
   addAttributes() {
     return {
       ...this.parent?.(),

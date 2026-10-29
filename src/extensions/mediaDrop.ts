@@ -1,6 +1,6 @@
 export const IMAGE_UPLOAD_MAX_BYTES = 20 * 1024 * 1024;
 export const AUDIO_UPLOAD_MAX_BYTES = 20 * 1024 * 1024;
-export const SUPPORTED_IMAGE_MIME_TYPES = [
+const SUPPORTED_IMAGE_MIME_TYPES = [
   'image/jpeg',
   'image/png',
   'image/gif',
@@ -150,7 +150,7 @@ export function isUploadableImageFile(file: File): boolean {
     file.size > 0 && file.size <= IMAGE_UPLOAD_MAX_BYTES;
 }
 
-export function isSupportedImageMimeType(mimeType: string): boolean {
+function isSupportedImageMimeType(mimeType: string): boolean {
   const normalizedMime = normalizeImageMimeType(mimeType);
   return SUPPORTED_IMAGE_MIME_TYPES.includes(
     normalizedMime as (typeof SUPPORTED_IMAGE_MIME_TYPES)[number],

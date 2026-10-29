@@ -12,7 +12,7 @@ export type UserPreferences = {
   interfaceScale: number;
 };
 
-export function normalizeThemePreference(value: unknown): ThemePreference {
+function normalizeThemePreference(value: unknown): ThemePreference {
   return value === 'light' || value === 'dark' || value === 'system' ? value : 'system';
 }
 
