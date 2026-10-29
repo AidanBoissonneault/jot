@@ -40,6 +40,25 @@ function makeMessage(jobId = '1b4f2a8a-4ed5-4d81-baaa-3d3c5d0d2e12') {
   };
 }
 
+function makeBlockJob(batchIndex = 0, batchSize = 1) {
+  return {
+    batchId: 'page-one:1',
+    batchIndex,
+    batchSize,
+    installationId: 42,
+    localId: 'page-one',
+    pageId: 'page-one',
+    projectId: 'project-one',
+    queuedVersion: 1,
+    type: 'block_op',
+    payload: {
+      page: { id: 'page-one' },
+      project: { id: 'project-one' },
+      ops: [{ opId: 'op-one' }],
+    },
+  };
+}
+
 async function expectInvalidStoredPayloadToBeDiscarded(payload: unknown) {
   const message = makeMessage();
   const payloadRead = makeQuery({ installation_id: 42, status: 'pending', payload });
@@ -146,21 +165,114 @@ describe('content-free sync queue references', () => {
     });
   });
 
+  it('records a successful final block batch and publishes completion', async () => {
+    const jobId = '1b4f2a8a-4ed5-4d81-baaa-3d3c5d0d2e12';
+    const message = makeMessage(jobId);
+    const payloadRead = makeQuery({ installation_id: 42, payload: makeBlockJob(), status: 'pending' });
+    const syncRead = makeQuery({ local_version: 1 });
+    const markSyncing = makeQuery(null);
+    const markSynced = makeQuery({ local_version: 1 });
+    const markProcessed = makeQuery(null);
+    const removePayload = makeQuery(null);
+    const pendingCheck = makeQuery([]);
+    runtime.supabase.from
+      .mockReturnValueOnce(payloadRead)
+      .mockReturnValueOnce(syncRead)
+      .mockReturnValueOnce(markSyncing)
+      .mockReturnValueOnce(markSynced)
+      .mockReturnValueOnce(markProcessed)
+      .mockReturnValueOnce(removePayload)
+      .mockReturnValueOnce(pendingCheck);
+    runtime.applyBlockOpsToNotionForInstallation.mockResolvedValueOnce({
+      page: { notionPageId: 'notion-page-one' },
+    });
+    const notify = vi.fn(async (_request: Request) => new Response('ok'));
+
+    await processSyncQueue({ messages: [message] } as never, {
+      SYNC_EVENTS: makeSyncEventsBinding(notify),
+    } as never);
+
+    expect(runtime.applyBlockOpsToNotionForInstallation).toHaveBeenCalledOnce();
+    expect(markSynced.update).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'synced',
+      synced_version: 1,
+      notion_block_id: 'notion-page-one',
+    }));
+    expect(markProcessed.update).toHaveBeenCalledWith(expect.objectContaining({ status: 'processed' }));
+    expect(message.ack).toHaveBeenCalledOnce();
+    expect(message.retry).not.toHaveBeenCalled();
+    const events = await Promise.all(notify.mock.calls.map(([request]) => request.clone().json()));
+    expect(events).toEqual([
+      { status: 'synced', pageId: 'page-one', notionBlockId: 'notion-page-one', version: 1 },
+      { status: 'queue_idle' },
+    ]);
+  });
+
+  it('skips stale page snapshots without writing to Notion', async () => {
+    const message = makeMessage();
+    const payloadRead = makeQuery({
+      installation_id: 42,
+      payload: {
+        installationId: 42,
+        localId: 'page-one',
+        pageId: 'page-one',
+        projectId: 'project-one',
+        queuedVersion: 1,
+        type: 'page',
+        payload: { page: { id: 'page-one' }, project: { id: 'project-one' } },
+      },
+      status: 'pending',
+    });
+    const syncRead = makeQuery({ local_version: 2 });
+    const markProcessed = makeQuery(null);
+    const removePayload = makeQuery(null);
+    runtime.supabase.from
+      .mockReturnValueOnce(payloadRead)
+      .mockReturnValueOnce(syncRead)
+      .mockReturnValueOnce(markProcessed)
+      .mockReturnValueOnce(removePayload)
+      .mockReturnValueOnce(makeQuery([]));
+
+    await processSyncQueue({ messages: [message] } as never, {
+      SYNC_EVENTS: makeSyncEventsBinding(),
+    } as never);
+
+    expect(syncRead.update).not.toHaveBeenCalled();
+    expect(runtime.pushPageToNotionForInstallation).not.toHaveBeenCalled();
+    expect(markProcessed.update).toHaveBeenCalledWith(expect.objectContaining({ status: 'processed' }));
+    expect(message.ack).toHaveBeenCalledOnce();
+    expect(message.retry).not.toHaveBeenCalled();
+  });
+
+  it('applies every block chunk but only marks the final chunk synced', async () => {
+    const message = makeMessage();
+    const payloadRead = makeQuery({ installation_id: 42, payload: makeBlockJob(0, 2), status: 'pending' });
+    const syncRead = makeQuery({ local_version: 1 });
+    const markSyncing = makeQuery(null);
+    const markProcessed = makeQuery(null);
+    runtime.supabase.from
+      .mockReturnValueOnce(payloadRead)
+      .mockReturnValueOnce(syncRead)
+      .mockReturnValueOnce(markSyncing)
+      .mockReturnValueOnce(markProcessed)
+      .mockReturnValueOnce(makeQuery(null))
+      .mockReturnValueOnce(makeQuery([]));
+
+    await processSyncQueue({ messages: [message] } as never, {
+      SYNC_EVENTS: makeSyncEventsBinding(),
+    } as never);
+
+    expect(runtime.applyBlockOpsToNotionForInstallation).toHaveBeenCalledOnce();
+    expect(markSyncing.update).toHaveBeenCalledWith(expect.objectContaining({ status: 'syncing' }));
+    expect(markProcessed.update).toHaveBeenCalledWith(expect.objectContaining({ status: 'processed' }));
+    expect(message.ack).toHaveBeenCalledOnce();
+    expect(message.retry).not.toHaveBeenCalled();
+  });
+
   it('retains a permanent Notion failure in the durable outbox for explicit retry', async () => {
     const jobId = '1b4f2a8a-4ed5-4d81-baaa-3d3c5d0d2e12';
     const message = makeMessage(jobId);
-    const job = {
-      batchId: 'page-one:1',
-      batchIndex: 0,
-      batchSize: 1,
-      installationId: 42,
-      localId: 'page-one',
-      pageId: 'page-one',
-      projectId: 'project-one',
-      queuedVersion: 1,
-      type: 'block_op',
-      payload: { page: { id: 'page-one' }, project: { id: 'project-one' }, ops: [{ opId: 'op-one' }] },
-    };
+    const job = makeBlockJob();
     const payloadRead = makeQuery({ installation_id: 42, payload: job, status: 'pending' });
     const syncRead = makeQuery({ local_version: 1 });
     const markSyncing = makeQuery(null);

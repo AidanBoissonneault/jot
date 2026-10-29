@@ -104,45 +104,8 @@ async function processQueuedSyncJob(
     const queuedVersion = job.queuedVersion;
     console.log('[queue] processing', job.type, 'v', queuedVersion);
 
-    let { data: row, error: syncRowError } = await supabase
-      .from('notion_block_sync')
-      .select('local_version')
-      .eq('installation_id', job.installationId)
-      .eq('local_id', job.localId)
-      .maybeSingle();
-    if (syncRowError) throw new Error('Unable to load the current sync version.');
+    const row = await getOrRepairSyncRow(job);
     syncRow = row;
-
-    // The RPC that assigned this version should already have created the
-    // state row. Repair it if an older deployment accepted a job without
-    // doing so, and never let a missing row look like a successful sync.
-    if (!row) {
-      const { error: insertError } = await supabase
-        .from('notion_block_sync')
-        .insert({
-          installation_id: job.installationId,
-          local_id: job.localId,
-          entity_type: job.type,
-          local_version: queuedVersion,
-          status: 'pending',
-        });
-      if (insertError) {
-        // A concurrent queue delivery may have repaired the same row first.
-        const { data: repairedRow, error: rereadError } = await supabase
-          .from('notion_block_sync')
-          .select('local_version')
-          .eq('installation_id', job.installationId)
-          .eq('local_id', job.localId)
-          .maybeSingle();
-        if (rereadError || !repairedRow) {
-          throw new Error('Unable to restore the sync version state.');
-        }
-        row = repairedRow;
-      } else {
-        row = { local_version: queuedVersion };
-      }
-      syncRow = row;
-    }
 
     if (row.local_version < queuedVersion) {
       throw new Error('The queued version is missing from durable sync state.');
@@ -166,76 +129,8 @@ async function processQueuedSyncJob(
       .eq('local_version', queuedVersion);
     if (syncingError) throw new Error('Unable to mark the sync as active.');
 
-    let notionBlockId: string | null = null;
-
-    if (job.type === 'block_op') {
-      const queuedPage = job.payload.page;
-      const queuedProject = job.payload.project;
-      if (!queuedPage || !queuedProject) throw new Error('Block queue job is missing page or project context.');
-      const result = await applyBlockOpsToNotionForInstallation(installationId, {
-        ops: job.payload.ops,
-        page: { ...queuedPage, content: queuedPage.content ?? { type: 'doc', content: [] } },
-        project: { ...queuedProject, stateContent: queuedProject.stateContent ?? { type: 'doc', content: [] } },
-        selectedParentPageId: job.payload.selectedParentPageId,
-      });
-      notionBlockId = result?.page?.notionPageId ?? null;
-    } else if (job.type === 'page') {
-      const queuedPage = job.payload.page;
-      const queuedProject = job.payload.project;
-      if (!queuedPage || !queuedProject) throw new Error('Page queue job is missing page or project context.');
-      const result = await pushPageToNotionForInstallation(installationId, {
-        page: { ...queuedPage, content: queuedPage.content ?? { type: 'doc', content: [] } },
-        project: { ...queuedProject, stateContent: queuedProject.stateContent ?? { type: 'doc', content: [] } },
-        selectedParentPageId: job.payload.selectedParentPageId,
-      });
-      notionBlockId = result?.page?.notionPageId ?? null;
-    } else {
-      const queuedProject = job.payload.project;
-      if (!queuedProject) throw new Error('Project queue job is missing project context.');
-      await syncProjectToNotionForInstallation(installationId, {
-        project: { ...queuedProject, stateContent: queuedProject.stateContent ?? { type: 'doc', content: [] } },
-        selectedParentPageId: job.payload.selectedParentPageId,
-      });
-    }
-
-    const isFinalBatchMessage = job.type !== 'block_op' || job.batchIndex === job.batchSize - 1;
-    const isCurrentVersion = row.local_version <= queuedVersion;
-    if (isFinalBatchMessage && isCurrentVersion) {
-      const { data: syncedRow, error: syncedStateError } = await supabase
-        .from('notion_block_sync')
-        .update({
-          status: 'synced',
-          synced_version: queuedVersion,
-          notion_block_id: notionBlockId,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('installation_id', job.installationId)
-        .eq('local_id', job.localId)
-        .eq('local_version', queuedVersion)
-        .select('local_version')
-        .maybeSingle();
-      if (syncedStateError) throw new Error('Unable to persist the completed sync state.');
-
-      if (syncedRow) {
-        const doStub = env.SYNC_EVENTS.get(env.SYNC_EVENTS.idFromName(installationId));
-        await doStub.fetch(new Request('http://do/notify', {
-          method: 'POST',
-          body: JSON.stringify({ status: 'synced', pageId: job.localId, notionBlockId, version: queuedVersion }),
-        })).catch(() => undefined);
-      } else {
-        // A newer edit may have been queued while Notion was being updated.
-        // Do not publish a stale "synced" event over its pending state.
-        const { data: latestRow, error: latestRowError } = await supabase
-          .from('notion_block_sync')
-          .select('local_version')
-          .eq('installation_id', job.installationId)
-          .eq('local_id', job.localId)
-          .maybeSingle();
-        if (latestRowError || !latestRow || latestRow.local_version <= queuedVersion) {
-          throw new Error('Unable to confirm the completed sync version.');
-        }
-      }
-    }
+    const notionBlockId = await applyQueuedSyncMutation(job, installationId);
+    await markQueuedSyncAsCompleted(job, row, notionBlockId, env);
 
     syncOperationSucceeded = true;
     await markAndRemoveQueuedPayload(jobId);
@@ -243,75 +138,210 @@ async function processQueuedSyncJob(
     console.log('[queue] done', job.type);
     message.ack();
   } catch (error) {
-    console.error(
-      '[queue] failed',
-      job.type,
-      error && typeof error === 'object' && 'isNotionApiError' in error
-        ? safeNotionErrorMetadata(error)
-        : safeErrorMetadata(error),
-    );
-
-    // A remote mutation already succeeded; retry only the content-free
-    // reference cleanup, never replay the Notion write for this row.
-    if (syncOperationSucceeded) {
-      message.retry();
-      return;
-    }
-
-    if (isRevokedInstallationError(error)) {
-      await ackAfterPayloadCleanup(message, jobId, env, String(job.installationId));
-      return;
-    }
-
-    const { error: failureStateError } = await supabase
-      .from('notion_block_sync')
-      .update({ status: 'failed', updated_at: new Date().toISOString() })
-      .eq('installation_id', job.installationId)
-      .eq('local_id', job.localId)
-      .eq('local_version', job.queuedVersion);
-    if (failureStateError) {
-      console.error('[queue] failed sync state could not be persisted', safeErrorMetadata(failureStateError));
-      message.retry();
-      return;
-    }
-
-    if (!syncRow || syncRow.local_version <= job.queuedVersion) {
-      const installationId = String(job.installationId);
-      const doStub = env.SYNC_EVENTS.get(env.SYNC_EVENTS.idFromName(installationId));
-      const errorRecord = error && typeof error === 'object'
-        ? error as { code?: unknown; message?: unknown; status?: unknown }
-        : undefined;
-      const statusCode = typeof errorRecord?.status === 'number' ? errorRecord.status : undefined;
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      const userMessage = notionApiHttpFailure(error)?.body.message ?? errorMessage;
-      await doStub.fetch(new Request('http://do/notify', {
-        method: 'POST',
-        body: JSON.stringify({
-          status: 'failed',
-          pageId: job.localId,
-          message: userMessage,
-          ...(typeof errorRecord?.code === 'string' ? { code: errorRecord.code } : {}),
-          ...(statusCode !== undefined ? { statusCode } : {}),
-        }),
-      })).catch(() => undefined);
-    }
-
-    if (isUnmappedNotionContentError(error) || isPermanentNotionFailure(error)) {
-      try {
-        // The extension removes operations from its local outbox as soon as
-        // this durable payload is accepted. Retain permanent failures in the
-        // server outbox so an explicit Sync retry can replay the exact edits.
-        await retainFailedQueuePayload(jobId, job);
-        await notifyQueueIdleIfDrained(env, String(job.installationId));
-        message.ack();
-      } catch (retentionError) {
-        console.error('[queue] failed sync payload could not be retained', safeErrorMetadata(retentionError));
-        message.retry();
-      }
-    } else {
-      message.retry();
-    }
+    await handleQueuedSyncFailure(message, jobId, job, env, syncRow, syncOperationSucceeded, error);
   }
+}
+
+/** Loads durable version state and repairs a missing row without losing a concurrent update. */
+async function getOrRepairSyncRow(job: SyncQueueMessage): Promise<{ local_version: number }> {
+  let { data: row, error } = await supabase
+    .from('notion_block_sync')
+    .select('local_version')
+    .eq('installation_id', job.installationId)
+    .eq('local_id', job.localId)
+    .maybeSingle();
+  if (error) throw new Error('Unable to load the current sync version.');
+  if (row) return row;
+
+  const { error: insertError } = await supabase
+    .from('notion_block_sync')
+    .insert({
+      installation_id: job.installationId,
+      local_id: job.localId,
+      entity_type: job.type,
+      local_version: job.queuedVersion,
+      status: 'pending',
+    });
+  if (!insertError) return { local_version: job.queuedVersion };
+
+  // A concurrent queue delivery may have repaired the same row first.
+  const { data: repairedRow, error: rereadError } = await supabase
+    .from('notion_block_sync')
+    .select('local_version')
+    .eq('installation_id', job.installationId)
+    .eq('local_id', job.localId)
+    .maybeSingle();
+  if (rereadError || !repairedRow) throw new Error('Unable to restore the sync version state.');
+  return repairedRow;
+}
+
+/** Applies the Notion mutation carried by a validated queue payload. */
+async function applyQueuedSyncMutation(job: SyncQueueMessage, installationId: string): Promise<string | null> {
+  if (job.type === 'block_op') {
+    const { page, project } = job.payload;
+    if (!page || !project) throw new Error('Block queue job is missing page or project context.');
+    const result = await applyBlockOpsToNotionForInstallation(installationId, {
+      ops: job.payload.ops,
+      page: { ...page, content: page.content ?? { type: 'doc', content: [] } },
+      project: { ...project, stateContent: project.stateContent ?? { type: 'doc', content: [] } },
+      selectedParentPageId: job.payload.selectedParentPageId,
+    });
+    return result?.page?.notionPageId ?? null;
+  }
+
+  if (job.type === 'page') {
+    const { page, project } = job.payload;
+    if (!page || !project) throw new Error('Page queue job is missing page or project context.');
+    const result = await pushPageToNotionForInstallation(installationId, {
+      page: { ...page, content: page.content ?? { type: 'doc', content: [] } },
+      project: { ...project, stateContent: project.stateContent ?? { type: 'doc', content: [] } },
+      selectedParentPageId: job.payload.selectedParentPageId,
+    });
+    return result?.page?.notionPageId ?? null;
+  }
+
+  const { project } = job.payload;
+  if (!project) throw new Error('Project queue job is missing project context.');
+  await syncProjectToNotionForInstallation(installationId, {
+    project: { ...project, stateContent: project.stateContent ?? { type: 'doc', content: [] } },
+    selectedParentPageId: job.payload.selectedParentPageId,
+  });
+  return null;
+}
+
+/** Marks the final current batch as synced, unless a newer edit won the race. */
+async function markQueuedSyncAsCompleted(
+  job: SyncQueueMessage,
+  row: { local_version: number },
+  notionBlockId: string | null,
+  env: WorkerEnv,
+): Promise<void> {
+  const isFinalBatch = job.type !== 'block_op' || job.batchIndex === job.batchSize - 1;
+  if (!isFinalBatch || row.local_version > job.queuedVersion) return;
+
+  const { data: syncedRow, error } = await supabase
+    .from('notion_block_sync')
+    .update({
+      status: 'synced',
+      synced_version: job.queuedVersion,
+      notion_block_id: notionBlockId,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('installation_id', job.installationId)
+    .eq('local_id', job.localId)
+    .eq('local_version', job.queuedVersion)
+    .select('local_version')
+    .maybeSingle();
+  if (error) throw new Error('Unable to persist the completed sync state.');
+
+  const installationId = String(job.installationId);
+  if (syncedRow) {
+    const doStub = env.SYNC_EVENTS.get(env.SYNC_EVENTS.idFromName(installationId));
+    await doStub.fetch(new Request('http://do/notify', {
+      method: 'POST',
+      body: JSON.stringify({
+        status: 'synced',
+        pageId: job.localId,
+        notionBlockId,
+        version: job.queuedVersion,
+      }),
+    })).catch(() => undefined);
+    return;
+  }
+
+  // A newer edit may have been queued while Notion was being updated.
+  const { data: latestRow, error: latestError } = await supabase
+    .from('notion_block_sync')
+    .select('local_version')
+    .eq('installation_id', job.installationId)
+    .eq('local_id', job.localId)
+    .maybeSingle();
+  if (latestError || !latestRow || latestRow.local_version <= job.queuedVersion) {
+    throw new Error('Unable to confirm the completed sync version.');
+  }
+}
+
+/** Applies the failure policy for a job that did not complete. */
+async function handleQueuedSyncFailure(
+  message: Message<SyncQueueReference>,
+  jobId: string,
+  job: SyncQueueMessage,
+  env: WorkerEnv,
+  syncRow: { local_version: number } | null | undefined,
+  syncOperationSucceeded: boolean,
+  error: unknown,
+): Promise<void> {
+  console.error(
+    '[queue] failed',
+    job.type,
+    error && typeof error === 'object' && 'isNotionApiError' in error
+      ? safeNotionErrorMetadata(error)
+      : safeErrorMetadata(error),
+  );
+
+  // The Notion write and sync state succeeded. Retry cleanup without marking
+  // the operation itself as failed.
+  if (syncOperationSucceeded) {
+    message.retry();
+    return;
+  }
+
+  if (isRevokedInstallationError(error)) {
+    await ackAfterPayloadCleanup(message, jobId, env, String(job.installationId));
+    return;
+  }
+
+  const { error: failureStateError } = await supabase
+    .from('notion_block_sync')
+    .update({ status: 'failed', updated_at: new Date().toISOString() })
+    .eq('installation_id', job.installationId)
+    .eq('local_id', job.localId)
+    .eq('local_version', job.queuedVersion);
+  if (failureStateError) {
+    console.error('[queue] failed sync state could not be persisted', safeErrorMetadata(failureStateError));
+    message.retry();
+    return;
+  }
+
+  if (!syncRow || syncRow.local_version <= job.queuedVersion) {
+    await notifyQueueJobFailed(job, error, env);
+  }
+
+  if (!isUnmappedNotionContentError(error) && !isPermanentNotionFailure(error)) {
+    message.retry();
+    return;
+  }
+
+  try {
+    // The extension already removed accepted operations from its local outbox.
+    await retainFailedQueuePayload(jobId, job);
+    await notifyQueueIdleIfDrained(env, String(job.installationId));
+    message.ack();
+  } catch (retentionError) {
+    console.error('[queue] failed sync payload could not be retained', safeErrorMetadata(retentionError));
+    message.retry();
+  }
+}
+
+/** Publishes a user-facing failure only if this job is still current. */
+async function notifyQueueJobFailed(job: SyncQueueMessage, error: unknown, env: WorkerEnv): Promise<void> {
+  const errorRecord = error && typeof error === 'object'
+    ? error as { code?: unknown; status?: unknown }
+    : undefined;
+  const statusCode = typeof errorRecord?.status === 'number' ? errorRecord.status : undefined;
+  const errorMessage = error instanceof Error ? error.message : String(error);
+  const userMessage = notionApiHttpFailure(error)?.body.message ?? errorMessage;
+  const doStub = env.SYNC_EVENTS.get(env.SYNC_EVENTS.idFromName(String(job.installationId)));
+  await doStub.fetch(new Request('http://do/notify', {
+    method: 'POST',
+    body: JSON.stringify({
+      status: 'failed',
+      pageId: job.localId,
+      message: userMessage,
+      ...(typeof errorRecord?.code === 'string' ? { code: errorRecord.code } : {}),
+      ...(statusCode !== undefined ? { statusCode } : {}),
+    }),
+  })).catch(() => undefined);
 }
 
 /** Removes a processed or discarded payload from Supabase. */
