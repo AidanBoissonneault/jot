@@ -1798,6 +1798,65 @@ describe('optimistic page creation', () => {
     expect(store.saveStatus).toBe('creating');
   });
 
+  test('does not restore a stale auto-title page list after an early rename', async () => {
+    const optimisticPage: ProjectPage = {
+      ...basePage,
+      id: 'temp-page-early-rename',
+      title: 'Auto Page Name',
+      syncState: 'creating',
+    };
+    const renamedTempPage = { ...optimisticPage, title: 'User Page Name' };
+    const resolvedPage: ProjectPage = {
+      ...optimisticPage,
+      id: 'page-early-rename',
+      title: 'Auto Page Name',
+      syncState: 'saving',
+    };
+    const renamedResolvedPage = { ...resolvedPage, title: 'User Page Name' };
+    const settled = deferred<ProjectPage>();
+    const firstPageLoad = deferred<ProjectPage[]>();
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ queued: true, versions: {} })));
+    let renameStarted = false;
+    let pageListRequests = 0;
+    vi.spyOn(notionClient, 'createProjectPage').mockResolvedValue({
+      page: optimisticPage,
+      settled: settled.promise,
+    });
+    vi.spyOn(notionClient, 'renameProjectPage').mockImplementation(async () => {
+      renameStarted = true;
+      return renamedTempPage;
+    });
+    vi.spyOn(notionClient, 'listProjects').mockResolvedValue([baseProject]);
+    vi.spyOn(notionClient, 'listProjectPages').mockImplementation(async () => {
+      if (!renameStarted) return [basePage];
+      pageListRequests += 1;
+      return pageListRequests === 1 ? firstPageLoad.promise : [renamedResolvedPage];
+    });
+    const store = useJottathingStore();
+
+    try {
+      await seedStore(store);
+      await store.createPage();
+      await flushPromises(10);
+      const rename = store.renameCurrentPage('User Page Name');
+      await waitFor(() => expect(pageListRequests).toBeGreaterThan(0));
+
+      settled.resolve(resolvedPage);
+      await waitFor(() => expect(pageListRequests).toBe(2));
+      await waitFor(() => expect(store.currentPage?.id).toBe(resolvedPage.id));
+      firstPageLoad.resolve([optimisticPage]);
+      await rename;
+      await flushPromises(5);
+
+      expect(store.pages.map((page) => page.id)).toEqual([renamedResolvedPage.id]);
+      expect(store.pages[0]?.title).toBe('User Page Name');
+      expect(store.currentPage?.title).toBe('User Page Name');
+    } finally {
+      firstPageLoad.resolve([optimisticPage]);
+      vi.restoreAllMocks();
+    }
+  });
+
   test('replays latest edit after temp page reconciliation through the local queue', async () => {
     const fetchMock = vi.fn(async () => jsonResponse({ queued: true, versions: { 'page-jottathing': 1 } }));
     vi.stubGlobal('fetch', fetchMock);

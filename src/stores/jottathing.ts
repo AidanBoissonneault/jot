@@ -63,6 +63,7 @@ export const useJottathingStore = defineStore('jottathing', () => {
   let pullMessageTimer: number | undefined;
   let initializationPromise: Promise<void> | undefined;
   let notionParentPageRequestId = 0;
+  let projectPagesRequestId = 0;
   const isLoadingNotionParentPages = ref(false);
   const syncConfig = ref<SyncConfig>({
     serverUrl: 'http://localhost:8787',
@@ -722,12 +723,20 @@ export const useJottathingStore = defineStore('jottathing', () => {
   }
 
   async function loadProjectPages() {
-    if (!currentProjectId.value) {
+    const requestId = ++projectPagesRequestId;
+    const requestedProjectId = currentProjectId.value;
+    if (!requestedProjectId) {
       pages.value = [];
       return;
     }
 
-    pages.value = await notionClient.listProjectPages(currentProjectId.value);
+    const loadedPages = await notionClient.listProjectPages(requestedProjectId);
+    if (
+      requestId === projectPagesRequestId &&
+      currentProjectId.value === requestedProjectId
+    ) {
+      pages.value = loadedPages;
+    }
   }
 
   async function saveCurrentPageContent(
@@ -858,24 +867,24 @@ export const useJottathingStore = defineStore('jottathing', () => {
       applyPageSyncState(creation.page);
 
       void creation.settled.then(async (page) => {
-        const wasViewingPage = currentPage.value?.id === creation.page.id;
-
         // A concurrent project reconciliation or orphan recovery can replace
         // the optimistic project ID while the new page is being saved.
         if (currentProjectId.value === requestedProjectId) {
           currentProjectId.value = page.projectId;
         }
 
-        const isStillViewingCreatedProject = currentProjectId.value === page.projectId;
-        if (isStillViewingCreatedProject) {
+        if (currentProjectId.value === page.projectId) {
           projects.value = await notionClient.listProjects();
           void refreshWorkspaceMenuTree().catch(() => undefined);
           await loadProjectPages();
         }
 
-        if (wasViewingPage && isStillViewingCreatedProject) {
-          currentPage.value = page;
-          applyPageSyncState(page);
+        if (
+          currentProjectId.value === page.projectId &&
+          (currentPage.value?.id === creation.page.id || currentPage.value?.id === page.id)
+        ) {
+          currentPage.value = pages.value.find((storedPage) => storedPage.id === page.id) ?? page;
+          applyPageSyncState(currentPage.value);
         }
       }).catch(async (error) => {
         const message =
