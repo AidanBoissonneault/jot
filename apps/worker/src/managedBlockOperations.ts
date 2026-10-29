@@ -98,14 +98,6 @@ export async function applyManagedBlockOps({
     localPageId,
     tiptapDocumentToNotionBlocks,
   );
-  const replacementOp = ops.find((op) => op.type === 'block_reorder');
-  if (replacementOp) {
-    // Keep known remote identities. replaceManagedBlocks can reconcile a
-    // non-empty snapshot; an empty queue envelope must never clear the note.
-    if (!content.content?.length) return { createdBlocks: [], baselineContent };
-    return replaceManagedBlocks(store, localPageId, notionPageId, content, baselineContent);
-  }
-
   const isGranularBatch = ops.every((op) =>
     ['page_upsert', 'blocks_reset', 'block_create', 'block_update', 'block_delete'].includes(
       op.type,

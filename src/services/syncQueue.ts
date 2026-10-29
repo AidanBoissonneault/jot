@@ -685,13 +685,9 @@ function fullPageReplacementOps(
 }
 
 export function compactPendingSyncOps(ops: BlockSyncOp[]): BlockSyncOp[] {
-  const sorted = removeOpsSupersededByFullSnapshots(
-    expandLegacyFullPageSnapshots(
-      collapseLegacyFullPageSnapshots(ops
-        .map((op) => ({ ...op, payload: { ...op.payload } }))
-        .sort((first, second) => first.sequence - second.sequence)),
-    ).map(stripLegacySyncContext),
-  );
+  const sorted = removeOpsSupersededByResetSnapshots(ops
+    .map((op) => ({ ...op, payload: { ...op.payload } }))
+    .sort((first, second) => first.sequence - second.sequence));
   const keep = new Set(sorted.map((op) => op.opId));
   const latestUpdateByBlock = new Map<string, string>();
   const createByBlock = new Map<string, BlockSyncOp>();
@@ -759,49 +755,11 @@ export function compactPendingSyncOps(ops: BlockSyncOp[]): BlockSyncOp[] {
   return sorted.filter((op) => keep.has(op.opId));
 }
 
-function expandLegacyFullPageSnapshots(ops: BlockSyncOp[]): BlockSyncOp[] {
-  return ops.flatMap((op) => {
-    if (op.type !== 'block_reorder' || !op.payload.page.content) return [op];
-    const blocks = blocksById(op.payload.page.content);
-    const order = op.payload.order?.filter((id) => blocks.has(id)) ?? Array.from(blocks.keys());
-    const reset: BlockSyncOp = {
-      ...op,
-      type: 'blocks_reset',
-      payload: { ...op.payload, order: undefined, replaceAll: undefined },
-    };
-    const creates = order.map((jottathingBlockId, index): BlockSyncOp => ({
-      ...op,
-      opId: `${op.opId}:block:${jottathingBlockId}`,
-      type: 'block_create',
-      jottathingBlockId,
-      sequence: op.sequence + ((index + 1) / (order.length + 1)),
-      payload: {
-        ...op.payload,
-        block: blocks.get(jottathingBlockId),
-        order: undefined,
-        replaceAll: undefined,
-        index,
-        afterJottathingBlockId: order[index - 1],
-      },
-    }));
-    return [reset, ...creates];
-  });
-}
-
-function stripLegacySyncContext(op: BlockSyncOp): BlockSyncOp {
-  const { content: _content, ...page } = op.payload.page;
-  const { stateContent: _stateContent, syncConflicts: _syncConflicts, ...project } = op.payload.project;
-  return {
-    ...op,
-    payload: { ...op.payload, page, project },
-  };
-}
-
-function removeOpsSupersededByFullSnapshots(ops: BlockSyncOp[]): BlockSyncOp[] {
+function removeOpsSupersededByResetSnapshots(ops: BlockSyncOp[]): BlockSyncOp[] {
   const latestSnapshotByPage = new Map<string, BlockSyncOp>();
 
   for (const op of ops) {
-    if (op.type !== 'blocks_reset' && (op.type !== 'block_reorder' || !op.payload.replaceAll)) continue;
+    if (op.type !== 'blocks_reset') continue;
     const previous = latestSnapshotByPage.get(op.pageId);
     if (!previous || previous.sequence < op.sequence) {
       latestSnapshotByPage.set(op.pageId, op);
@@ -812,50 +770,6 @@ function removeOpsSupersededByFullSnapshots(ops: BlockSyncOp[]): BlockSyncOp[] {
     const snapshot = latestSnapshotByPage.get(op.pageId);
     return !snapshot || op.sequence > snapshot.sequence || op.opId === snapshot.opId;
   });
-}
-
-function collapseLegacyFullPageSnapshots(ops: BlockSyncOp[]): BlockSyncOp[] {
-  const batches = new Map<string, BlockSyncOp[]>();
-
-  for (const op of ops) {
-    const key = `${op.pageId}\n${op.createdAt}`;
-    const batch = batches.get(key) ?? [];
-    batch.push(op);
-    batches.set(key, batch);
-  }
-
-  const removed = new Set<string>();
-  const replacements = new Map<string, BlockSyncOp>();
-
-  for (const batch of batches.values()) {
-    const pageUpsert = batch.find((op) => op.type === 'page_upsert');
-    const creates = batch.filter((op) => op.type === 'block_create' && op.jottathingBlockId);
-    if (!pageUpsert || !creates.length) continue;
-
-    const order = Array.from(blocksById(pageUpsert.payload.page.content).keys());
-    const createdIds = new Set(creates.map((op) => op.jottathingBlockId));
-    if (!order.length || order.some((id) => !createdIds.has(id))) continue;
-
-    const snapshotOps = [pageUpsert, ...creates];
-    removed.add(pageUpsert.opId);
-    for (const create of creates) removed.add(create.opId);
-    replacements.set(pageUpsert.opId, {
-      ...pageUpsert,
-      type: 'block_reorder',
-      sequence: Math.max(...snapshotOps.map((op) => op.sequence)),
-      localVersion: Math.max(...snapshotOps.map((op) => op.localVersion)),
-      payload: {
-        ...pageUpsert.payload,
-        order,
-        replaceAll: true,
-      },
-    });
-  }
-
-  return [
-    ...ops.filter((op) => !removed.has(op.opId)),
-    ...replacements.values(),
-  ].sort((first, second) => first.sequence - second.sequence);
 }
 
 function blocksById(content: DocumentContent | undefined): Map<string, DocumentContent> {

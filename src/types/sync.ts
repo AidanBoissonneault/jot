@@ -57,8 +57,7 @@ export type SyncBlockOperationType =
   | 'blocks_reset'
   | 'block_create'
   | 'block_update'
-  | 'block_delete'
-  | 'block_reorder';
+  | 'block_delete';
 
 /** Describes one durable local mutation with ordering and page context. */
 export type SyncBlockOperation = {
@@ -73,16 +72,13 @@ export type SyncBlockOperation = {
   baseKnownSyncVersion?: number;
   deliveryBlocked?: SyncBlockDeliveryConflict;
   payload: {
-    // content/stateContent remain optional for compatibility with queues made
-    // by older extension versions. New operations only carry small metadata.
-    page: Omit<ProjectPage, 'content'> & { content?: DocumentContent };
-    project: Omit<Project, 'stateContent'> & { stateContent?: DocumentContent };
+    // Document bodies travel through block fields, keeping sync context small.
+    page: Omit<ProjectPage, 'content'>;
+    project: Omit<Project, 'stateContent' | 'syncConflicts'>;
     block?: DocumentContent;
     previousBlock?: DocumentContent;
-    order?: string[];
     index?: number;
     afterJottathingBlockId?: string;
-    replaceAll?: boolean;
     selectedParentPageId?: string;
   };
 };

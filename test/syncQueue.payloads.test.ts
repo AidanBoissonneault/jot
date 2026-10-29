@@ -52,8 +52,8 @@ describe('block sync queue payloads', () => {
     expect(ops).toHaveLength(1);
     expect(ops[0].type).toBe('block_update');
     expect(ops[0].payload.block).toEqual(nextBlocks[50]);
-    expect(ops[0].payload.page.content).toBeUndefined();
-    expect(ops[0].payload.project.stateContent).toBeUndefined();
+    expect(ops[0].payload.page).not.toHaveProperty('content');
+    expect(ops[0].payload.project).not.toHaveProperty('stateContent');
     expect(JSON.stringify(ops).length).toBeLessThan(5_000);
   });
 

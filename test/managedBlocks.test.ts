@@ -219,8 +219,8 @@ describe('managed block snapshot replacement', () => {
       localPageId: 'local-page',
       notionPageId: 'notion-page',
       ops: [{
-        type: 'block_reorder',
-        payload: { replaceAll: true },
+        type: 'blocks_reset',
+        payload: {},
       }],
       content: { type: 'doc', content: [] },
       appendManagedBlocks: vi.fn(),

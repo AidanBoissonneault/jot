@@ -201,14 +201,14 @@ export interface BlockQueuePayload {
 
 /** Describes the complete context carried by a full-page queue message. */
 export interface PageQueuePayload {
-  page: SyncBlockOperation['payload']['page'];
-  project: SyncBlockOperation['payload']['project'];
+  page: ProjectPage;
+  project: Project;
   selectedParentPageId: string | undefined;
 }
 
 /** Describes the complete context carried by a project queue message. */
 export interface ProjectQueuePayload {
-  project: SyncBlockOperation['payload']['project'];
+  project: Project;
   selectedParentPageId: string | undefined;
 }
 

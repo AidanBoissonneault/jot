@@ -182,8 +182,8 @@ async function applyQueuedSyncMutation(job: SyncQueueMessage, installationId: st
     if (!page || !project) throw new Error('Block queue job is missing page or project context.');
     const result = await applyBlockOpsToNotionForInstallation(installationId, {
       ops: job.payload.ops,
-      page: { ...page, content: page.content ?? { type: 'doc', content: [] } },
-      project: { ...project, stateContent: project.stateContent ?? { type: 'doc', content: [] } },
+      page: { ...page, content: { type: 'doc', content: [] } },
+      project: { ...project, stateContent: { type: 'doc', content: [] } },
       selectedParentPageId: job.payload.selectedParentPageId,
     });
     return result?.page?.notionPageId ?? null;
@@ -193,8 +193,8 @@ async function applyQueuedSyncMutation(job: SyncQueueMessage, installationId: st
     const { page, project } = job.payload;
     if (!page || !project) throw new Error('Page queue job is missing page or project context.');
     const result = await pushPageToNotionForInstallation(installationId, {
-      page: { ...page, content: page.content ?? { type: 'doc', content: [] } },
-      project: { ...project, stateContent: project.stateContent ?? { type: 'doc', content: [] } },
+      page,
+      project,
       selectedParentPageId: job.payload.selectedParentPageId,
     });
     return result?.page?.notionPageId ?? null;
@@ -203,7 +203,7 @@ async function applyQueuedSyncMutation(job: SyncQueueMessage, installationId: st
   const { project } = job.payload;
   if (!project) throw new Error('Project queue job is missing project context.');
   await syncProjectToNotionForInstallation(installationId, {
-    project: { ...project, stateContent: project.stateContent ?? { type: 'doc', content: [] } },
+    project,
     selectedParentPageId: job.payload.selectedParentPageId,
   });
   return null;

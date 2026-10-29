@@ -2737,7 +2737,7 @@ describe('page title and content saves', () => {
     const creates = compacted.filter((op) => op.type === 'block_create');
     expect(creates).toHaveLength(1);
     expect(creates[0].payload.block).toEqual(blockWithId('new-block', 'updated'));
-    expect(creates[0].payload.page.content).toBeUndefined();
+    expect(creates[0].payload.page).not.toHaveProperty('content');
   });
 
   test('a create followed by delete before delivery drops both redundant block ops', async () => {
@@ -2793,7 +2793,7 @@ describe('page title and content saves', () => {
 
     const requestBody = await flushAndReadRequest(fetchMock);
     expect(requestBody.ops).toHaveLength(1);
-    expect(requestBody.ops[0].payload.page.content).toBeUndefined();
+    expect(requestBody.ops[0].payload.page).not.toHaveProperty('content');
     expect(requestBody.ops[0].payload.block).toEqual(blockWithId('force-block', 'third'));
     expect(requestBody.ops[0].localVersion).toBeGreaterThan(1);
   });
@@ -2886,66 +2886,13 @@ describe('offline queue lifecycle', () => {
     for (const pageId of ['page-jottathing', 'page-local-two']) {
       const ops = pageOps.filter((op) => op.pageId === pageId);
       expect(ops.map((op) => op.type)).toEqual(['blocks_reset', 'block_create']);
-      expect(ops.every((op) => op.payload.page.content === undefined)).toBe(true);
+      expect(ops.every((op) => !('content' in op.payload.page))).toBe(true);
     }
     expect(readBrowserStorage().notionHydrationSource).toBe(
       'http://localhost:8787::workspace-first-sync',
     );
     expect(await notionClient.needsInitialNotionHydration()).toBe(false);
     expect(await notionClient.prepareLocalWorkspaceForFirstSync()).toBe(false);
-  });
-
-  test('repairs legacy first-sync block batches into one authoritative snapshot', () => {
-    const page = {
-      ...basePage,
-      content: docWithBlock('legacy-block', 'only once'),
-    };
-    const shared = {
-      pageId: page.id,
-      projectId: baseProject.id,
-      createdAt: '2026-09-11T12:00:00.000Z',
-      payload: { page, project: baseProject },
-    };
-    const legacyOps: SyncBlockOperation[] = [
-      {
-        ...shared,
-        opId: 'legacy-page-upsert',
-        type: 'page_upsert',
-        sequence: 1,
-        localVersion: 1,
-      },
-      {
-        ...shared,
-        opId: 'legacy-block-create',
-        type: 'block_create',
-        jottathingBlockId: 'legacy-block',
-        sequence: 2,
-        localVersion: 2,
-        payload: {
-          ...shared.payload,
-          block: blockWithId('legacy-block', 'only once'),
-        },
-      },
-    ];
-
-    const compacted = compactPendingSyncOps(legacyOps);
-
-    expect(compacted).toHaveLength(2);
-    expect(compacted.map((op) => op.type)).toEqual(['blocks_reset', 'block_create']);
-    expect(compacted[0]).toMatchObject({
-      opId: 'legacy-page-upsert',
-      localVersion: 2,
-    });
-    expect(compacted[1]).toMatchObject({
-      opId: 'legacy-page-upsert:block:legacy-block',
-      jottathingBlockId: 'legacy-block',
-      localVersion: 2,
-      payload: {
-        block: blockWithId('legacy-block', 'only once'),
-        index: 0,
-      },
-    });
-    expect(compacted.every((op) => op.payload.page.content === undefined)).toBe(true);
   });
 
   test('restores local edits and their queue after an offline reload', async () => {
