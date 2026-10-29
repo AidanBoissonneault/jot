@@ -71,6 +71,7 @@ export const useJottathingStore = defineStore('jottathing', () => {
     connected: false,
   });
   let captureInsertHandler: CaptureInsertHandler | undefined;
+  const pendingPageCreations = new Map<string, ProjectPage>();
   let isListeningForRuntimeMessages = false;
   let syncEventsSource: EventSource | undefined;
   let stopQueueListener: (() => void) | undefined;
@@ -735,7 +736,39 @@ export const useJottathingStore = defineStore('jottathing', () => {
       requestId === projectPagesRequestId &&
       currentProjectId.value === requestedProjectId
     ) {
-      pages.value = loadedPages;
+      const pagesById = new Map(loadedPages.map((page) => [page.id, page]));
+      for (const [optimisticPageId, pendingPage] of pendingPageCreations) {
+        if (pendingPage.projectId !== requestedProjectId) continue;
+
+        const currentDraft = currentPage.value?.id === optimisticPageId
+          ? currentPage.value
+          : pages.value.find((page) => page.id === optimisticPageId);
+        const listedPage = pagesById.get(pendingPage.id);
+        const latestPendingPage = currentDraft &&
+          currentDraft.localRevision !== pendingPage.localRevision
+          ? {
+              ...pendingPage,
+              title: currentDraft.title,
+              content: currentDraft.content,
+              status: currentDraft.status,
+              pageOrder: currentDraft.pageOrder,
+              localRevision: currentDraft.localRevision,
+              updatedAt: currentDraft.updatedAt,
+              ...(pendingPage.id === optimisticPageId
+                ? { syncState: currentDraft.syncState, syncMessage: currentDraft.syncMessage }
+                : {}),
+            }
+          : pendingPage;
+
+        pagesById.delete(optimisticPageId);
+        pagesById.set(
+          latestPendingPage.id,
+          listedPage && listedPage.localRevision === latestPendingPage.localRevision
+            ? listedPage
+            : latestPendingPage,
+        );
+      }
+      pages.value = [...pagesById.values()];
     }
   }
 
@@ -859,6 +892,7 @@ export const useJottathingStore = defineStore('jottathing', () => {
         requestedProjectId,
         nextPageTitle(),
       );
+      pendingPageCreations.set(creation.page.id, creation.page);
       if (currentProjectId.value === requestedProjectId) {
         currentProjectId.value = creation.page.projectId;
       }
@@ -867,6 +901,9 @@ export const useJottathingStore = defineStore('jottathing', () => {
       applyPageSyncState(creation.page);
 
       void creation.settled.then(async (page) => {
+        // Keep a durable handoff snapshot available while page-list reloads
+        // race with this create's local replacement.
+        pendingPageCreations.set(creation.page.id, page);
         // A concurrent project reconciliation or orphan recovery can replace
         // the optimistic project ID while the new page is being saved.
         if (currentProjectId.value === requestedProjectId) {
@@ -886,7 +923,9 @@ export const useJottathingStore = defineStore('jottathing', () => {
           currentPage.value = pages.value.find((storedPage) => storedPage.id === page.id) ?? page;
           applyPageSyncState(currentPage.value);
         }
+        pendingPageCreations.delete(creation.page.id);
       }).catch(async (error) => {
+        pendingPageCreations.delete(creation.page.id);
         const message =
           error instanceof Error ? error.message : 'Unable to create this page.';
         await loadCurrentPage();

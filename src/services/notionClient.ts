@@ -167,6 +167,7 @@ const REMOTE_QUEUE_SETTLE_TIMEOUT_MS = 10 * 60_000;
 const REMOTE_QUEUE_STATUS_POLL_MS = 2_000;
 const MAX_QUEUE_RETRY_DELAY_MS = 5 * 60_000;
 const pendingTempPageSaves = new Map<string, ProjectPage>();
+const inFlightTempPageCreations = new Set<string>();
 const projectReconciliations = new Map<string, Promise<string>>();
 const projectIdAliases = new Map<string, string>();
 const pageIdAliases = new Map<string, string>();
@@ -2439,6 +2440,7 @@ async function reconcilePersistedTemporaryPageDuplicates(projectId?: string): Pr
   const projectById = new Map(storage.projects.map((project) => [project.id, project]));
   const temporaryPages = storage.pages.filter((page) =>
     isTempPage(page) &&
+    !inFlightTempPageCreations.has(page.id) &&
     (!projectId || page.projectId === projectId) &&
     !isTempProject(projectById.get(page.projectId)),
   );
@@ -5257,7 +5259,7 @@ export const notionClient = {
     const syncMode: 'notion' | 'local' = workspace?.kind === 'notion' || project.syncMode === 'notion'
       ? 'notion'
       : workspace?.kind ?? 'local';
-    const page = await appendPageAtomically({
+    const optimisticPage = {
       ...createOptimisticPage(projectId, title.trim() || 'Untitled Page'),
       pageOrder: 0,
       workspaceId: project.workspaceId,
@@ -5268,7 +5270,15 @@ export const notionClient = {
           ? workspace.notionWorkspaceId
           : syncConfig.workspaceId
         : undefined,
-    });
+    };
+    inFlightTempPageCreations.add(optimisticPage.id);
+    let page: ProjectPage;
+    try {
+      page = await appendPageAtomically(optimisticPage);
+    } catch (error) {
+      inFlightTempPageCreations.delete(optimisticPage.id);
+      throw error;
+    }
 
     const settled = (async () => {
       try {
@@ -5325,6 +5335,8 @@ export const notionClient = {
         );
         await persistPage(retained);
         return retained;
+      } finally {
+        inFlightTempPageCreations.delete(page.id);
       }
     })();
 

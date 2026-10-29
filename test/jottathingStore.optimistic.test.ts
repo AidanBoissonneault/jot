@@ -1931,6 +1931,53 @@ describe('optimistic page creation', () => {
     expect(store.saveStatus).toBe('creating');
   });
 
+  test('keeps the optimistic page visible when an older page-list load finishes during creation', async () => {
+    const optimisticPage: ProjectPage = {
+      ...basePage,
+      id: 'temp-page-create-list-race',
+      title: 'Page 2',
+      pageOrder: 1,
+      syncState: 'creating',
+    };
+    const durablePage: ProjectPage = {
+      ...optimisticPage,
+      id: 'page-create-list-race',
+      syncState: 'saving',
+    };
+    const settled = deferred<ProjectPage>();
+    const olderPageList = deferred<ProjectPage[]>();
+    vi.spyOn(notionClient, 'createProjectPage').mockResolvedValue({
+      page: optimisticPage,
+      settled: settled.promise,
+    });
+    vi.spyOn(notionClient, 'listProjectPages')
+      .mockImplementationOnce(() => olderPageList.promise)
+      .mockResolvedValue([basePage, durablePage]);
+    vi.spyOn(notionClient, 'listProjects').mockResolvedValue([baseProject]);
+    const store = useJottathingStore();
+
+    try {
+      await seedStore(store);
+      await store.createPage();
+
+      const listLoad = store.loadProjectPages();
+      olderPageList.resolve([basePage]);
+      await listLoad;
+
+      expect(store.pages.some((page) => page.id === optimisticPage.id)).toBe(true);
+      expect(store.currentPage?.id).toBe(optimisticPage.id);
+
+      settled.resolve(durablePage);
+      await waitFor(() => expect(store.currentPage?.id).toBe(durablePage.id));
+      expect(store.pages.some((page) => page.id === durablePage.id)).toBe(true);
+      expect(store.pages.some((page) => page.id === optimisticPage.id)).toBe(false);
+    } finally {
+      olderPageList.resolve([basePage]);
+      settled.resolve(durablePage);
+      vi.restoreAllMocks();
+    }
+  });
+
   test('does not restore a stale auto-title page list after an early rename', async () => {
     const optimisticPage: ProjectPage = {
       ...basePage,
