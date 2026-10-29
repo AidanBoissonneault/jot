@@ -1043,6 +1043,137 @@ describe('project metadata', () => {
     expect(callsAfterSecondSync.filter((url) => url.endsWith('/sync/page/resync'))).toHaveLength(1);
   });
 
+  test('page listing and manual resync remove a persisted temp-ID duplicate', async () => {
+    const workspace: Workspace = {
+      id: 'workspace-notion-temp-duplicate',
+      name: 'Notion',
+      kind: 'notion',
+      accountId: connectedConfig.userId,
+      notionWorkspaceId: 'notion-workspace-temp-duplicate',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    };
+    const project: Project = {
+      ...baseProject,
+      workspaceId: workspace.id,
+      syncMode: 'notion',
+      syncState: 'saved',
+    };
+    const existingPage = {
+      ...basePage,
+      workspaceId: workspace.id,
+      syncMode: 'notion' as const,
+      syncAccountId: workspace.accountId,
+      syncWorkspaceId: workspace.notionWorkspaceId,
+      pageOrder: 0,
+      syncBaselineContent: emptyDocument(),
+    };
+    const createdAt = '2026-10-29T10:00:00.000Z';
+    const durablePage: ProjectPage = {
+      ...basePage,
+      id: `page-${project.id}-temp-duplicate-recovered`,
+      title: 'Renamed Page',
+      projectId: project.id,
+      workspaceId: workspace.id,
+      syncMode: 'notion',
+      syncAccountId: workspace.accountId,
+      syncWorkspaceId: workspace.notionWorkspaceId,
+      createdAt,
+      updatedAt: '2026-10-29T10:02:00.000Z',
+      pageOrder: 1,
+      notionPageId: 'notion-page-temp-duplicate-recovered',
+      syncBaselineContent: emptyDocument(),
+      knownSyncVersion: 1,
+      serverSyncVersion: 1,
+      syncState: 'saved',
+    };
+    const tempGhost: ProjectPage = {
+      ...durablePage,
+      id: 'temp-page-ghost-from-old-build',
+      title: 'Page 2',
+      updatedAt: createdAt,
+      notionPageId: undefined,
+      syncBaselineContent: undefined,
+      knownSyncVersion: undefined,
+      serverSyncVersion: undefined,
+      syncState: 'saving',
+    };
+    resetBrowserStorage({
+      activePageIdsByProject: { [project.id]: durablePage.id },
+      currentProjectId: project.id,
+      currentProjectIdByWorkspace: { [workspace.id]: project.id },
+      currentWorkspaceId: workspace.id,
+      hasMigratedCapturesToPages: true,
+      pages: [existingPage, durablePage, tempGhost],
+      projects: [project],
+      syncConfig: {
+        ...connectedConfig,
+        workspaceId: workspace.notionWorkspaceId,
+        workspaceName: workspace.name,
+      },
+      workspaces: [workspace],
+    });
+
+    const pageResyncIds: string[] = [];
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      const route = String(url).replace(connectedConfig.serverUrl, '');
+      if (route.startsWith('/sync/retry')) return jsonResponse({ requeuedCount: 0 });
+      if (route === '/sync/status') return jsonResponse({ hasPending: false, failedCount: 0 });
+      if (route === '/sync/validate') {
+        return jsonResponse({
+          aheadPageIds: [], failedPageIds: [], newPageIds: [], stalePageIds: [], workspaceChanged: false,
+        });
+      }
+      if (route === '/sync/page/resync') {
+        const request = JSON.parse(String(init?.body)) as { page: ProjectPage };
+        pageResyncIds.push(request.page.id);
+        return jsonResponse({ status: 'saved', page: request.page });
+      }
+      if (route === '/sync/reload') {
+        return jsonResponse({
+          activePageIdsByProject: { [project.id]: durablePage.id },
+          currentProjectId: project.id,
+          pages: [existingPage, durablePage],
+          projects: [project],
+          status: 'saved',
+        });
+      }
+      if (route === '/sync/push') return jsonResponse({ queued: true, versions: {} });
+      throw new Error(`Unexpected sync request: ${String(url)}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const listedPages = await notionClient.listProjectPages(project.id);
+    expect(listedPages.map((page) => page.id)).toHaveLength(2);
+    expect(listedPages.some((page) => page.id === tempGhost.id)).toBe(false);
+
+    // Exercise the hard-sync cleanup independently in case resync runs before
+    // the UI has loaded the affected project's page list.
+    resetBrowserStorage({
+      activePageIdsByProject: { [project.id]: durablePage.id },
+      currentProjectId: project.id,
+      currentProjectIdByWorkspace: { [workspace.id]: project.id },
+      currentWorkspaceId: workspace.id,
+      hasMigratedCapturesToPages: true,
+      pages: [existingPage, durablePage, tempGhost],
+      projects: [project],
+      syncConfig: {
+        ...connectedConfig,
+        workspaceId: workspace.notionWorkspaceId,
+        workspaceName: workspace.name,
+      },
+      workspaces: [workspace],
+    });
+
+    const result = await notionClient.resyncPendingChanges();
+    const storedPages = readBrowserStorage().pages as ProjectPage[];
+
+    expect(result.reloadedFromNotion).toBe(true);
+    expect(storedPages.some((page) => page.id === tempGhost.id)).toBe(false);
+    expect(storedPages.find((page) => page.id === durablePage.id)?.title).toBe('Renamed Page');
+    expect(pageResyncIds).not.toContain(tempGhost.id);
+  });
+
   test('manual resync restores an archived project for a newer active page edit', async () => {
     const workspace: Workspace = {
       id: 'workspace-notion-archive-resync',

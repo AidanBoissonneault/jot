@@ -2371,6 +2371,104 @@ async function replayTempPageSave(tempPageId: string, realPage: ProjectPage) {
   return queuedPage;
 }
 
+function isGeneratedPageTitle(title: string): boolean {
+  return /^(?:page\s+\d+|untitled page|new page)$/i.test(title.trim());
+}
+
+/** Removes a persisted temporary-ID copy after its synced durable page survived a restart. */
+async function removePersistedTemporaryPageDuplicate(
+  tempPage: ProjectPage,
+  durablePage: ProjectPage,
+): Promise<{ page: ProjectPage; changed: boolean }> {
+  const write = workspaceWriteQueue.then(async () => {
+    const stored = await idbGetMany(['pages', 'activePageIdsByProject']);
+    const storedPages = (stored.pages as ProjectPage[] | undefined) ?? [];
+    const currentTempPage = storedPages.find((page) => page.id === tempPage.id);
+    const currentDurablePage = storedPages.find((page) => page.id === durablePage.id);
+    if (!currentTempPage || !currentDurablePage) {
+      return { page: currentDurablePage ?? durablePage, changed: false };
+    }
+
+    const tempUpdatedAt = Date.parse(currentTempPage.updatedAt);
+    const durableUpdatedAt = Date.parse(currentDurablePage.updatedAt);
+    const tempIsNewer = Number.isFinite(tempUpdatedAt) && Number.isFinite(durableUpdatedAt)
+      ? tempUpdatedAt > durableUpdatedAt
+      : false;
+    const tempContent = currentTempPage.content;
+    const contentChanged = tempIsNewer &&
+      JSON.stringify(tempContent) !== JSON.stringify(currentDurablePage.content);
+    const tempTitle = isGeneratedPageTitle(currentTempPage.title) &&
+      !isGeneratedPageTitle(currentDurablePage.title)
+      ? currentDurablePage.title
+      : currentTempPage.title;
+    const titleChanged = tempIsNewer && tempTitle !== currentDurablePage.title;
+    const recoveredPage = contentChanged || titleChanged
+      ? markPageDirty({
+          ...currentDurablePage,
+          title: tempTitle,
+          ...(contentChanged ? { content: tempContent } : {}),
+          status: currentTempPage.status,
+          pageOrder: currentDurablePage.pageOrder,
+        })
+      : currentDurablePage;
+
+    const pages = storedPages.filter((page) =>
+      page.id !== currentTempPage.id && page.id !== currentDurablePage.id,
+    );
+    pages.push(recoveredPage);
+    const activePageIdsByProject = {
+      ...((stored.activePageIdsByProject as Record<string, string> | undefined) ?? {}),
+    };
+    if (activePageIdsByProject[recoveredPage.projectId] === currentTempPage.id) {
+      activePageIdsByProject[recoveredPage.projectId] = recoveredPage.id;
+    }
+    await idbSetMany({ pages, activePageIdsByProject });
+    workspaceWriteVersion += 1;
+    return { page: recoveredPage, changed: recoveredPage !== currentDurablePage };
+  });
+  workspaceWriteQueue = write.then(() => undefined, () => undefined);
+  const result = await write;
+  rememberPageIdAlias(tempPage.id, durablePage.id);
+  pendingTempPageSaves.delete(tempPage.id);
+  return result;
+}
+
+/** Repairs duplicate local rows left by older temporary-page replacement races before hard sync. */
+async function reconcilePersistedTemporaryPageDuplicates(projectId?: string): Promise<void> {
+  const storage = await readStorage();
+  const projectById = new Map(storage.projects.map((project) => [project.id, project]));
+  const temporaryPages = storage.pages.filter((page) =>
+    isTempPage(page) &&
+    (!projectId || page.projectId === projectId) &&
+    !isTempProject(projectById.get(page.projectId)),
+  );
+
+  for (const tempPage of temporaryPages) {
+    const project = projectById.get(tempPage.projectId);
+    if (!project || tempPage.status === 'archived') continue;
+    const durablePage = storage.pages.find((page) =>
+      !isTempPage(page) &&
+      page.projectId === tempPage.projectId &&
+      page.status !== 'archived' &&
+      page.createdAt === tempPage.createdAt &&
+      typeof page.pageOrder === 'number' &&
+      page.pageOrder === tempPage.pageOrder &&
+      Boolean(page.notionPageId) &&
+      page.syncState === 'saved',
+    );
+    if (!durablePage) continue;
+
+    const result = await removePersistedTemporaryPageDuplicate(tempPage, durablePage);
+    const temporaryOps = (await listPendingSyncOps()).filter((op) => op.pageId === tempPage.id);
+    if (temporaryOps.length) {
+      await removePendingSyncOps(temporaryOps.map((op) => op.opId));
+    }
+    if (result.changed) {
+      await persistPage(await enqueuePageSync(result.page, project, durablePage));
+    }
+  }
+}
+
 /** Reads the freshest optimistic page edit before assigning its durable ID. */
 async function latestTempPageSnapshot(
   tempPageId: string,
@@ -3014,6 +3112,11 @@ export const notionClient = {
     if (!syncQueueBelongsToActiveAccount(syncConfig)) {
       throw new Error('Local data is locked to its original Notion account. Reconnect that account to send local documents.');
     }
+
+    // Older clients could persist a temp-ID copy after the durable page was
+    // already synced. Remove that duplicate before retrying queues or scanning
+    // local rows so an explicit hard sync cannot create a second Notion page.
+    await reconcilePersistedTemporaryPageDuplicates();
 
     let reloadedFromNotion = false;
     let remoteReloadPending = false;
@@ -5087,6 +5190,9 @@ export const notionClient = {
 
   async listProjectPages(projectId: string): Promise<ProjectPage[]> {
     await waitForStub();
+    // Remove durable duplicates left by older temporary-ID races before they
+    // enter the local page list. Hard resync runs the same cleanup as a guard.
+    await reconcilePersistedTemporaryPageDuplicates(projectId);
     const { pages } = await readStorage();
     return sortProjectPages(pages.filter((page) =>
       page.projectId === projectId && page.status !== 'archived',
