@@ -559,7 +559,7 @@ async function readStorage(): Promise<Required<JottathingStorage>> {
   allPages = allPages.map((page) => {
     const workspaceId = workspaceIdByProject.get(page.projectId) ?? page.workspaceId ?? localWorkspace.id;
     const workspace = allWorkspaces.find((entry) => entry.id === workspaceId) ?? localWorkspace;
-    const syncAccountId = workspace.kind === 'notion' ? workspace.accountId : workspace.accountId;
+    const syncAccountId = workspace.accountId;
     const syncWorkspaceId = workspace.kind === 'notion' ? workspace.notionWorkspaceId : undefined;
     if (
       page.workspaceId !== workspaceId || page.syncMode !== workspace.kind ||
