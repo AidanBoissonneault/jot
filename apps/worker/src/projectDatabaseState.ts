@@ -186,59 +186,12 @@ export function createProjectDatabaseStateHelpers({
           project.stateContent ?? emptyDocument(),
           existingJottathingBlockIds,
         );
-    let remoteBlocks: NotionBlock[] = [];
 
     // A reviewed merge is the user's chosen snapshot. Skip automatic source
     // pruning so metadata or unique blocks from that snapshot are not removed
     // before replaceManagedBlocks writes it.
     if (!isUserReviewedReplacement) {
-      remoteBlocks = await listAllBlockChildren(store, container.id);
-      const removedRemoteIds = new Set<string>();
-      let changedRemoteState = false;
-
-      for (const block of remoteBlocks) {
-        const node = notionBlocksToTiptapDocument([block]).content?.[0];
-        if (!node || !projectStateSourceBlockIds(node).some((blockId) =>
-          !existingJottathingBlockIds.has(blockId),
-        )) continue;
-
-        const cleaned = pruneOrphanedProjectStateSources(
-          { type: 'doc', content: [node] },
-          existingJottathingBlockIds,
-        );
-        const replacementNode = cleaned.content?.[0];
-        if (!replacementNode) {
-          if (deleteManagedBlock) {
-            await deleteManagedBlock(store, block.id);
-          } else {
-            await notionRequest(store, `/blocks/${block.id}`, { method: 'DELETE' });
-          }
-          removedRemoteIds.add(block.id);
-          changedRemoteState = true;
-          continue;
-        }
-
-        const [replacement] = tiptapDocumentToNotionBlocks?.(cleaned) ?? [];
-        if (!replacement) continue;
-        if (updateManagedBlock) {
-          await updateManagedBlock(store, block.id, replacement);
-        } else {
-          const { object: _object, type: _type, ...body } = replacement;
-          await notionRequest(store, `/blocks/${block.id}`, { method: 'PATCH', body });
-        }
-        changedRemoteState = true;
-        for (const mapping of store.blockMappings[key] ?? []) {
-          if (mapping.notionBlockId === block.id) mapping.newState = replacement;
-        }
-      }
-
-      if (removedRemoteIds.size) {
-        store.blockMappings[key] = (store.blockMappings[key] ?? [])
-          .filter((mapping) => !removedRemoteIds.has(mapping.notionBlockId ?? ''));
-      }
-      if (changedRemoteState) {
-        remoteBlocks = await listAllBlockChildren(store, container.id);
-      }
+      await pruneRemoteProjectStateSources(store, key, container.id, existingJottathingBlockIds);
     }
 
     const replacement = await replaceManagedBlocks(
@@ -261,6 +214,79 @@ export function createProjectDatabaseStateHelpers({
       baselineContent: replacement.baselineContent ?? replacement.content ?? stateContent,
       lastEditedTime: refreshed.last_edited_time,
     };
+  }
+
+  /** Removes orphaned source metadata from remote project-state blocks. */
+  async function pruneRemoteProjectStateSources(
+    store: WorkerStore,
+    key: string,
+    containerId: string,
+    existingJottathingBlockIds: ReadonlySet<string>,
+  ): Promise<void> {
+    const removedRemoteIds = new Set<string>();
+    for (const block of await listAllBlockChildren(store, containerId)) {
+      if (await pruneRemoteProjectStateBlock(store, key, block, existingJottathingBlockIds)) {
+        removedRemoteIds.add(block.id);
+      }
+    }
+
+    if (removedRemoteIds.size) {
+      store.blockMappings[key] = (store.blockMappings[key] ?? [])
+        .filter((mapping) => !removedRemoteIds.has(mapping.notionBlockId ?? ''));
+    }
+  }
+
+  /** Prunes one remote source block; returns true when the block was deleted. */
+  async function pruneRemoteProjectStateBlock(
+    store: WorkerStore,
+    key: string,
+    block: NotionBlock,
+    existingJottathingBlockIds: ReadonlySet<string>,
+  ): Promise<boolean> {
+    const node = notionBlocksToTiptapDocument([block]).content?.[0];
+    if (!node || !projectStateSourceBlockIds(node).some((blockId) =>
+      !existingJottathingBlockIds.has(blockId),
+    )) return false;
+
+    const cleaned = pruneOrphanedProjectStateSources(
+      { type: 'doc', content: [node] },
+      existingJottathingBlockIds,
+    );
+    if (!cleaned.content?.[0]) {
+      await deleteProjectStateBlock(store, block.id);
+      return true;
+    }
+
+    const [replacement] = tiptapDocumentToNotionBlocks?.(cleaned) ?? [];
+    if (!replacement) return false;
+    await updateProjectStateBlock(store, block.id, replacement);
+    for (const mapping of store.blockMappings[key] ?? []) {
+      if (mapping.notionBlockId === block.id) mapping.newState = replacement;
+    }
+    return false;
+  }
+
+  /** Deletes through the managed-block writer when available, otherwise through Notion. */
+  async function deleteProjectStateBlock(store: WorkerStore, blockId: string): Promise<void> {
+    if (deleteManagedBlock) {
+      await deleteManagedBlock(store, blockId);
+    } else {
+      await notionRequest(store, `/blocks/${blockId}`, { method: 'DELETE' });
+    }
+  }
+
+  /** Updates through the managed-block writer or sends a Notion block payload. */
+  async function updateProjectStateBlock(
+    store: WorkerStore,
+    blockId: string,
+    replacement: NotionBlockPayload,
+  ): Promise<void> {
+    if (updateManagedBlock) {
+      await updateManagedBlock(store, blockId, replacement);
+    } else {
+      const { object: _object, type: _type, ...body } = replacement;
+      await notionRequest(store, `/blocks/${blockId}`, { method: 'PATCH', body });
+    }
   }
 
   /** Ensures that a project has its managed state toggle. */

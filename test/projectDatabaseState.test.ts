@@ -152,3 +152,118 @@ describe('thread toggle recovery', () => {
     );
   });
 });
+
+describe('project state source cleanup', () => {
+  test('deletes a fully orphaned source block and removes its mapping without rereading children', async () => {
+    const orphanSource = sourceNode('jottathing_source_v1:{"blockId":"orphan-block"}');
+    const remoteBlock = { id: 'remote-source', node: orphanSource };
+    const rig = projectStateHarness([remoteBlock]);
+    const content = { type: 'doc', content: [orphanSource] };
+
+    await rig.helpers.syncProjectState(rig.store as never, 'project-row', {
+      id: 'project-1',
+      stateContent: content,
+    } as never);
+
+    expect(rig.deleteManagedBlock).toHaveBeenCalledWith(rig.store, 'remote-source');
+    expect(rig.store.blockMappings[rig.key]).toEqual([]);
+    expect(rig.listAllBlockChildren).toHaveBeenCalledTimes(1);
+    expect(rig.replaceManagedBlocks).toHaveBeenCalledWith(
+      rig.store,
+      rig.key,
+      'state-toggle',
+      { type: 'doc', content: [] },
+      undefined,
+    );
+  });
+
+  test('updates a source registry when only some referenced blocks remain', async () => {
+    const registry = sourceNode(
+      'jottathing_sources_v1:{"live-block":{},"orphan-block":{}}',
+    );
+    const remoteBlock = { id: 'remote-source', node: registry };
+    const rig = projectStateHarness([remoteBlock], ['live-block']);
+    const replacement = { object: 'block', type: 'code', code: { rich_text: [] } };
+
+    await rig.helpers.syncProjectState(rig.store as never, 'project-row', {
+      id: 'project-1',
+      stateContent: { type: 'doc', content: [registry] },
+    } as never);
+
+    expect(rig.updateManagedBlock).toHaveBeenCalledWith(rig.store, 'remote-source', replacement);
+    expect(rig.store.blockMappings[rig.key][0].newState).toEqual(replacement);
+    expect(rig.deleteManagedBlock).not.toHaveBeenCalled();
+  });
+
+  test('does not prune a reviewed conflict snapshot', async () => {
+    const reviewedContent = {
+      type: 'doc',
+      attrs: { jottathingConflictResolution: true },
+      content: [sourceNode('jottathing_source_v1:{"blockId":"orphan-block"}')],
+    };
+    const rig = projectStateHarness([]);
+
+    await rig.helpers.syncProjectState(rig.store as never, 'project-row', {
+      id: 'project-1',
+      stateContent: reviewedContent,
+    } as never);
+
+    expect(rig.listAllBlockChildren).not.toHaveBeenCalled();
+    expect(rig.deleteManagedBlock).not.toHaveBeenCalled();
+    expect(rig.replaceManagedBlocks.mock.calls[0][3]).toBe(reviewedContent);
+  });
+});
+
+const PROJECT_STATE_KEY = 'project-state:project-1';
+
+function sourceNode(text: string) {
+  return { type: 'codeBlock', content: [{ type: 'text', text }] };
+}
+
+function projectStateHarness(
+  remoteBlocks: Array<{ id: string; node: unknown }>,
+  activeBlockIds: string[] = [],
+) {
+  const toggle = {
+    id: 'state-toggle',
+    type: 'toggle',
+    toggle: { rich_text: [{ type: 'text', plain_text: 'Project State' }] },
+  };
+  const key = PROJECT_STATE_KEY;
+  const store = {
+    blockMappings: {
+      [key]: [{ notionBlockId: 'remote-source', oldState: null, newState: null }],
+      'active-page': activeBlockIds.map((jottathingBlockId) => ({ jottathingBlockId })),
+    },
+    projectBlocks: { [key]: { blockId: toggle.id, title: 'Project State' } },
+    notePages: {},
+  };
+  const listAllBlockChildren = vi.fn(async () => remoteBlocks as never[]);
+  const deleteManagedBlock = vi.fn(async () => undefined);
+  const updateManagedBlock = vi.fn(async () => undefined);
+  const replaceManagedBlocks = vi.fn(async () => ({ createdBlocks: [] }));
+  const helpers = createProjectDatabaseStateHelpers({
+    importManagedBlocks: vi.fn(async () => null),
+    listAllBlockChildren,
+    notionBlocksToTiptapDocument: vi.fn((blocks: Array<{ node: unknown }>) => ({
+      type: 'doc',
+      content: blocks.map(({ node }) => node),
+    }) as never),
+    notionRequest: vi.fn(async () => toggle as never),
+    replaceManagedBlocks,
+    deleteManagedBlock,
+    updateManagedBlock,
+    tiptapDocumentToNotionBlocks: vi.fn(() => [
+      { object: 'block', type: 'code', code: { rich_text: [] } },
+    ] as never[]),
+  });
+  return {
+    deleteManagedBlock,
+    helpers,
+    key,
+    listAllBlockChildren,
+    replaceManagedBlocks,
+    store,
+    updateManagedBlock,
+  };
+}
