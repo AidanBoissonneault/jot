@@ -6,7 +6,6 @@
 
 import { createHash, randomBytes } from 'node:crypto';
 import type { Context } from 'hono';
-import type { NotionParentPage } from '../../../src/types/capture.js';
 import { notionApiHttpFailure } from './notionRequest.js';
 import type { JsonObject, NotionBlock, NotionBlockPayload, NotionObject, WorkerEnv, WorkerStore } from './types.js';
 
@@ -217,12 +216,6 @@ export function isNotionPageIdValidationError(error: unknown): boolean {
     Boolean(endpoint && /(?:^|\/)pages\/[^/?]+(?:\?.*)?$/.test(endpoint));
 }
 
-/** Detects a block/page endpoint mismatch. @param error - Unknown error. @returns Match result. */
-export function isBlockNotPageError(error: unknown): boolean {
-  return stringProperty(error, 'code') === 'validation_error'
-    && /is a block, not a page|retrieve block API/i.test(stringProperty(error, 'message') ?? '');
-}
-
 /** Builds the PATCH body for a typed Notion block. @param block - Outbound block. @returns PATCH payload. */
 export function updateBodyFromNotionBlock(block: NotionBlockPayload): JsonObject {
   return { [block.type]: block[block.type] ?? {} };
@@ -282,20 +275,6 @@ export function findMappedNotionBlockId(store: WorkerStore, notionBlockId: strin
     if (mappings.some((mapping) => mapping.notionBlockId === notionBlockId)) return notionBlockId;
   }
   return undefined;
-}
-
-/** Extracts plain title text from a page-like object. @param page - Notion page or summary. @returns Page title. */
-export function titleFromPage(page: NotionObject | NotionParentPage): string {
-  if ('properties' in page) {
-    const properties = page.properties;
-    const titleProperty = Object.values(properties).find((property: JsonObject) => stringProperty(property, 'type') === 'title');
-    const titleItems: unknown = titleProperty?.title;
-    if (Array.isArray(titleItems)) {
-      const title = titleItems.map((item: unknown): string => stringProperty(item, 'plain_text') ?? '').join('');
-      if (title) return title;
-    }
-  }
-  return typeof page.title === 'string' ? page.title : 'Untitled';
 }
 
 /** Splits an array into bounded batches. @param values - Values. @param size - Batch size. @returns Batches. */

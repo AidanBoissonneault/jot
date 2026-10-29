@@ -6,6 +6,7 @@
 
 import type { Hono } from 'hono';
 import { youtubeEmbedUrl } from '../../../../src/lib/youtubeUtils.js';
+import { titleFromPage } from '../projectDatabaseValues.js';
 import { youtubeEmbedPage } from '../htmlPages.js';
 import {
   appendLog,
@@ -14,7 +15,7 @@ import {
   requireConnectedStore,
   writeStore,
 } from '../services/workerRuntime.js';
-import { MAX_CONTROL_JSON_REQUEST_BYTES, readLimitedJsonBody, titleFromPage } from '../workerUtils.js';
+import { MAX_CONTROL_JSON_REQUEST_BYTES, readLimitedJsonBody } from '../workerUtils.js';
 import type { WorkerEnv } from '../types.js';
 import type { CreateNotionPageRequest } from '../../../../src/types/sync.js';
 

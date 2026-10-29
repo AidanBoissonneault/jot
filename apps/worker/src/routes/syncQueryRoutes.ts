@@ -27,9 +27,9 @@ import {
 import {
   MAX_CONTROL_JSON_REQUEST_BYTES,
   MAX_SYNC_JSON_REQUEST_BYTES,
-  isBlockNotPageError,
   readLimitedJsonBody,
 } from '../workerUtils.js';
+import { isBlockNotPageError } from '../projectDatabaseValues.js';
 import {
   hasWorkspaceStructureChanged,
   isUnrepresentedSyncedPage,

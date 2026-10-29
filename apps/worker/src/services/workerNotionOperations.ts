@@ -8,6 +8,7 @@ import {
 import { importManagedBlocks as importManagedBlocksWithDependencies } from '../importManagedBlocks.js';
 import { replaceManagedBlocks as replaceManagedBlocksWithDependencies } from '../managedBlocks.js';
 import { applyManagedBlockOps as applyManagedBlockOpsWithDependencies } from '../managedBlockOperations.js';
+import { isBlockNotPageError } from '../projectDatabaseValues.js';
 import type { DocumentContent, Project, ProjectPage } from '../../../../src/types/capture.js';
 import type {
   ManagedBlockOperation,
@@ -20,7 +21,6 @@ import type {
 import {
   chunks,
   hash,
-  isBlockNotPageError,
   isNotionObjectNotFound,
   mediaFallbackBlock,
   positionAfterCreatedBlocks,

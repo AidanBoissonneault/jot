@@ -1,6 +1,7 @@
 import { describe, expect, test, vi } from 'vitest';
 import { createProjectDatabaseHelpers } from '@/apps/worker/src/projectDatabase';
 import { createProjectDatabaseRows } from '@/apps/worker/src/projectDatabaseRows';
+import { isBlockNotPageError, titleFromPage } from '@/apps/worker/src/projectDatabaseValues';
 import type { NotionRequester } from '@/apps/worker/src/types';
 
 const expectedProperties = {
@@ -14,6 +15,22 @@ const expectedProperties = {
   'Jottathing ID': {},
   'Managed by Jottathing': { type: 'checkbox' },
 };
+
+describe('project database value readers', () => {
+  test('reads page titles from property text and uses the page title when properties are absent', () => {
+    expect(titleFromPage({
+      properties: { Name: { type: 'title', title: [{ text: { content: 'Project' } }] } },
+    } as never)).toBe('Project');
+    expect(titleFromPage({ title: 'Workspace' } as never)).toBe('Workspace');
+  });
+
+  test('recognizes block/page mismatches from Error and API-shaped values', () => {
+    const error = Object.assign(new Error('is a block, not a page'), { code: 'validation_error' });
+    expect(isBlockNotPageError(error)).toBe(true);
+    expect(isBlockNotPageError({ code: 'validation_error', message: 'retrieve block API' })).toBe(true);
+    expect(isBlockNotPageError({ code: 'object_not_found', message: 'is a block, not a page' })).toBe(false);
+  });
+});
 
 function database(id: string, dataSourceId: string, lastEditedTime: string) {
   return {

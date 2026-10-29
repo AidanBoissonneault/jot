@@ -336,7 +336,7 @@ export function titleFromDatabase(database: NotionObject): string {
  * @returns Page title or the untitled fallback.
  */
 export function titleFromPage(page: NotionObject): string {
-  const titleProperty = Object.values(page.properties).find(
+  const titleProperty = Object.values(page.properties ?? {}).find(
     (property: JsonObject) => stringProperty(property, 'type') === 'title',
   );
   const title = titleProperty ? richTextArray(titleProperty, 'title') : [];
@@ -477,5 +477,5 @@ function errorCode(error: unknown): string | undefined {
 
 /** Converts an unknown thrown value to readable text. @param error - Unknown error. @returns Error message. */
 function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return error instanceof Error ? error.message : stringProperty(error, 'message') ?? String(error);
 }

@@ -140,3 +140,5 @@ Local storage no longer loads the retired standalone `captures` collection or `h
 HTTP page sync now requires project-database and thread-toggle helpers. The alternate legacy child-page create/update flow is removed; database-row sync retains its stale-content checks and archived-thread recovery. The page-sync and project-database suites pass (10 tests), and root plus Worker typechecks pass.
 
 Dead-code pruning removed unreferenced `CaptureType` and `HighlightMeta` contracts and the unused recursive pending-media scan. Upload lease checks and sync sanitization remain the active paths. Media-content, media-identity, and queue-payload tests pass (21), as do root and Worker typechecks.
+
+Notion page-title extraction and block/page mismatch detection now each have one Worker implementation shared by database sync and routes. Title reads tolerate a missing `properties` object, and mismatch detection accepts both `Error` and API-shaped error values. Project database, cache, route utility, page sync, and security tests pass (50), with both TypeScript projects typechecked.
