@@ -155,43 +155,24 @@ async function getCustomSession(
   if (!token) return null;
 
   const hashedToken = hash(token);
-  const { data: hashedSession, error } = await supabase
+  const { data: session, error } = await supabase
     .from('session')
     .select('id, token, expiresAt, userId, user:userId(id, name, email, image, emailVerified)')
     .eq('token', hashedToken)
     .gt('expiresAt', new Date().toISOString())
     .maybeSingle();
 
-  if (error) return null;
-  let data = hashedSession;
-  if (!data) {
-    // Upgrade valid sessions created by older releases, which stored the raw cookie token.
-    const legacy = await supabase
-      .from('session')
-      .select('id, token, expiresAt, userId, user:userId(id, name, email, image, emailVerified)')
-      .eq('token', token)
-      .gt('expiresAt', new Date().toISOString())
-      .maybeSingle();
-    if (legacy.error || !legacy.data) return null;
-    const { error: migrationError } = await supabase
-      .from('session')
-      .update({ token: hashedToken })
-      .eq('id', legacy.data.id)
-      .eq('token', token);
-    if (migrationError) return null;
-    data = legacy.data;
-  }
-
-  const relatedUser = Array.isArray(data.user) ? data.user[0] : data.user;
+  if (error || !session) return null;
+  const relatedUser = Array.isArray(session.user) ? session.user[0] : session.user;
 
   if (!relatedUser) return null;
 
   return {
     session: {
-      id: data.id,
+      id: session.id,
       token: hashedToken,
-      userId: data.userId,
-      expiresAt: data.expiresAt,
+      userId: session.userId,
+      expiresAt: session.expiresAt,
     },
     user: {
       id: relatedUser.id,

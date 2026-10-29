@@ -102,4 +102,4 @@ Pending connection deletion now resumes only from `jottathingPendingConnectionDe
 
 Core app state now reads only from IndexedDB; the one-time extension-storage-to-IndexedDB copy and its marker are removed. The credential scrub remains to remove old token copies from extension storage, and logout repeats that scrub. Focused lifecycle tests cover ignored old app-state copies and document preservation during logout.
 
-Worker authentication no longer accepts old Inkwell session cookies, OAuth state cookies, or account-binding headers. Logout still expires stale cookie names. Worker security tests cover the current account binding and reject old cookie/header values.
+Worker authentication no longer accepts old Inkwell session cookies, OAuth state cookies, or account-binding headers. Logout still expires stale cookie names. Worker security tests cover the current account binding and reject old cookie/header values. Supabase sessions must already store a hash of the browser token; the raw-token lookup and rewrite are removed.

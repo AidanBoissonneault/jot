@@ -6,24 +6,38 @@ import type { WorkerSupabaseClient } from '@/apps/worker/src/types';
 
 type DbCall = { args: unknown[]; method: string; table: string };
 
-function fakeSupabase(failTable?: string) {
+function fakeSupabase(
+  failTable?: string,
+  sessionRecord?: { data: unknown; token: string },
+) {
   const calls: DbCall[] = [];
   const rpcError = failTable === 'rpc' ? new Error('database failure') : null;
   const client = {
     from(table: string) {
       const error = failTable === table ? new Error('database failure') : null;
+      let sessionTokenFilter: unknown;
       const builder: Record<string, unknown> & {
         then: (resolve: (value: unknown) => unknown, reject: (reason: unknown) => unknown) => Promise<unknown>;
       } = {
         select: (...args: unknown[]) => { calls.push({ table, method: 'select', args }); return builder; },
-        eq: (...args: unknown[]) => { calls.push({ table, method: 'eq', args }); return builder; },
+        eq: (...args: unknown[]) => {
+          calls.push({ table, method: 'eq', args });
+          if (table === 'session' && args[0] === 'token') sessionTokenFilter = args[1];
+          return builder;
+        },
+        gt: (...args: unknown[]) => { calls.push({ table, method: 'gt', args }); return builder; },
         limit: (...args: unknown[]) => { calls.push({ table, method: 'limit', args }); return builder; },
         update: (...args: unknown[]) => { calls.push({ table, method: 'update', args }); return builder; },
         delete: (...args: unknown[]) => { calls.push({ table, method: 'delete', args }); return builder; },
         insert: (...args: unknown[]) => { calls.push({ table, method: 'insert', args }); return builder; },
         upsert: (...args: unknown[]) => { calls.push({ table, method: 'upsert', args }); return builder; },
         or: (...args: unknown[]) => { calls.push({ table, method: 'or', args }); return builder; },
-        maybeSingle: async () => ({ data: null, error }),
+        maybeSingle: async () => ({
+          data: table === 'session' && sessionRecord?.token === sessionTokenFilter
+            ? sessionRecord.data
+            : null,
+          error,
+        }),
         single: async () => ({
           data: table === 'jottathing_oauth_generation' ? { generation: '7' } : { id: 42 },
           error,
@@ -80,6 +94,31 @@ describe('server authentication data lifecycle', () => {
     await expect(createAuth(fakeSupabase('rpc').client)
       .completeNotionLogout('notion:user-42', 'session-token-test'))
       .rejects.toThrow('Unable to securely complete the Notion logout.');
+  });
+
+  it('does not upgrade sessions that store the raw cookie token', async () => {
+    const sessionToken = 'old-raw-session-token';
+    const { calls, client } = fakeSupabase(undefined, {
+      token: sessionToken,
+      data: {
+        id: 'old-session-id',
+        token: sessionToken,
+        expiresAt: '2030-01-01T00:00:00.000Z',
+        userId: 'notion:user-42',
+        user: {
+          id: 'notion:user-42',
+          name: 'Test user',
+          email: 'test@example.test',
+          image: null,
+          emailVerified: false,
+        },
+      },
+    });
+
+    await expect(createAuth(client).getCustomSession(sessionToken)).resolves.toBeNull();
+    expect(calls.filter((call) => call.table === 'session' && call.method === 'eq'))
+      .toEqual([{ table: 'session', method: 'eq', args: ['token', hash(sessionToken)] }]);
+    expect(calls.some((call) => call.table === 'session' && call.method === 'update')).toBe(false);
   });
 
   it('reads the signed OAuth generation from the service-only version row', async () => {
