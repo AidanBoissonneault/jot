@@ -9,7 +9,7 @@ import type { JottathingDatabase, JsonObject, NotionObject, NotionRichText } fro
 
 export const JOTTATHING_DATABASE_TITLE = 'Jottathing';
 export const JOTTATHING_PROJECTS_DATA_SOURCE_TITLE = 'Projects';
-export const PROJECT_STATE_BLOCK_KEY = 'project-state';
+const PROJECT_STATE_BLOCK_KEY = 'project-state';
 export const PROJECT_PROPERTIES = {
   title: 'Name',
   status: 'Status',
@@ -132,7 +132,7 @@ export function allProjectsView(propertyIds: Record<string, string>): JsonObject
  * @param options - Property names that should be visible.
  * @returns Notion table configuration.
  */
-export function tableConfiguration(
+function tableConfiguration(
   propertyIds: Record<string, string>,
   { visible }: { visible: string[] },
 ): JsonObject {
@@ -150,7 +150,7 @@ export function tableConfiguration(
  * @param visibleNames - Names that should remain visible.
  * @returns Ordered Notion property-visibility entries.
  */
-export function propertyVisibility(
+function propertyVisibility(
   propertyIds: Record<string, string>,
   visibleNames: string[],
 ): Array<{ property_id: string; visible: boolean }> {
