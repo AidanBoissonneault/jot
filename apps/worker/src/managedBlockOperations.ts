@@ -251,14 +251,14 @@ function advanceLocalBaseline(
     const id = op.jottathingBlockId;
     if (!id) continue;
     const index = content.findIndex((node) =>
-      node.attrs?.jottathingBlockId === id || node.attrs?.inkwellBlockId === id,
+      node.attrs?.jottathingBlockId === id,
     );
     if (op.type === 'block_delete') {
       if (index >= 0) content.splice(index, 1);
       continue;
     }
     const current = (currentContent.content ?? []).find((node) =>
-      node.attrs?.jottathingBlockId === id || node.attrs?.inkwellBlockId === id,
+      node.attrs?.jottathingBlockId === id,
     ) ?? op.payload.block;
     if (!current) continue;
     const next = {
@@ -474,7 +474,7 @@ function createBlockOperationConflict({
   const remoteContent = notionBlocksToTiptapDocumentStrict(remoteBlocks);
   const localNodes = localContent.content ?? [];
   const hasLocalBlock = localNodes.some((node) =>
-    String(node.attrs?.jottathingBlockId ?? node.attrs?.inkwellBlockId ?? '') === blockId,
+    String(node.attrs?.jottathingBlockId ?? '') === blockId,
   );
   const completeLocalContent: DocumentContent = {
     ...localContent,

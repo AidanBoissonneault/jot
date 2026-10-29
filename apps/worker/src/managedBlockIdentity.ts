@@ -67,7 +67,7 @@ export function desiredManagedBlocks({
 
 /** Reads a node's stable Jottathing identifier or derives a positional fallback. */
 function jottathingBlockIdFromNode(node: DocumentContent | undefined, index: number): string {
-  const value = node?.attrs?.[JOTTATHING_BLOCK_ID_ATTR] ?? node?.attrs?.inkwellBlockId;
+  const value = node?.attrs?.[JOTTATHING_BLOCK_ID_ATTR];
   return typeof value === 'string' && value ? value : `block-${index}`;
 }
 

@@ -9,8 +9,6 @@ import {
 } from '@/src/extensions/jottathingLink';
 
 const JOTTATHING_BLOCK_ID_ATTR = 'jottathingBlockId';
-const LEGACY_BLOCK_ID_ATTR = 'inkwellBlockId';
-const LEGACY_BLOCK_ID_DATA_ATTR = 'data-inkwell-block-id';
 const LEGACY_SOURCE_DATA_ATTR = 'data-inkwell-source';
 
 const TOP_LEVEL_BLOCK_TYPES = [
@@ -37,9 +35,7 @@ export const JottathingBlockIds = Extension.create({
         attributes: {
           [JOTTATHING_BLOCK_ID_ATTR]: {
             default: null,
-            parseHTML: (element) =>
-              element.getAttribute('data-jottathing-block-id') ??
-              element.getAttribute(LEGACY_BLOCK_ID_DATA_ATTR),
+            parseHTML: (element) => element.getAttribute('data-jottathing-block-id'),
             renderHTML: (attributes) => {
               const value = attributes[JOTTATHING_BLOCK_ID_ATTR];
 
@@ -113,20 +109,6 @@ export function normalizeJottathingBlockIds(content: DocumentContent): DocumentC
   const normalizedChildren = children.map((originalNode, index) => {
     let node = stripEmptySourceAttributes(originalNode);
     changed ||= node !== originalNode;
-    const legacyAttrs = node.attrs ?? {};
-    if (LEGACY_BLOCK_ID_ATTR in legacyAttrs) {
-      const { [LEGACY_BLOCK_ID_ATTR]: legacyId, ...attrs } = legacyAttrs;
-      node = {
-        ...node,
-        attrs: {
-          ...attrs,
-          ...(attrs[JOTTATHING_BLOCK_ID_ATTR] == null && typeof legacyId === 'string'
-            ? { [JOTTATHING_BLOCK_ID_ATTR]: legacyId }
-            : {}),
-        },
-      };
-      changed = true;
-    }
     const sourceAttrs = node.attrs ?? {};
     if ('inkwellSource' in sourceAttrs) {
       const { inkwellSource, ...attrs } = sourceAttrs;

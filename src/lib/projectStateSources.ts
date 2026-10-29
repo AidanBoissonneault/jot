@@ -160,8 +160,8 @@ function prefixedPayload(text: string, prefix: string, legacyPrefix: string): st
 
 function parseSourceV2(value: string): SourceV2 | undefined {
   try {
-    const parsed = JSON.parse(value) as { i?: unknown; s?: unknown; inkwellBlockId?: unknown };
-    const blockId = parsed.i ?? parsed.inkwellBlockId;
+    const parsed = JSON.parse(value) as { i?: unknown; s?: unknown };
+    const blockId = parsed.i;
     if (
       typeof blockId !== 'string' ||
       !blockId ||
@@ -199,8 +199,8 @@ function replaceCodeBlockText(node: DocumentContent, text: string): DocumentCont
 
 function sourceEntryBlockId(payload: string): string | undefined {
   try {
-    const value = JSON.parse(payload) as { blockId?: unknown; inkwellBlockId?: unknown };
-    const blockId = value.blockId ?? value.inkwellBlockId;
+    const value = JSON.parse(payload) as { blockId?: unknown };
+    const blockId = value.blockId;
     return typeof blockId === 'string' && blockId ? blockId : undefined;
   } catch {
     return undefined;

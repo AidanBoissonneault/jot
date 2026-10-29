@@ -98,7 +98,7 @@ export function visibleProjectStateContent(
 }
 
 export function capturedBlockId(content: DocumentContent[]) {
-  const value = content[0]?.attrs?.jottathingBlockId ?? content[0]?.attrs?.inkwellBlockId;
+  const value = content[0]?.attrs?.jottathingBlockId;
   return typeof value === 'string' && value ? value : null;
 }
 
@@ -112,8 +112,8 @@ export function migratePageSourcesToProjectState(
   const content: DocumentContent[] = [];
 
   for (const node of pageContent.content ?? []) {
-    const source = decodeJottathingSource(node.attrs?.[JOTTATHING_SOURCE_ATTR] ?? node.attrs?.inkwellSource);
-    const blockId = node.attrs?.jottathingBlockId ?? node.attrs?.inkwellBlockId;
+    const source = decodeJottathingSource(node.attrs?.[JOTTATHING_SOURCE_ATTR]);
+    const blockId = node.attrs?.jottathingBlockId;
 
     if (source && typeof blockId === 'string' && blockId) {
       const storedSource = sourceFromProjectState(nextState, blockId);
@@ -246,9 +246,9 @@ function sourceEntry(node: DocumentContent): {
   if (!raw) return null;
 
   try {
-    const parsed = JSON.parse(raw) as { blockId?: unknown; inkwellBlockId?: unknown; source?: unknown };
+    const parsed = JSON.parse(raw) as { blockId?: unknown; source?: unknown };
     const source = decodeJottathingSource(parsed.source);
-    const blockId = parsed.blockId ?? parsed.inkwellBlockId;
+    const blockId = parsed.blockId;
     return typeof blockId === 'string' && blockId && source
       ? { blockId, source: storeJottathingSource(source) }
       : null;

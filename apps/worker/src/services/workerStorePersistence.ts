@@ -65,7 +65,7 @@ export function createWorkerStorePersistence(supabase: WorkerSupabaseClient) {
     return record;
   }
 
-  /** Renames a persisted identity field while retaining the exact opaque block ID value. */
+  /** Restores optional mapping values from an untrusted serialized store. */
   function normalizeBlockMappings(value: unknown): WorkerStore['blockMappings'] {
     const mappings = safeRecord<unknown>(value);
     return Object.fromEntries(Object.entries(mappings).map(([pageId, entries]) => [
@@ -74,11 +74,8 @@ export function createWorkerStorePersistence(supabase: WorkerSupabaseClient) {
         ? entries.map((entry) => {
             if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return entry;
             const mapping = entry as Record<string, unknown>;
-            const blockId = mapping.jottathingBlockId ?? mapping.inkwellBlockId;
-            const { inkwellBlockId: _legacyId, ...remaining } = mapping;
             return {
-              ...remaining,
-              ...(typeof blockId === 'string' && blockId ? { jottathingBlockId: blockId } : {}),
+              ...mapping,
               lastSyncedHash: typeof mapping.lastSyncedHash === 'string' ? mapping.lastSyncedHash : '',
               newState: mapping.newState ?? null,
               oldState: mapping.oldState ?? null,
