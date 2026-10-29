@@ -6,26 +6,10 @@
 
 import type { SyncContentConflict } from './sync.js';
 
-/** Identifies the semantic kind of a captured item. */
-export type CaptureType = 'quote' | 'task' | 'idea' | 'link';
 /** Describes the lifecycle states used while a local save is pending. */
 export type OptimisticStatus = 'creating' | 'saving' | 'saved' | 'stale' | 'error';
 /** Describes all idle, optimistic, and terminal save states. */
 export type SaveStatus = 'idle' | OptimisticStatus;
-
-/** Describes source location and semantic metadata for captured text. */
-export type HighlightMeta = {
-  text: string;
-  sourceLink?: string;
-  xpath?: string;
-  offset?: number;
-  prefix?: string;
-  suffix?: string;
-  isHeading?: boolean;
-  headingLevel?: 1 | 2 | 3 | 4 | 5 | 6;
-  isCodeBlock?: boolean;
-  codeLanguage?: string;
-};
 
 /** Describes a project and its workspace-derived synchronization state. */
 export type Project = {

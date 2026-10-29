@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
   DIRECT_MEDIA_UPLOAD_LEASE_MS,
-  hasPendingTransientMedia,
   isDirectMediaUploadActive,
   mergeUploadedMediaAttributes,
   markUnrecoverableTransientMedia,
@@ -24,7 +23,6 @@ describe('media content helpers', () => {
       paragraph('Saved text'),
     ]);
 
-    expect(hasPendingTransientMedia(content)).toBe(true);
     expect(sanitizeMediaForSync(content).content).toEqual([paragraph('Saved text')]);
   });
 
@@ -37,7 +35,6 @@ describe('media content helpers', () => {
       }),
     ]);
 
-    expect(hasPendingTransientMedia(content)).toBe(false);
     expect(sanitizeMediaForSync(content).content?.[0].attrs).toMatchObject({
       src: 'blob:chrome-extension://preview',
       notionFileUploadId: 'upload-id',
@@ -145,7 +142,6 @@ describe('media content helpers', () => {
     const content = doc([localImage, paragraph('Saved locally')]);
 
     expect(markUnrecoverableTransientMedia(content).content?.[0]).toEqual(localImage);
-    expect(hasPendingTransientMedia(content)).toBe(true);
     expect(sanitizeMediaForSync(content).content).toEqual([paragraph('Saved locally')]);
   });
 
@@ -184,7 +180,6 @@ describe('media content helpers', () => {
     ]);
     const synced = doc([audio({ src: 'https://secure.notion-static.com/recording.mp3' })]);
 
-    expect(hasPendingTransientMedia(content)).toBe(false);
     expect(sanitizeMediaForSync(content).content?.[0].attrs).toMatchObject({
       src: 'blob:chrome-extension://recording',
       notionFileUploadId: 'audio-upload-id',

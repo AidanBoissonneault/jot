@@ -25,16 +25,6 @@ export function sanitizeMediaForSync(content: DocumentContent): DocumentContent 
   };
 }
 
-export function hasPendingTransientMedia(content: DocumentContent): boolean {
-  if (isUploadableMediaNode(content)) {
-    const attrs = content.attrs ?? {};
-    const src = String(attrs.src ?? '');
-    return isTransientUrl(src) && !attrs.notionFileUploadId;
-  }
-
-  return content.content?.some(hasPendingTransientMedia) ?? false;
-}
-
 export function mergeSyncedMediaContent(
   localContent: DocumentContent,
   syncedContent: DocumentContent | undefined,
