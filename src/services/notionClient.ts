@@ -627,6 +627,197 @@ function normalizeStoredWorkspaceRecords(
   };
 }
 
+function isWorkspaceVisibleForAccount(
+  workspace: Workspace,
+  syncConfig: SyncConfig,
+  activeAccountId: string | undefined,
+): boolean {
+  if (workspace.kind === 'local') {
+    return workspace.accountId
+      ? !activeAccountId || workspace.accountId === activeAccountId
+      : !syncConfig.authenticated || syncConfig.syncQueueOwnerUserId === undefined;
+  }
+  return Boolean(
+    syncConfig.authenticated && workspace.accountId === syncConfig.userId &&
+    (!workspace.notionWorkspaceId || workspace.notionWorkspaceId === syncConfig.workspaceId),
+  );
+}
+
+type StorageNormalizationCheck = {
+  stored: JottathingStorage;
+  storedSyncConfig: SyncConfig;
+  hasCompatibleActivePages: boolean;
+  hasCompatiblePageStatuses: boolean;
+  currentWorkspaceId: string;
+  currentProjectIdByWorkspace: Record<string, string>;
+  hasExplicitlyLoggedOut: boolean;
+  shouldCreatePages: boolean;
+  workspaceMigrationChanged: boolean;
+  sourceMigrationChanged: boolean;
+  legacyAccountId: string | undefined;
+  legacyWorkspaceId: string | undefined;
+};
+
+/** Decides when normalized storage needs one durable rewrite. */
+function shouldPersistStorageNormalization(check: StorageNormalizationCheck): boolean {
+  const { stored, storedSyncConfig } = check;
+  const hasPageScopeMigration = (stored.pages ?? []).some((page) =>
+    !page.syncMode ||
+    (page.syncMode === 'notion' && !page.syncAccountId && Boolean(check.legacyAccountId)) ||
+    (page.syncMode === 'notion' && !page.syncWorkspaceId && Boolean(check.legacyWorkspaceId)),
+  );
+  const hasQueueScopeMigration = Boolean(
+    !storedSyncConfig.syncQueueOwnerWorkspaceId && check.legacyAccountId && check.legacyWorkspaceId,
+  );
+
+  return [
+    !stored.activePageIdsByProject,
+    !check.hasCompatibleActivePages,
+    !check.hasCompatiblePageStatuses,
+    !stored.projects,
+    !stored.currentProjectId,
+    stored.notionHydrationSource === undefined,
+    !stored.syncConfig,
+    !stored.workspaces,
+    check.workspaceMigrationChanged,
+    stored.currentWorkspaceId !== check.currentWorkspaceId,
+    JSON.stringify(stored.currentProjectIdByWorkspace ?? {}) !==
+      JSON.stringify(check.currentProjectIdByWorkspace),
+    stored.hasExplicitlyLoggedOut === undefined && check.hasExplicitlyLoggedOut,
+    check.shouldCreatePages,
+    stored.hasMigratedCapturesToPages !== true,
+    check.sourceMigrationChanged,
+    hasPageScopeMigration,
+    hasQueueScopeMigration,
+  ].some(Boolean);
+}
+
+type VisibleStorageRecords = {
+  pages: ProjectPage[];
+  projects: Project[];
+  activePageIdsByProject: Record<string, string>;
+  workspaces: Workspace[];
+};
+
+/** Filters records to the active account and adds page-derived sync summaries. */
+function createVisibleStorageRecords(
+  allProjects: Project[],
+  allPages: ProjectPage[],
+  allWorkspaces: Workspace[],
+  visibleWorkspaces: Workspace[],
+  syncConfig: SyncConfig,
+  storedActivePageIdsByProject: Record<string, string> | undefined,
+): VisibleStorageRecords {
+  const pages = allPages.filter((page) => isPageVisibleForAccount(page, syncConfig));
+  const visibleProjectIds = new Set(pages.map((page) => page.projectId));
+  const visibleProjects = allProjects
+    .filter((project) => visibleProjectIds.has(project.id))
+    .map((project) => ({
+      ...project,
+      syncMode: allWorkspaces.find((workspace) => workspace.id === project.workspaceId)?.kind ?? 'local',
+    }));
+  const activePageIdsByProject = createCompatibleActivePageIds(
+    visibleProjects,
+    pages,
+    storedActivePageIdsByProject,
+  );
+  const projects = visibleProjects.map((project) => {
+    const projectPages = pages.filter((page) => page.projectId === project.id);
+    return {
+      ...project,
+      // Project menu badges follow page states; project-state edits stay in conflict review.
+      ...summarizeSyncState(projectPages),
+    };
+  });
+  const workspaces = visibleWorkspaces.map((workspace) => {
+    const workspaceProjects = projects.filter((project) =>
+      project.workspaceId === workspace.id && project.status !== 'archived',
+    );
+    return { ...workspace, ...summarizeSyncState(workspaceProjects) };
+  });
+  return { pages, projects, activePageIdsByProject, workspaces };
+}
+
+type WorkspaceProjectSelection = {
+  currentWorkspaceId: string;
+  currentProjectId: string;
+  currentProjectIdByWorkspace: Record<string, string>;
+  projects: Project[];
+  pages: ProjectPage[];
+  workspaceMigrationChanged: boolean;
+};
+
+/** Selects a visible workspace and keeps a local one usable if it has no project. */
+function resolveWorkspaceProjectSelection(input: {
+  visibleWorkspaces: Workspace[];
+  localWorkspace: Workspace;
+  storedCurrentWorkspaceId: string | undefined;
+  storedCurrentProjectId: string | undefined;
+  storedCurrentProjectIdByWorkspace: Record<string, string> | undefined;
+  projects: Project[];
+  pages: ProjectPage[];
+  workspaceMigrationChanged: boolean;
+}): WorkspaceProjectSelection {
+  let { projects, pages, workspaceMigrationChanged } = input;
+  const currentWorkspaceId = input.visibleWorkspaces.some((workspace) =>
+    workspace.id === input.storedCurrentWorkspaceId,
+  )
+    ? input.storedCurrentWorkspaceId!
+    : input.localWorkspace.id;
+  const selectedWorkspace = input.visibleWorkspaces.find((workspace) =>
+    workspace.id === currentWorkspaceId,
+  );
+  if (selectedWorkspace?.kind === 'local' && !projects.some((project) =>
+    project.workspaceId === currentWorkspaceId,
+  )) {
+    const starter = createUntitledLocalWorkspaceContents(selectedWorkspace);
+    projects = [starter.project, ...projects];
+    pages = [...pages, starter.page];
+    workspaceMigrationChanged = true;
+  }
+
+  const currentProjectIdByWorkspace = { ...(input.storedCurrentProjectIdByWorkspace ?? {}) };
+  const workspaceProjects = projects.filter((project) => project.workspaceId === currentWorkspaceId);
+  const requestedProjectId = currentProjectIdByWorkspace[currentWorkspaceId] ?? input.storedCurrentProjectId;
+  const currentProjectId = workspaceProjects.some((project) => project.id === requestedProjectId)
+    ? requestedProjectId!
+    : workspaceProjects[0]?.id ?? '';
+  currentProjectIdByWorkspace[currentWorkspaceId] = currentProjectId;
+
+  return {
+    currentWorkspaceId,
+    currentProjectId,
+    currentProjectIdByWorkspace,
+    projects,
+    pages,
+    workspaceMigrationChanged,
+  };
+}
+
+type PersistedStorageValues = Required<Pick<JottathingStorage,
+  | 'activePageIdsByProject'
+  | 'projects'
+  | 'currentProjectId'
+  | 'currentWorkspaceId'
+  | 'currentProjectIdByWorkspace'
+  | 'pages'
+  | 'syncConfig'
+  | 'workspaces'
+  | 'hasExplicitlyLoggedOut'
+  | 'notionHydrationSource'
+  | 'hasMigratedCapturesToPages'
+>>;
+
+/** Strips any stored token copy, then writes normalized records once when needed. */
+async function persistReadStorageState(
+  check: StorageNormalizationCheck,
+  values: PersistedStorageValues,
+  hasStoredSyncCredentials: boolean,
+): Promise<void> {
+  if (hasStoredSyncCredentials) await idbSet('syncConfig', values.syncConfig);
+  if (shouldPersistStorageNormalization(check)) await idbSetMany(values);
+}
+
 async function readStorage(): Promise<Required<JottathingStorage>> {
   await recoverIdbWriteFence();
   await migrateStorageToIdb();
@@ -696,111 +887,59 @@ async function readStorage(): Promise<Required<JottathingStorage>> {
     hasRemoteBackedData(allProjects, allPages) ? hydrationSource(syncConfig) : ''
   );
   const activeAccountId = syncConfig.userId ?? syncConfig.syncQueueOwnerUserId ?? undefined;
-  const visibleWorkspaces = allWorkspaces.filter((workspace) => workspace.kind === 'local'
-    ? workspace.accountId
-      ? !activeAccountId || workspace.accountId === activeAccountId
-      : !syncConfig.authenticated || syncConfig.syncQueueOwnerUserId === undefined
-    : Boolean(
-        syncConfig.authenticated && workspace.accountId === syncConfig.userId &&
-        (!workspace.notionWorkspaceId || workspace.notionWorkspaceId === syncConfig.workspaceId),
-      ));
-  const currentWorkspaceId = visibleWorkspaces.some((workspace) => workspace.id === stored.currentWorkspaceId)
-    ? stored.currentWorkspaceId!
-    : localWorkspace.id;
-  const selectedWorkspace = visibleWorkspaces.find((workspace) => workspace.id === currentWorkspaceId);
-  if (selectedWorkspace?.kind === 'local' && !allProjects.some((project) => project.workspaceId === currentWorkspaceId)) {
-    const { project, page } = createUntitledLocalWorkspaceContents(selectedWorkspace);
-    allProjects = [project, ...allProjects];
-    allPages = [...allPages, page];
-    workspaceMigrationChanged = true;
-  }
-  const currentProjectIdByWorkspace = { ...(stored.currentProjectIdByWorkspace ?? {}) };
-  const activeWorkspaceProjects = allProjects.filter((project) => project.workspaceId === currentWorkspaceId);
-  const requestedProjectId = currentProjectIdByWorkspace[currentWorkspaceId] ?? stored.currentProjectId;
-  const activeProjectId = activeWorkspaceProjects.some((project) => project.id === requestedProjectId)
-    ? requestedProjectId!
-    : activeWorkspaceProjects[0]?.id ?? '';
-  currentProjectIdByWorkspace[currentWorkspaceId] = activeProjectId;
-  const hasPageScopeMigration = (stored.pages ?? []).some((page) =>
-    !page.syncMode ||
-    (page.syncMode === 'notion' && !page.syncAccountId && Boolean(legacyAccountId)) ||
-    (page.syncMode === 'notion' && !page.syncWorkspaceId && Boolean(legacyWorkspaceId)),
+  const visibleWorkspaces = allWorkspaces.filter((workspace) =>
+    isWorkspaceVisibleForAccount(workspace, syncConfig, activeAccountId),
   );
-  const hasQueueScopeMigration = Boolean(
-    !storedSyncConfig.syncQueueOwnerWorkspaceId && legacyAccountId && legacyWorkspaceId,
-  );
+  const workspaceSelection = resolveWorkspaceProjectSelection({
+    visibleWorkspaces,
+    localWorkspace,
+    storedCurrentWorkspaceId: stored.currentWorkspaceId,
+    storedCurrentProjectId: stored.currentProjectId,
+    storedCurrentProjectIdByWorkspace: stored.currentProjectIdByWorkspace,
+    projects: allProjects,
+    pages: allPages,
+    workspaceMigrationChanged,
+  });
+  allProjects = workspaceSelection.projects;
+  allPages = workspaceSelection.pages;
+  workspaceMigrationChanged = workspaceSelection.workspaceMigrationChanged;
+  const { currentWorkspaceId, currentProjectId, currentProjectIdByWorkspace } = workspaceSelection;
 
-  if (hasStoredSyncCredentials) {
-    await idbSet('syncConfig', syncConfig);
-  }
+  await persistReadStorageState({
+    stored,
+    storedSyncConfig,
+    hasCompatibleActivePages,
+    hasCompatiblePageStatuses,
+    currentWorkspaceId,
+    currentProjectIdByWorkspace,
+    hasExplicitlyLoggedOut,
+    shouldCreatePages,
+    workspaceMigrationChanged,
+    sourceMigrationChanged,
+    legacyAccountId,
+    legacyWorkspaceId,
+  }, {
+    activePageIdsByProject: allActivePageIdsByProject,
+    projects: allProjects,
+    currentProjectId,
+    currentWorkspaceId,
+    currentProjectIdByWorkspace,
+    pages: allPages,
+    syncConfig,
+    workspaces: allWorkspaces,
+    hasExplicitlyLoggedOut,
+    notionHydrationSource,
+    hasMigratedCapturesToPages: true,
+  }, hasStoredSyncCredentials);
 
-  if (
-    !stored.activePageIdsByProject ||
-    !hasCompatibleActivePages ||
-    !hasCompatiblePageStatuses ||
-    !stored.projects ||
-    !stored.currentProjectId ||
-    stored.notionHydrationSource === undefined ||
-    !stored.syncConfig ||
-    !stored.workspaces ||
-    workspaceMigrationChanged ||
-    stored.currentWorkspaceId !== currentWorkspaceId ||
-    JSON.stringify(stored.currentProjectIdByWorkspace ?? {}) !== JSON.stringify(currentProjectIdByWorkspace) ||
-    (stored.hasExplicitlyLoggedOut === undefined && hasExplicitlyLoggedOut) ||
-    shouldCreatePages ||
-    stored.hasMigratedCapturesToPages !== true ||
-    sourceMigrationChanged ||
-    hasPageScopeMigration ||
-    hasQueueScopeMigration
-  ) {
-    await idbSetMany({
-      activePageIdsByProject: allActivePageIdsByProject,
-      projects: allProjects,
-      currentProjectId: activeProjectId,
-      currentWorkspaceId,
-      currentProjectIdByWorkspace,
-      pages: allPages,
-      syncConfig,
-      workspaces: allWorkspaces,
-      hasExplicitlyLoggedOut,
-      notionHydrationSource,
-      hasMigratedCapturesToPages: true,
-    });
-  }
-
-  const pages = allPages.filter((page) => isPageVisibleForAccount(page, syncConfig));
-  const visibleProjectIds = new Set(pages.map((page) => page.projectId));
-  const visibleProjects = allProjects
-    .filter((project) => visibleProjectIds.has(project.id))
-    .map((project) => ({
-      ...project,
-      syncMode: allWorkspaces.find((workspace) => workspace.id === project.workspaceId)?.kind ?? 'local',
-    }));
-  const currentProjectId = activeProjectId;
-  const activePageIdsByProject = createCompatibleActivePageIds(
-    visibleProjects,
-    pages,
+  const visibleRecords = createVisibleStorageRecords(
+    allProjects,
+    allPages,
+    allWorkspaces,
+    visibleWorkspaces,
+    syncConfig,
     stored.activePageIdsByProject,
   );
-  const projects = visibleProjects.map((project) => {
-    const projectPages = pages.filter((page) => page.projectId === project.id);
-    return {
-      ...project,
-      // A project's menu badge represents its pages. Project-state edits and
-      // conflicts stay in the conflict flow and must not make unchanged pages
-      // appear to have block differences.
-      ...summarizeSyncState(projectPages),
-    };
-  });
-  const workspacesWithSyncState = visibleWorkspaces.map((workspace) => {
-    const workspaceProjects = projects.filter((project) =>
-      project.workspaceId === workspace.id && project.status !== 'archived',
-    );
-    return {
-      ...workspace,
-      ...summarizeSyncState(workspaceProjects),
-    };
-  });
 
   return {
     captures,
@@ -808,13 +947,13 @@ async function readStorage(): Promise<Required<JottathingStorage>> {
     currentWorkspaceId,
     currentProjectIdByWorkspace,
     hasExplicitlyLoggedOut,
-    activePageIdsByProject,
+    activePageIdsByProject: visibleRecords.activePageIdsByProject,
     hasMigratedCapturesToPages: true,
-    pages,
-    projects,
+    pages: visibleRecords.pages,
+    projects: visibleRecords.projects,
     syncConfig,
     notionHydrationSource,
-    workspaces: workspacesWithSyncState,
+    workspaces: visibleRecords.workspaces,
   };
 }
 
