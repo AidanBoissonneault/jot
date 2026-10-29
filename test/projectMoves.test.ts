@@ -228,4 +228,30 @@ describe('project workspace moves', () => {
     expect(storedPage?.notionPageId).toBeUndefined();
     expect(storedPage?.content.content?.[0]?.content?.[0]?.text).toBe('page-notion-to-local content');
   });
+
+  test('does not move local data into Notion while disconnected', async () => {
+    const source = makeWorkspace('workspace-project-disconnected-source', 'local');
+    const destination = makeWorkspace(
+      'workspace-project-disconnected-notion',
+      'notion',
+      connectedConfig.workspaceId,
+    );
+    const project = makeProject('project-disconnected-move', source);
+    const page = makePage('page-disconnected-move', project, source);
+    seedProjectMove({
+      currentWorkspace: source,
+      currentProject: project,
+      workspaces: [source, destination],
+      projects: [project],
+      pages: [page],
+      syncConfig: { ...connectedConfig, connected: false },
+    });
+
+    await expect(notionClient.moveProjectToWorkspace(project.id, destination.id))
+      .rejects.toThrow('Sign in to the Notion account that should own this project.');
+    expect((readBrowserStorage().projects as Project[])
+      .find((entry) => entry.id === project.id)?.workspaceId).toBe(source.id);
+    expect((readBrowserStorage().pages as ProjectPage[])
+      .find((entry) => entry.id === page.id)?.workspaceId).toBe(source.id);
+  });
 });
