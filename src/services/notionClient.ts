@@ -1035,6 +1035,26 @@ function projectUsesNotionSync(
     pages.some((page) => page.projectId === project.id && page.syncMode === 'notion');
 }
 
+function withoutJottathingBlockIds(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(withoutJottathingBlockIds);
+  if (!value || typeof value !== 'object') return value;
+
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([key]) => key !== 'jottathingBlockId')
+      .map(([key, nested]) => [key, withoutJottathingBlockIds(nested)]),
+  );
+}
+
+function hasUnuploadedSnapshot(
+  content: DocumentContent | undefined,
+  baseline: DocumentContent | undefined,
+): boolean {
+  if (!baseline) return true;
+  return JSON.stringify(withoutJottathingBlockIds(stripConflictResolutionMarkers(content ?? emptyDocument()))) !==
+    JSON.stringify(withoutJottathingBlockIds(stripConflictResolutionMarkers(baseline)));
+}
+
 async function syncProject(project: Project): Promise<Project | undefined> {
   const { syncConfig, pages, workspaces } = await readStorage();
   if (!projectUsesNotionSync(project, pages, workspaces)) {
@@ -2963,10 +2983,30 @@ export const notionClient = {
       ? Math.max(0, remoteQueue.failedCount ?? 0)
       : 0;
 
-    // Project state uses a separate durable client outbox. It can be the only
-    // pending work after page uploads have drained, so always check it during
-    // an explicit Sync instead of tying delivery to the server page queue.
-    await deliverPendingProjectSyncEvents(syncConfig);
+    // Project state uses a separate durable client outbox. Repair active local
+    // snapshots that never acquired a remote baseline before any full reload;
+    // otherwise a reload can replace a project whose first state upload never
+    // reached Notion.
+    const projectSnapshot = await readStorage();
+    const pendingProjectEvents = await listPendingProjectSyncEvents();
+    const pendingProjectIds = new Set(pendingProjectEvents.map((event) => event.projectId));
+    const projectsNeedingReconciliation = projectSnapshot.projects.filter((project) =>
+      projectUsesNotionSync(project, projectSnapshot.pages, projectSnapshot.workspaces) &&
+      (project.syncState !== undefined && project.syncState !== 'saved' ||
+        hasUnuploadedSnapshot(project.stateContent, project.stateSyncBaselineContent)),
+    );
+    for (const project of projectsNeedingReconciliation) {
+      if (pendingProjectIds.has(project.id)) continue;
+      await addPendingProjectSyncEvent(project, syncConfig.selectedParentPageId);
+      pendingProjectIds.add(project.id);
+    }
+
+    onProgress?.({ phase: 'uploading', pending: await pendingLocalWorkCount() });
+    const projectDelivery = await deliverPendingProjectSyncEvents(syncConfig);
+    const unresolvedProjectCount = projectDelivery.blockedProjectIds.size;
+    if (unresolvedProjectCount || projectDelivery.retryError) {
+      failedUploadCount = Math.max(failedUploadCount, unresolvedProjectCount || 1);
+    }
     if (remoteQueue.hasPending) {
       onProgress?.({ phase: 'waiting_for_server', pending: remoteQueue.pendingCount ?? requeuedCount });
       failedUploadCount = Math.max(
@@ -2979,10 +3019,26 @@ export const notionClient = {
     const pendingOps = await listPendingSyncOps();
     onProgress?.({ phase: 'checking_notion' });
     const validation = await notionClient.validateNotionCache();
+    const projectsByIdForReconciliation = new Map(
+      workspace.projects.map((project) => [project.id, project]),
+    );
     const pageIdsToReconcile = new Set([
       ...pendingOps.map((op) => op.pageId),
       ...workspace.pages.filter((page) => page.syncState === 'error').map((page) => page.id),
       ...validation.failedPageIds,
+      ...workspace.pages.filter((page) => {
+        const project = projectsByIdForReconciliation.get(page.projectId);
+        return Boolean(
+          project &&
+          page.status !== 'archived' &&
+          project.status !== 'archived' &&
+          projectUsesNotionSync(project, workspace.pages, workspace.workspaces) &&
+          ((page.syncState !== undefined && page.syncState !== 'saved') ||
+            hasUnuploadedSnapshot(page.content, page.syncBaselineContent) ||
+            (typeof page.localSyncVersion === 'number' &&
+              page.localSyncVersion > (page.knownSyncVersion ?? 0))),
+        );
+      }).map((page) => page.id),
     ]);
 
     let reconciledPageCount = 0;
