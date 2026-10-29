@@ -2,6 +2,7 @@ import { setActivePinia, createPinia } from 'pinia';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { nextTick } from 'vue';
 import { applySyncResult, notionClient } from '@/src/services/notionClient';
+import { idbGetMany } from '@/src/services/idbStore';
 import {
   addPendingSyncOps,
   addPendingProjectSyncEvent,
@@ -1880,7 +1881,119 @@ describe('optimistic page creation', () => {
     expect(await listPendingSyncOps()).toHaveLength(0);
   });
 
-  test('queues an early rename against the first create snapshot', async () => {
+  test('does not resurrect a temp ghost when an editor save overlaps page replacement', async () => {
+    const workspace: Workspace = {
+      id: 'workspace-notion-notion%3Atest-user-unknown',
+      name: 'Notion',
+      kind: 'notion',
+      accountId: connectedConfig.userId,
+      notionWorkspaceId: 'notion-workspace',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    };
+    const existingProject = {
+      ...baseProject,
+      workspaceId: workspace.id,
+      syncMode: 'notion' as const,
+    };
+    const existingPage = {
+      ...basePage,
+      workspaceId: workspace.id,
+      syncMode: 'notion' as const,
+      syncAccountId: workspace.accountId,
+      syncWorkspaceId: workspace.notionWorkspaceId,
+    };
+    resetBrowserStorage({
+      activePageIdsByProject: { [existingProject.id]: existingPage.id },
+      currentProjectId: existingProject.id,
+      currentProjectIdByWorkspace: { [workspace.id]: existingProject.id },
+      currentWorkspaceId: workspace.id,
+      hasMigratedCapturesToPages: true,
+      pages: [existingPage],
+      projects: [existingProject],
+      syncConfig: { ...connectedConfig, workspaceId: workspace.notionWorkspaceId },
+      workspaces: [workspace],
+    });
+
+    const firstQueueWriteStarted = deferred<void>();
+    const allowFirstQueueWrite = deferred<void>();
+    let isFirstQueueWrite = true;
+    const originalAddPendingSyncOps = addPendingSyncOps;
+    const addOps = vi.spyOn(await import('@/src/services/syncQueue'), 'addPendingSyncOps')
+      .mockImplementation(async (ops) => {
+        if (isFirstQueueWrite) {
+          isFirstQueueWrite = false;
+          firstQueueWriteStarted.resolve();
+          await allowFirstQueueWrite.promise;
+        }
+        return originalAddPendingSyncOps(ops);
+      });
+    const editorReadStarted = deferred<void>();
+    const allowEditorRead = deferred<void>();
+    const replacementReadStarted = deferred<void>();
+    const allowReplacementRead = deferred<void>();
+    let delayEditorRead = false;
+    let delayReplacementRead = false;
+    const originalIdbGetMany = idbGetMany;
+    const getManySpy = vi.spyOn(await import('@/src/services/idbStore'), 'idbGetMany')
+      .mockImplementation(async (keys) => {
+        const result = await originalIdbGetMany(keys);
+        if (delayEditorRead && keys.includes('syncConfig') && keys.includes('pages')) {
+          delayEditorRead = false;
+          editorReadStarted.resolve();
+          await allowEditorRead.promise;
+        } else if (delayReplacementRead && keys.length === 2 && keys.includes('activePageIdsByProject')) {
+          delayReplacementRead = false;
+          replacementReadStarted.resolve();
+          await allowReplacementRead.promise;
+        }
+        return result;
+      });
+    const fetchMock = vi.fn(async () => jsonResponse({ queued: true, versions: {} }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    try {
+      const creation = await notionClient.createProjectPage(existingProject.id, 'Auto Page Name');
+      await firstQueueWriteStarted.promise;
+      delayEditorRead = true;
+      delayReplacementRead = true;
+      const editorSave = notionClient.updateProjectPage({
+        ...creation.page,
+        title: 'User Page Name',
+      });
+      await editorReadStarted.promise;
+      allowFirstQueueWrite.resolve();
+      await replacementReadStarted.promise;
+      allowEditorRead.resolve();
+      await flushPromises(10);
+      allowReplacementRead.resolve();
+      const settledPage = await creation.settled;
+      await editorSave;
+      await notionClient.flushPendingSyncOps({ force: true });
+
+      const storedPages = readBrowserStorage().pages as ProjectPage[];
+      const createdPages = storedPages.filter((page) =>
+        page.projectId === existingProject.id && page.id !== existingPage.id,
+      );
+      const pushedOps = (fetchMock.mock.calls as unknown as Array<[string, RequestInit]>)
+        .filter(([url]) => url.endsWith('/sync/push'))
+        .flatMap(([, request]) => JSON.parse(String(request.body)).ops as SyncBlockOperation[]);
+
+      expect(createdPages).toHaveLength(1);
+      expect(createdPages[0]).toMatchObject({ id: settledPage.id, title: 'User Page Name' });
+      expect(pushedOps.some((op) =>
+        op.pageId === settledPage.id && op.payload.page.title === 'User Page Name',
+      )).toBe(true);
+    } finally {
+      allowFirstQueueWrite.resolve();
+      allowEditorRead.resolve();
+      allowReplacementRead.resolve();
+      addOps.mockRestore();
+      getManySpy.mockRestore();
+    }
+  });
+
+  test('persists one page when the editor saves its early title before creation settles', async () => {
     const workspace: Workspace = {
       id: 'workspace-notion-notion%3Atest-user-unknown',
       name: 'Notion',
@@ -1929,13 +2042,24 @@ describe('optimistic page creation', () => {
       });
     const fetchMock = vi.fn(async () => jsonResponse({ queued: true, versions: {} }));
     vi.stubGlobal('fetch', fetchMock);
+    const store = useJottathingStore();
 
     try {
-      const creation = await notionClient.createProjectPage(existingProject.id, 'Auto Page Name');
+      await seedStore(store, [existingPage]);
+      store.projects = [existingProject];
+      store.syncConfig = { ...connectedConfig, workspaceId: workspace.notionWorkspaceId };
+      store.currentProjectId = existingProject.id;
+      store.currentPage = existingPage;
+      await store.createPage();
+      const tempPageId = store.currentPage?.id ?? '';
       await firstQueueWriteStarted.promise;
-      await notionClient.renameProjectPage(creation.page.id, 'User Page Name');
+      await store.saveCurrentPageContent(emptyDocument(), {
+        preserveLocalContent: true,
+        title: 'User Page Name',
+      });
       allowFirstQueueWrite.resolve();
-      const settledPage = await creation.settled;
+
+      await waitFor(() => expect(store.currentPage?.id).not.toBe(tempPageId));
       await notionClient.flushPendingSyncOps({ force: true });
 
       const storedPages = readBrowserStorage().pages as ProjectPage[];
@@ -1947,9 +2071,9 @@ describe('optimistic page creation', () => {
         .flatMap(([, request]) => JSON.parse(String(request.body)).ops as SyncBlockOperation[]);
 
       expect(createdPages).toHaveLength(1);
-      expect(createdPages[0]).toMatchObject({ id: settledPage.id, title: 'User Page Name' });
+      expect(createdPages[0]).toMatchObject({ title: 'User Page Name' });
       expect(pushedOps.some((op) =>
-        op.pageId === settledPage.id && op.payload.page.title === 'User Page Name',
+        op.pageId === createdPages[0].id && op.payload.page.title === 'User Page Name',
       )).toBe(true);
     } finally {
       allowFirstQueueWrite.resolve();

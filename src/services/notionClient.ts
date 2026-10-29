@@ -876,7 +876,30 @@ async function persistPagesById(pageUpdates: ProjectPage[]): Promise<void> {
   const write = workspaceWriteQueue.then(async () => {
     const storedPages = (await idbGet<ProjectPage[]>('pages')) ?? [];
     const pagesById = new Map(storedPages.map((page) => [page.id, page]));
-    for (const page of pageUpdates) pagesById.set(page.id, page);
+    for (const page of pageUpdates) {
+      const resolvedPageId = pageIdAliases.get(page.id) ?? page.id;
+      const resolvedProjectId = projectIdAliases.get(page.projectId) ?? page.projectId;
+      const currentPage = pagesById.get(resolvedPageId);
+      const resolvedPage: ProjectPage = {
+        ...currentPage,
+        ...page,
+        id: resolvedPageId,
+        projectId: resolvedProjectId,
+        notionPageId: page.notionPageId ?? currentPage?.notionPageId,
+        notionParentPageId: page.notionParentPageId ?? currentPage?.notionParentPageId,
+        notionDatabaseId: page.notionDatabaseId ?? currentPage?.notionDatabaseId,
+        notionDataSourceId: page.notionDataSourceId ?? currentPage?.notionDataSourceId,
+        knownSyncVersion: page.knownSyncVersion ?? currentPage?.knownSyncVersion,
+        serverSyncVersion: page.serverSyncVersion ?? currentPage?.serverSyncVersion,
+        remoteRevision: page.remoteRevision ?? currentPage?.remoteRevision,
+        syncBaselineContent: page.syncBaselineContent ?? currentPage?.syncBaselineContent,
+      };
+      if (page.id !== resolvedPageId) pagesById.delete(page.id);
+      for (const [temporaryPageId, realPageId] of pageIdAliases) {
+        if (realPageId === resolvedPageId) pagesById.delete(temporaryPageId);
+      }
+      pagesById.set(resolvedPageId, resolvedPage);
+    }
     await idbSet('pages', [...pagesById.values()]);
     workspaceWriteVersion += 1;
   });
@@ -2298,6 +2321,9 @@ async function replaceTempPage(tempPage: ProjectPage, realPage: ProjectPage) {
 }
 
 async function replayTempPageSave(tempPageId: string, realPage: ProjectPage) {
+  // Include editor writes that captured the temporary row before its ID was
+  // replaced but were queued behind that replacement in the storage writer.
+  await workspaceWriteQueue;
   const pendingPage = pendingTempPageSaves.get(tempPageId);
   pendingTempPageSaves.delete(tempPageId);
 
@@ -5200,7 +5226,7 @@ export const notionClient = {
   },
 
   async renameProjectPage(pageId: string, title: string) {
-    const { pages, projects, page, project } = await requirePageWithProject(pageId);
+    const { page, project } = await requirePageWithProject(pageId);
 
     const updatedPage = markPageDirty({
       ...page,
@@ -5208,12 +5234,8 @@ export const notionClient = {
     });
 
     if (isTempPage(updatedPage) || isTempProject(project)) {
-      await writeStorage({
-        pages: pages.map((storedPage) =>
-          storedPage.id === updatedPage.id ? updatedPage : storedPage,
-        ),
-      });
       pendingTempPageSaves.set(updatedPage.id, updatedPage);
+      await persistPagesById([updatedPage]);
       return updatedPage;
     }
 
@@ -5284,6 +5306,10 @@ export const notionClient = {
   },
 
   async updateProjectPage(page: ProjectPage): Promise<ProjectPage> {
+    // The editor save can be waiting on storage while page creation replaces
+    // this temporary ID. Register its full draft up front so the create flow
+    // can replay it even if the IndexedDB write lands after replacement.
+    if (isTempPage(page)) pendingTempPageSaves.set(page.id, page);
     const { pages, projects, syncConfig, workspaces } = await readStorage();
     const resolvedPageId = pageIdAliases.get(page.id) ?? page.id;
     const resolvedProjectId = projectIdAliases.get(page.projectId) ?? page.projectId;
@@ -5319,12 +5345,15 @@ export const notionClient = {
       ),
     });
 
+    const isPendingTempUpdate = isTempPage(updatedPage) || isTempProject(project);
+    if (isPendingTempUpdate) pendingTempPageSaves.set(updatedPage.id, updatedPage);
     await persistPagesById([updatedPage]);
 
-    if (isTempPage(updatedPage) || isTempProject(project)) {
-      pendingTempPageSaves.set(updatedPage.id, updatedPage);
+    if (isPendingTempUpdate) {
       return updatedPage;
     }
+
+    if (isTempPage(page)) pendingTempPageSaves.delete(page.id);
 
     const syncedPage = await enqueuePageSync(updatedPage, project, previousPage);
     await persistPage(syncedPage);
