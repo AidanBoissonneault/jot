@@ -176,6 +176,75 @@ describe('optimistic project creation', () => {
     expect(projectBodies[1]?.project.name).toBe('My Project');
   });
 
+  test('uploads the latest first-page edit made while project creation is still syncing', async () => {
+    const projectSync = deferred<Response>();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) =>
+      String(input).endsWith('/sync/project')
+        ? projectSync.promise
+        : jsonResponse({ queued: true, versions: {} }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const workspace: Workspace = {
+      id: 'workspace-notion-notion%3Atest-user-unknown',
+      name: 'Notion',
+      kind: 'notion',
+      accountId: 'notion:test-user',
+      notionWorkspaceId: 'notion-workspace',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    };
+    resetBrowserStorage({
+      activePageIdsByProject: { [baseProject.id]: basePage.id },
+      currentProjectId: baseProject.id,
+      currentProjectIdByWorkspace: { [workspace.id]: baseProject.id },
+      currentWorkspaceId: workspace.id,
+      hasMigratedCapturesToPages: true,
+      pages: [{
+        ...basePage,
+        workspaceId: workspace.id,
+        syncMode: 'notion',
+        syncAccountId: workspace.accountId,
+        syncWorkspaceId: workspace.notionWorkspaceId,
+      }],
+      projects: [{ ...baseProject, workspaceId: workspace.id, syncMode: 'notion' }],
+      syncConfig: { ...connectedConfig, workspaceId: workspace.notionWorkspaceId },
+      workspaces: [workspace],
+    });
+
+    const creation = await notionClient.createProject('Untitled Project', {
+      workspaceId: workspace.id,
+    });
+    try {
+      await waitFor(() => expect((fetchMock.mock.calls as unknown as Array<[string]>).some(([url]) =>
+        url.endsWith('/sync/project'),
+      )).toBe(true));
+      const projectRequest = JSON.parse(String(
+        (fetchMock.mock.calls as unknown as Array<[string, RequestInit]>).find(([url]) =>
+          url.endsWith('/sync/project'),
+        )?.[1]?.body,
+      )) as { project: Project };
+      const editedContent = docWithText('first page edit during creation');
+      const editedPage = await notionClient.updateProjectPage({
+        ...creation.page,
+        content: editedContent,
+      });
+
+      expect(editedPage.id).not.toBe(creation.page.id);
+      expect(editedPage.projectId).toBe(projectRequest.project.id);
+      projectSync.resolve(jsonResponse({ status: 'saved' }));
+      const settled = await creation.settled;
+      await waitFor(() => expect((fetchMock.mock.calls as unknown as Array<[string, RequestInit]>).some(
+        ([url, request]) => url.endsWith('/sync/push') &&
+          String(request.body).includes('first page edit during creation'),
+      )).toBe(true));
+
+      expect(settled.page.projectId).toBe(projectRequest.project.id);
+      expect(stripJottathingBlockIds(settled.page.content)).toEqual(editedContent);
+    } finally {
+      projectSync.resolve(jsonResponse({ status: 'saved' }));
+    }
+  });
+
   test('reconciles temp ids and preserves a project switch during sync', async () => {
     const { projectSync, store } = await setupProjectSyncTest('Roadmap');
     const tempProjectId = store.currentProjectId;
@@ -1490,8 +1559,12 @@ describe('optimistic page creation', () => {
     await waitFor(() => expect(store.currentPage?.id).not.toBe(tempPageId));
 
     expect(stripJottathingBlockIds(store.currentPage?.content)).toEqual(editedContent);
-    expect(fetchMock).not.toHaveBeenCalled();
-    expect((await listPendingSyncOps()).length).toBeGreaterThan(0);
+    const pushRequest = (fetchMock.mock.calls as unknown as Array<[string, RequestInit]>).find(
+      ([url]) => url.endsWith('/sync/push'),
+    );
+    expect(pushRequest).toBeDefined();
+    expect(String(pushRequest?.[1]?.body)).toContain('typed while creating');
+    expect(await listPendingSyncOps()).toHaveLength(0);
   });
 
   test('keeps created page locally when queue delivery fails', async () => {
@@ -1508,6 +1581,100 @@ describe('optimistic page creation', () => {
 
     expect(store.pages.some((page) => page.id === tempPageId)).toBe(false);
     expect((await listPendingSyncOps()).length).toBeGreaterThan(0);
+  });
+
+  test('follows the resolved project after a page create settles', async () => {
+    const resolvedProject: Project = { ...baseProject, id: 'project-resolved' };
+    const optimisticPage: ProjectPage = {
+      ...basePage,
+      id: 'temp-page-create',
+      syncState: 'creating',
+    };
+    const resolvedPage: ProjectPage = {
+      ...optimisticPage,
+      id: 'page-project-resolved',
+      projectId: resolvedProject.id,
+      syncState: 'saving',
+    };
+    vi.spyOn(notionClient, 'createProjectPage').mockResolvedValue({
+      page: optimisticPage,
+      settled: Promise.resolve(resolvedPage),
+    });
+    vi.spyOn(notionClient, 'listProjects').mockResolvedValue([resolvedProject]);
+    vi.spyOn(notionClient, 'listProjectPages').mockResolvedValue([resolvedPage]);
+    const store = useJottathingStore();
+
+    try {
+      await seedStore(store);
+      await store.createPage();
+      await waitFor(() => expect(store.currentProjectId).toBe(resolvedProject.id));
+
+      expect(store.currentProject?.id).toBe(resolvedProject.id);
+      expect(store.currentPage?.id).toBe(resolvedPage.id);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  test('does not recreate a project row when a durable project still says creating', async () => {
+    const workspace: Workspace = {
+      id: 'workspace-notion-notion%3Atest-user-unknown',
+      name: 'Notion',
+      kind: 'notion',
+      accountId: 'notion:test-user',
+      notionWorkspaceId: 'notion-workspace',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    };
+    const existingProject: Project = {
+      ...baseProject,
+      id: 'project-resumed',
+      workspaceId: workspace.id,
+      syncMode: 'notion',
+      syncState: 'creating',
+    };
+    const existingPage: ProjectPage = {
+      ...basePage,
+      id: 'page-project-resumed',
+      projectId: existingProject.id,
+      workspaceId: workspace.id,
+      syncMode: 'notion',
+      syncAccountId: workspace.accountId,
+      syncWorkspaceId: workspace.notionWorkspaceId,
+      syncState: 'creating',
+    };
+    resetBrowserStorage({
+      activePageIdsByProject: { [existingProject.id]: existingPage.id },
+      currentProjectId: existingProject.id,
+      currentProjectIdByWorkspace: { [workspace.id]: existingProject.id },
+      currentWorkspaceId: workspace.id,
+      hasMigratedCapturesToPages: true,
+      pages: [existingPage],
+      projects: [existingProject],
+      syncConfig: { ...connectedConfig, workspaceId: workspace.notionWorkspaceId },
+      workspaces: [workspace],
+    });
+    const fetchMock = vi.fn(async () => {
+      return jsonResponse({ queued: true, versions: {} });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const creation = await notionClient.createProjectPage(existingProject.id, 'Page 2');
+    const settledPage = await creation.settled;
+    const stored = readBrowserStorage();
+    const projectRequests = (fetchMock.mock.calls as unknown as Array<[string]>).filter(([url]) =>
+      url.endsWith('/sync/project'),
+    );
+
+    expect(projectRequests).toHaveLength(0);
+    expect(settledPage.projectId).toBe(existingProject.id);
+    expect((stored.projects as Project[])
+      .filter((project) => project.workspaceId === workspace.id)
+      .map((project) => project.id)).toEqual([existingProject.id]);
+    expect((stored.pages as ProjectPage[]).map((page) => page.id)).toContain(existingPage.id);
+    expect((stored.pages as ProjectPage[]).map((page) => page.id)).toContain(settledPage.id);
+    expect((stored.activePageIdsByProject as Record<string, string>)[existingProject.id])
+      .toBe(settledPage.id);
   });
 });
 

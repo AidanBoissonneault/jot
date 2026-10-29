@@ -859,9 +859,21 @@ export const useJottathingStore = defineStore('jottathing', () => {
 
       void creation.settled.then(async (page) => {
         const wasViewingPage = currentPage.value?.id === creation.page.id;
-        await loadProjectPages();
 
-        if (wasViewingPage) {
+        // A concurrent project reconciliation or orphan recovery can replace
+        // the optimistic project ID while the new page is being saved.
+        if (currentProjectId.value === requestedProjectId) {
+          currentProjectId.value = page.projectId;
+        }
+
+        const isStillViewingCreatedProject = currentProjectId.value === page.projectId;
+        if (isStillViewingCreatedProject) {
+          projects.value = await notionClient.listProjects();
+          void refreshWorkspaceMenuTree().catch(() => undefined);
+          await loadProjectPages();
+        }
+
+        if (wasViewingPage && isStillViewingCreatedProject) {
           currentPage.value = page;
           applyPageSyncState(page);
         }

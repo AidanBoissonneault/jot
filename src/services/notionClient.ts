@@ -169,6 +169,7 @@ const MAX_QUEUE_RETRY_DELAY_MS = 5 * 60_000;
 const pendingTempPageSaves = new Map<string, ProjectPage>();
 const projectReconciliations = new Map<string, Promise<string>>();
 const projectIdAliases = new Map<string, string>();
+const pageIdAliases = new Map<string, string>();
 const inFlightProjectSyncRequests = new Map<string, Promise<SyncProjectResponse>>();
 let queueDeliveryPromise: Promise<void> | undefined;
 let queueDeliveryTimer: ReturnType<typeof setTimeout> | undefined;
@@ -956,6 +957,7 @@ async function replacePageAtomically(tempPage: ProjectPage, realPage: ProjectPag
   });
   workspaceWriteQueue = write.then(() => undefined, () => undefined);
   await write;
+  rememberPageIdAlias(tempPage.id, realPage.id);
 }
 
 async function persistRebasedProjectSnapshots(
@@ -1193,11 +1195,11 @@ function createOptimisticPage(projectId: string, title: string): ProjectPage {
 }
 
 function isTempProject(project: Project | undefined) {
-  return Boolean(project?.id.startsWith('temp-project-') || project?.syncState === 'creating');
+  return Boolean(project?.id.startsWith('temp-project-'));
 }
 
 function isTempPage(page: ProjectPage | undefined) {
-  return Boolean(page?.id.startsWith('temp-page-') || page?.syncState === 'creating');
+  return Boolean(page?.id.startsWith('temp-page-'));
 }
 
 function markPageDirty(page: ProjectPage): ProjectPage {
@@ -1899,6 +1901,38 @@ async function persistPage(page: ProjectPage) {
   await persistPagesById([page]);
 }
 
+/** Persists sync metadata without overwriting a page edit made during the request. */
+async function persistSyncedPagePreservingNewerEdit(page: ProjectPage): Promise<ProjectPage> {
+  const write = workspaceWriteQueue.then(async () => {
+    const storedPages = (await idbGet<ProjectPage[]>('pages')) ?? [];
+    const currentPage = storedPages.find((storedPage) => storedPage.id === page.id);
+    const hasNewerLocalEdit = Boolean(
+      currentPage?.localRevision && page.localRevision &&
+      currentPage.localRevision !== page.localRevision,
+    );
+    const pageToStore = hasNewerLocalEdit
+      ? {
+          ...page,
+          content: currentPage!.content,
+          title: currentPage!.title,
+          status: currentPage!.status,
+          pageOrder: currentPage!.pageOrder,
+          localRevision: currentPage!.localRevision,
+          updatedAt: currentPage!.updatedAt,
+          syncState: currentPage!.syncState,
+          syncMessage: currentPage!.syncMessage,
+        }
+      : page;
+    const pagesById = new Map(storedPages.map((storedPage) => [storedPage.id, storedPage]));
+    pagesById.set(pageToStore.id, pageToStore);
+    await idbSet('pages', [...pagesById.values()]);
+    workspaceWriteVersion += 1;
+    return pageToStore;
+  });
+  workspaceWriteQueue = write.then(() => undefined, () => undefined);
+  return write;
+}
+
 async function syncAndPersistPage(page: ProjectPage): Promise<ProjectPage> {
   const synced = isTempPage(page) || page.syncMode !== 'notion' ? page : await syncPullPage(page);
   if (synced !== page) await persistPage(synced);
@@ -2053,9 +2087,13 @@ async function saveProjectSourceUpdate(
 
 async function requirePageWithProject(pageId: string) {
   const storage = await readStorage();
-  const page = storage.pages.find((p) => p.id === pageId);
+  const resolvedPageId = pageIdAliases.get(pageId) ?? pageId;
+  const page = storage.pages.find((p) => p.id === resolvedPageId)
+    ?? storage.pages.find((p) => p.id === pageId);
   if (!page) throw new Error('This page is no longer available.');
-  const project = storage.projects.find((p) => p.id === page.projectId);
+  const resolvedProjectId = projectIdAliases.get(page.projectId) ?? page.projectId;
+  const project = storage.projects.find((p) => p.id === resolvedProjectId)
+    ?? storage.projects.find((p) => p.id === page.projectId);
   if (!project) throw new Error('This project is no longer available.');
   return { ...storage, page, project };
 }
@@ -2122,6 +2160,7 @@ async function replaceTempProject({
       )
       .sort(sortProjectsByUpdatedDesc),
   });
+  rememberPageIdAlias(tempPage.id, realPage.id);
 }
 
 async function rollbackTempProject(
@@ -2190,6 +2229,16 @@ function currentProjectIdForTempProject(
   return selectedProjectId === tempProjectId ? resolvedProjectId : selectedProjectId;
 }
 
+function rememberPageIdAlias(tempPageId: string, realPageId: string) {
+  if (tempPageId === realPageId) return;
+  pageIdAliases.set(tempPageId, realPageId);
+  while (pageIdAliases.size > 100) {
+    const oldestPageId = pageIdAliases.keys().next().value;
+    if (!oldestPageId) break;
+    pageIdAliases.delete(oldestPageId);
+  }
+}
+
 async function replaceTempPage(tempPage: ProjectPage, realPage: ProjectPage) {
   await replacePageAtomically(tempPage, realPage);
 }
@@ -2198,15 +2247,57 @@ async function replayTempPageSave(tempPageId: string, realPage: ProjectPage) {
   const pendingPage = pendingTempPageSaves.get(tempPageId);
   pendingTempPageSaves.delete(tempPageId);
 
-  if (!pendingPage) {
-    return realPage;
+  const storedPage = (await readStorage()).pages.find((page) => page.id === realPage.id);
+  const storedUpdatedAt = Date.parse(storedPage?.updatedAt ?? '');
+  const pendingUpdatedAt = Date.parse(pendingPage?.updatedAt ?? '');
+  const latestPage = storedPage && (
+    !pendingPage ||
+    (Number.isFinite(storedUpdatedAt) && storedUpdatedAt >= pendingUpdatedAt)
+  )
+    ? storedPage
+    : pendingPage;
+  if (!latestPage) return storedPage ?? realPage;
+
+  if (
+    latestPage.title === realPage.title &&
+    JSON.stringify(latestPage.content) === JSON.stringify(realPage.content)
+  ) {
+    return storedPage ?? realPage;
   }
 
   return notionClient.updateProjectPage({
     ...realPage,
+    title: latestPage.title,
+    content: latestPage.content,
+  });
+}
+
+/** Reads the freshest optimistic page edit before assigning its durable ID. */
+async function latestTempPageSnapshot(
+  tempPageId: string,
+  fallback: ProjectPage,
+  resolvedPageId = tempPageId,
+): Promise<ProjectPage> {
+  const storage = await readStorage();
+  const storedPage = storage.pages.find((page) => page.id === resolvedPageId)
+    ?? storage.pages.find((page) => page.id === tempPageId);
+  const pendingPage = pendingTempPageSaves.get(tempPageId);
+  if (!pendingPage) return storedPage ?? fallback;
+  if (resolvedPageId === tempPageId || !storedPage) return pendingPage;
+
+  const storedUpdatedAt = Date.parse(storedPage.updatedAt);
+  const pendingUpdatedAt = Date.parse(pendingPage.updatedAt);
+  if (Number.isFinite(storedUpdatedAt) && storedUpdatedAt >= pendingUpdatedAt) {
+    return storedPage;
+  }
+
+  return {
+    ...storedPage,
     title: pendingPage.title,
     content: pendingPage.content,
-  });
+    localRevision: pendingPage.localRevision,
+    updatedAt: pendingPage.updatedAt,
+  };
 }
 
 /** Repairs a project left with an optimistic ID after the extension stopped mid-create. */
@@ -2250,7 +2341,7 @@ async function recoverOrphanedTemporaryProject(tempProjectId: string): Promise<P
       ...rootTempPage,
       id: `page-${realProject.id}-${crypto.randomUUID()}`,
       projectId: realProject.id,
-      syncState: tempProject.syncMode === 'notion' ? 'saved' : rootTempPage.syncState,
+      syncState: 'saved',
       syncMessage: undefined,
     };
 
@@ -2260,6 +2351,12 @@ async function recoverOrphanedTemporaryProject(tempProjectId: string): Promise<P
       realPage: realRootPage,
       realProject,
     });
+    projectIdAliases.set(tempProjectId, realProject.id);
+    while (projectIdAliases.size > 100) {
+      const oldestProjectId = projectIdAliases.keys().next().value;
+      if (!oldestProjectId) break;
+      projectIdAliases.delete(oldestProjectId);
+    }
 
     let latest = await readStorage();
     const pagesToQueue: Array<{ page: ProjectPage; tempPageId?: string }> = [
@@ -2273,7 +2370,7 @@ async function recoverOrphanedTemporaryProject(tempProjectId: string): Promise<P
         page = {
           ...page,
           id: `page-${realProject.id}-${crypto.randomUUID()}`,
-          syncState: tempProject.syncMode === 'notion' ? 'saved' : page.syncState,
+          syncState: 'saved',
           syncMessage: undefined,
         };
         await replaceTempPage(storedPage, page);
@@ -3868,14 +3965,16 @@ export const notionClient = {
         workspaceId: currentWorkspaceId,
         syncMode: workspace.kind,
       };
-      const realPage = {
-        ...page,
-        id: `page-${realProject.id}-${crypto.randomUUID()}`,
-        projectId: realProject.id,
-        syncState: 'saved' as const,
-      };
+      const realPageId = `page-${realProject.id}-${crypto.randomUUID()}`;
 
       try {
+        const pageSnapshot = await latestTempPageSnapshot(page.id, page);
+        const realPage = {
+          ...pageSnapshot,
+          id: realPageId,
+          projectId: realProject.id,
+          syncState: 'saved' as const,
+        };
         // Reconcile temporary IDs before touching the network so the project
         // and its first page remain usable if the request hangs or the panel closes.
         projectIdAliases.set(project.id, realProject.id);
@@ -3903,9 +4002,10 @@ export const notionClient = {
             ),
           });
         }
-        const queuedPage = await enqueuePageSync(realPage, savedProject);
-        await persistPage(queuedPage);
-        const savedPage = await replayTempPageSave(page.id, queuedPage);
+        const latestRealPage = await latestTempPageSnapshot(page.id, realPage, realPage.id);
+        const queuedPage = await enqueuePageSync(latestRealPage, savedProject);
+        const persistedPage = await persistSyncedPagePreservingNewerEdit(queuedPage);
+        const savedPage = await replayTempPageSave(page.id, persistedPage);
         // A new project and its first page are user-visible immediately. Start
         // an outbox delivery from this live UI context instead of depending on
         // a timer that a suspended extension worker may not run promptly.
@@ -4952,8 +5052,9 @@ export const notionClient = {
           throw new Error('This project is not ready to sync pages yet.');
         }
 
+        const pageSnapshot = await latestTempPageSnapshot(page.id, page);
         const realPage = markPageDirty({
-          ...page,
+          ...pageSnapshot,
           id: `page-${realProject.id}-${crypto.randomUUID()}`,
           projectId: realProject.id,
           syncState: 'saving',
@@ -5016,6 +5117,7 @@ export const notionClient = {
 
   async archiveProjectPage(pageId: string): Promise<ProjectPage> {
     const { activePageIdsByProject, pages, projects, page, project } = await requirePageWithProject(pageId);
+    pageId = page.id;
 
     const archivedPage = markPageDirty({
       ...page,
@@ -5074,18 +5176,25 @@ export const notionClient = {
 
   async updateProjectPage(page: ProjectPage): Promise<ProjectPage> {
     const { pages, projects, syncConfig, workspaces } = await readStorage();
-    const project = projects.find((storedProject) => storedProject.id === page.projectId);
+    const resolvedPageId = pageIdAliases.get(page.id) ?? page.id;
+    const resolvedProjectId = projectIdAliases.get(page.projectId) ?? page.projectId;
+    const project = projects.find((storedProject) => storedProject.id === resolvedProjectId)
+      ?? projects.find((storedProject) => storedProject.id === page.projectId);
 
     if (!project) {
       throw new Error('This project is no longer available.');
     }
 
-    const previousPage = pages.find((storedPage) => storedPage.id === page.id);
+    const previousPage = pages.find((storedPage) => storedPage.id === resolvedPageId)
+      ?? pages.find((storedPage) => storedPage.id === page.id);
     const workspace = workspaces.find((entry) => entry.id === project.workspaceId);
     const syncMode = workspace?.kind ?? project.syncMode ?? 'local';
     const isAlreadySynced = syncMode === 'notion';
     const updatedPage = markPageDirty({
+      ...previousPage,
       ...page,
+      id: resolvedPageId,
+      projectId: project.id,
       workspaceId: project.workspaceId,
       syncMode,
       syncAccountId: isAlreadySynced
