@@ -3649,6 +3649,137 @@ async function deliverProjectStateBeforePageReconciliation(
   return failedUploadCount;
 }
 
+/** Collects every pending, failed, or locally newer page that belongs in a manual resync. */
+function findPageIdsToReconcile(
+  workspace: Required<JottathingStorage>,
+  pendingOps: BlockSyncOp[],
+  failedPageIds: string[],
+): Set<string> {
+  const projectsById = new Map(workspace.projects.map((project) => [project.id, project]));
+  const locallyChangedPageIds = workspace.pages.filter((page) => {
+    const project = projectsById.get(page.projectId);
+    return Boolean(
+      project &&
+      page.status !== 'archived' &&
+      (project.status !== 'archived' || pageEditIsNewerThanProjectArchive(page, project)) &&
+      projectUsesNotionWorkspace(project, workspace.workspaces) &&
+      ((page.syncState !== undefined && page.syncState !== 'saved') ||
+        hasUnuploadedSnapshot(page.content, page.syncBaselineContent) ||
+        (typeof page.localSyncVersion === 'number' &&
+          page.localSyncVersion > (page.knownSyncVersion ?? 0))),
+    );
+  }).map((page) => page.id);
+
+  return new Set([
+    ...pendingOps.map((op) => op.pageId),
+    ...workspace.pages.filter((page) => page.syncState === 'error').map((page) => page.id),
+    ...failedPageIds,
+    ...locallyChangedPageIds,
+  ]);
+}
+
+/** Resyncs one page, retaining stale state or blocking an unmapped-content conflict. */
+async function resyncPageWithNotion(
+  page: ProjectPage,
+  project: Project,
+  pageId: string,
+  syncConfig: SyncConfig,
+): Promise<SyncContentConflict | undefined> {
+  try {
+    const response = await requestServer<SyncPageResponse>('/sync/page/resync', {
+      method: 'POST',
+      body: JSON.stringify({
+        page: { ...page, content: sanitizeMediaForSync(page.content) },
+        project: withoutLocalSyncConflicts(project),
+        selectedParentPageId: syncConfig.selectedParentPageId,
+      }),
+    }, syncConfig);
+    if (response.status === 'error') throw new Error(response.message ?? 'Unable to sync this page.');
+    if (response.status === 'stale') {
+      await persistPage({
+        ...(response.page ?? page),
+        syncState: 'stale',
+        syncMessage: response.message ?? 'Notion changed before this page could be synced. Review it, then resync.',
+      });
+      return undefined;
+    }
+    if (response.page) await persistPage({
+      ...response.page,
+      syncMode: 'notion',
+      syncAccountId: page.syncAccountId,
+      syncWorkspaceId: page.syncWorkspaceId,
+      content: stripConflictResolutionMarkers(response.page.content),
+    });
+    await clearStoredPageSyncConflict(pageId);
+    const currentOps = (await listPendingSyncOps()).filter((op) => op.pageId === pageId);
+    await removePendingSyncOps(currentOps.map((op) => op.opId));
+    return undefined;
+  } catch (error) {
+    if (!isUnmappedContentConflict(error) || !error.diff) throw error;
+    const currentOps = (await listPendingSyncOps()).filter((op) => op.pageId === pageId);
+    if (!currentOps.length) {
+      await addPendingSyncOps(buildPageSyncOps({
+        page: { ...page, content: sanitizeMediaForSync(page.content) },
+        project,
+        selectedParentPageId: syncConfig.selectedParentPageId,
+      }));
+    }
+    await blockPendingSyncOps(pageId, {
+      code: 'unmapped_notion_content',
+      message: error.message,
+      diff: error.diff,
+    });
+    await persistPage({ ...page, syncState: 'error', syncMessage: error.message });
+    return {
+      targetType: 'page',
+      targetId: page.id,
+      targetTitle: page.title,
+      baseContent: error.diff.baseContent,
+      reason: error.diff.reason,
+      localChangedBlockIds: error.diff.localChangedBlockIds,
+      remoteChangedBlockIds: error.diff.remoteChangedBlockIds,
+      localContent: error.diff.localContent,
+      remoteContent: error.diff.remoteContent,
+    };
+  }
+}
+
+/** Resyncs pages sequentially and reports progress even when one page fails. */
+async function reconcilePagesForManualSync(
+  workspace: Required<JottathingStorage>,
+  pendingOps: BlockSyncOp[],
+  failedPageIds: string[],
+  syncConfig: SyncConfig,
+  onProgress: ((progress: SyncProgressUpdate) => void) | undefined,
+): Promise<SyncContentConflict[]> {
+  const pageIds = findPageIdsToReconcile(workspace, pendingOps, failedPageIds);
+  const conflicts: SyncContentConflict[] = [];
+  let completed = 0;
+  onProgress?.({ phase: 'syncing_pages', completed, total: pageIds.size });
+
+  for (const pageId of pageIds) {
+    const page = workspace.pages.find((entry) => entry.id === pageId);
+    const project = page && workspace.projects.find((entry) => entry.id === page.projectId);
+    if (
+      !page || !project || page.status === 'archived' ||
+      (project.status === 'archived' && !pageEditIsNewerThanProjectArchive(page, project))
+    ) {
+      completed += 1;
+      onProgress?.({ phase: 'syncing_pages', completed, total: pageIds.size });
+      continue;
+    }
+
+    try {
+      const conflict = await resyncPageWithNotion(page, project, pageId, syncConfig);
+      if (conflict) conflicts.push(conflict);
+    } finally {
+      completed += 1;
+      onProgress?.({ phase: 'syncing_pages', completed, total: pageIds.size });
+    }
+  }
+  return conflicts;
+}
+
 function msUntilOldestOpIsEligible(ops: BlockSyncOp[], now = Date.now()): number {
   const oldestCreatedAt = Math.min(
     ...ops.map((op) => Date.parse(op.createdAt)).filter((time) => Number.isFinite(time)),
@@ -3795,8 +3926,6 @@ export const notionClient = {
     let reloadedFromNotion = false;
     let remoteReloadPending = false;
     let failedUploadCount = 0;
-    const pageConflicts: SyncContentConflict[] = [];
-
     const pendingQueue = await preparePendingQueueResync(syncConfig);
     failedUploadCount = pendingQueue.failedUploadCount;
     failedUploadCount = await deliverProjectStateBeforePageReconciliation(
@@ -3811,110 +3940,13 @@ export const notionClient = {
     const pendingOps = await listPendingSyncOps();
     onProgress?.({ phase: 'checking_notion' });
     const validation = await notionClient.validateNotionCache();
-    const projectsByIdForReconciliation = new Map(
-      workspace.projects.map((project) => [project.id, project]),
+    const pageConflicts = await reconcilePagesForManualSync(
+      workspace,
+      pendingOps,
+      validation.failedPageIds,
+      syncConfig,
+      onProgress,
     );
-    const pageIdsToReconcile = new Set([
-      ...pendingOps.map((op) => op.pageId),
-      ...workspace.pages.filter((page) => page.syncState === 'error').map((page) => page.id),
-      ...validation.failedPageIds,
-      ...workspace.pages.filter((page) => {
-        const project = projectsByIdForReconciliation.get(page.projectId);
-        return Boolean(
-          project &&
-          page.status !== 'archived' &&
-          (project.status !== 'archived' || pageEditIsNewerThanProjectArchive(page, project)) &&
-          projectUsesNotionWorkspace(project, workspace.workspaces) &&
-          ((page.syncState !== undefined && page.syncState !== 'saved') ||
-            hasUnuploadedSnapshot(page.content, page.syncBaselineContent) ||
-            (typeof page.localSyncVersion === 'number' &&
-              page.localSyncVersion > (page.knownSyncVersion ?? 0))),
-        );
-      }).map((page) => page.id),
-    ]);
-    let reconciledPageCount = 0;
-    onProgress?.({
-      phase: 'syncing_pages',
-      completed: 0,
-      total: pageIdsToReconcile.size,
-    });
-    for (const pageId of pageIdsToReconcile) {
-      const page = workspace.pages.find((entry) => entry.id === pageId);
-      const project = page && workspace.projects.find((entry) => entry.id === page.projectId);
-      if (
-        !page || !project || page.status === 'archived' ||
-        (project.status === 'archived' && !pageEditIsNewerThanProjectArchive(page, project))
-      ) {
-        reconciledPageCount += 1;
-        onProgress?.({ phase: 'syncing_pages', completed: reconciledPageCount, total: pageIdsToReconcile.size });
-        continue;
-      }
-
-      try {
-        const response = await requestServer<SyncPageResponse>('/sync/page/resync', {
-          method: 'POST',
-          body: JSON.stringify({
-            page: { ...page, content: sanitizeMediaForSync(page.content) },
-            project: withoutLocalSyncConflicts(project),
-            selectedParentPageId: syncConfig.selectedParentPageId,
-          }),
-        }, syncConfig);
-        if (response.status === 'error') throw new Error(response.message ?? 'Unable to sync this page.');
-        if (response.status === 'stale') {
-          await persistPage({
-            ...(response.page ?? page),
-            syncState: 'stale',
-            syncMessage: response.message ?? 'Notion changed before this page could be synced. Review it, then resync.',
-          });
-          continue;
-        }
-        if (response.page) await persistPage({
-          ...response.page,
-          syncMode: 'notion',
-          syncAccountId: page.syncAccountId,
-          syncWorkspaceId: page.syncWorkspaceId,
-          content: stripConflictResolutionMarkers(response.page.content),
-        });
-        await clearStoredPageSyncConflict(pageId);
-        await removePendingSyncOps((await listPendingSyncOps())
-          .filter((op) => op.pageId === pageId)
-          .map((op) => op.opId));
-      } catch (error) {
-        if (!isUnmappedContentConflict(error) || !error.diff) throw error;
-        const currentOps = (await listPendingSyncOps()).filter((op) => op.pageId === pageId);
-        if (!currentOps.length) {
-          await addPendingSyncOps(buildPageSyncOps({
-            page: { ...page, content: sanitizeMediaForSync(page.content) },
-            project,
-            selectedParentPageId: syncConfig.selectedParentPageId,
-          }));
-        }
-        await blockPendingSyncOps(pageId, {
-          code: 'unmapped_notion_content',
-          message: error.message,
-          diff: error.diff,
-        });
-        pageConflicts.push({
-          targetType: 'page',
-          targetId: page.id,
-          targetTitle: page.title,
-          baseContent: error.diff.baseContent,
-          reason: error.diff.reason,
-          localChangedBlockIds: error.diff.localChangedBlockIds,
-          remoteChangedBlockIds: error.diff.remoteChangedBlockIds,
-          localContent: error.diff.localContent,
-          remoteContent: error.diff.remoteContent,
-        });
-        await persistPage({ ...page, syncState: 'error', syncMessage: error.message });
-      } finally {
-        reconciledPageCount += 1;
-        onProgress?.({
-          phase: 'syncing_pages',
-          completed: reconciledPageCount,
-          total: pageIdsToReconcile.size,
-        });
-      }
-    }
 
     onProgress?.({ phase: 'uploading', pending: await pendingLocalWorkCount() });
     await flushPendingSyncOps({ force: true });
@@ -3950,7 +3982,7 @@ export const notionClient = {
       collectJottathingBlockIds(page.content, blockIds);
       blockIdsByProject.set(page.projectId, blockIds);
     }
-    const conflicts = [...pageConflicts];
+    const conflicts: SyncContentConflict[] = [];
     const uniqueBlockedEvents = [...new Map(
       blockedEvents.map((event) => [event.projectId, event]),
     ).values()];
