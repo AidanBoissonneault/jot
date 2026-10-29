@@ -55,6 +55,7 @@ describe('managed block snapshot replacement', () => {
           { type: 'paragraph', attrs: { jottathingBlockId: 'second' } },
         ],
       },
+      undefined,
     );
     expect(appendManagedBlocks).not.toHaveBeenCalled();
   });
