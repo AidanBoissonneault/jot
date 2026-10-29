@@ -30,267 +30,286 @@ export async function processSyncQueue(
   initSingletons(env);
 
   for (const message of batch.messages) {
-    const jobId = message.body?.jobId;
-    if (typeof jobId !== 'string' || !UUID_PATTERN.test(jobId)) {
+    const queuedJob = await readQueuedSyncJob(message, env);
+    if (queuedJob) {
+      await processQueuedSyncJob(message, queuedJob.jobId, queuedJob.job, env);
+    }
+  }
+}
+
+/** Loads a validated payload and settles references that no longer need processing. */
+async function readQueuedSyncJob(
+  message: Message<SyncQueueReference>,
+  env: WorkerEnv,
+): Promise<{ jobId: string; job: SyncQueueMessage } | undefined> {
+  const jobId = message.body?.jobId;
+  if (typeof jobId !== 'string' || !UUID_PATTERN.test(jobId)) {
+    message.ack();
+    return undefined;
+  }
+
+  try {
+    const { data: payloadRow, error: payloadReadError } = await supabase
+      .from('jottathing_sync_queue_payloads')
+      .select('installation_id, payload, status')
+      .eq('id', jobId)
+      .maybeSingle();
+    if (payloadReadError) throw new Error('Unable to load the queued sync payload.');
+
+    // Account deletion cascades these payload rows. Any remaining queue
+    // reference contains only a random UUID and can safely be discarded.
+    if (!payloadRow) {
       message.ack();
-      continue;
+      return undefined;
     }
 
-    let job: SyncQueueMessage;
-    let syncRow: { local_version: number } | null | undefined;
-    let syncOperationSucceeded = false;
-
-    try {
-      const { data: payloadRow, error: payloadReadError } = await supabase
-        .from('jottathing_sync_queue_payloads')
-        .select('installation_id, payload, status')
-        .eq('id', jobId)
-        .maybeSingle();
-      if (payloadReadError) throw new Error('Unable to load the queued sync payload.');
-
-      // Account deletion cascades these payload rows. Any remaining queue
-      // reference contains only a random UUID and can safely be discarded.
-      if (!payloadRow) {
-        message.ack();
-        continue;
-      }
-
-      if (payloadRow.status === 'processed') {
-        await removeQueuedPayload(jobId);
-        await notifyQueueIdleIfDrained(env, String(payloadRow.installation_id));
-        message.ack();
-        continue;
-      }
-
-      const storedJob = payloadRow.payload;
-      if (
-        !isSyncQueueMessage(storedJob) ||
-        String(payloadRow.installation_id) !== String(storedJob.installationId)
-      ) {
-        await markAndRemoveQueuedPayload(jobId);
-        await notifyQueueIdleIfDrained(env, String(payloadRow.installation_id));
-        message.ack();
-        continue;
-      }
-      job = storedJob;
-    } catch (error) {
-      console.error('[queue] payload lookup failed', safeErrorMetadata(error));
-      message.retry();
-      continue;
+    if (payloadRow.status === 'processed') {
+      await removeQueuedPayload(jobId);
+      await notifyQueueIdleIfDrained(env, String(payloadRow.installation_id));
+      message.ack();
+      return undefined;
     }
 
-    try {
-      const installationId = String(job.installationId);
-      const queuedVersion = job.queuedVersion;
-      console.log('[queue] processing', job.type, 'v', queuedVersion);
+    const job = payloadRow.payload;
+    if (
+      !isSyncQueueMessage(job) ||
+      String(payloadRow.installation_id) !== String(job.installationId)
+    ) {
+      await markAndRemoveQueuedPayload(jobId);
+      await notifyQueueIdleIfDrained(env, String(payloadRow.installation_id));
+      message.ack();
+      return undefined;
+    }
 
-      let { data: row, error: syncRowError } = await supabase
+    return { jobId, job };
+  } catch (error) {
+    console.error('[queue] payload lookup failed', safeErrorMetadata(error));
+    message.retry();
+    return undefined;
+  }
+}
+
+/** Applies one stored sync job and records its outcome. */
+async function processQueuedSyncJob(
+  message: Message<SyncQueueReference>,
+  jobId: string,
+  job: SyncQueueMessage,
+  env: WorkerEnv,
+): Promise<void> {
+  let syncRow: { local_version: number } | null | undefined;
+  let syncOperationSucceeded = false;
+
+  try {
+    const installationId = String(job.installationId);
+    const queuedVersion = job.queuedVersion;
+    console.log('[queue] processing', job.type, 'v', queuedVersion);
+
+    let { data: row, error: syncRowError } = await supabase
+      .from('notion_block_sync')
+      .select('local_version')
+      .eq('installation_id', job.installationId)
+      .eq('local_id', job.localId)
+      .maybeSingle();
+    if (syncRowError) throw new Error('Unable to load the current sync version.');
+    syncRow = row;
+
+    // The RPC that assigned this version should already have created the
+    // state row. Repair it if an older deployment accepted a job without
+    // doing so, and never let a missing row look like a successful sync.
+    if (!row) {
+      const { error: insertError } = await supabase
         .from('notion_block_sync')
-        .select('local_version')
-        .eq('installation_id', job.installationId)
-        .eq('local_id', job.localId)
-        .maybeSingle();
-      if (syncRowError) throw new Error('Unable to load the current sync version.');
-      syncRow = row;
-
-      // The RPC that assigned this version should already have created the
-      // state row. Repair it if an older deployment accepted a job without
-      // doing so, and never let a missing row look like a successful sync.
-      if (!row) {
-        const { error: insertError } = await supabase
+        .insert({
+          installation_id: job.installationId,
+          local_id: job.localId,
+          entity_type: job.type,
+          local_version: queuedVersion,
+          status: 'pending',
+        });
+      if (insertError) {
+        // A concurrent queue delivery may have repaired the same row first.
+        const { data: repairedRow, error: rereadError } = await supabase
           .from('notion_block_sync')
-          .insert({
-            installation_id: job.installationId,
-            local_id: job.localId,
-            entity_type: job.type,
-            local_version: queuedVersion,
-            status: 'pending',
-          });
-        if (insertError) {
-          // A concurrent queue delivery may have repaired the same row first.
-          const { data: repairedRow, error: rereadError } = await supabase
-            .from('notion_block_sync')
-            .select('local_version')
-            .eq('installation_id', job.installationId)
-            .eq('local_id', job.localId)
-            .maybeSingle();
-          if (rereadError || !repairedRow) {
-            throw new Error('Unable to restore the sync version state.');
-          }
-          row = repairedRow;
-        } else {
-          row = { local_version: queuedVersion };
-        }
-        syncRow = row;
-      }
-
-      if (row.local_version < queuedVersion) {
-        throw new Error('The queued version is missing from durable sync state.');
-      }
-
-      // Older full-page snapshots can be discarded. Incremental block batches
-      // still run every chunk so the remote page is not left partially applied.
-      if (job.type !== 'block_op' && row.local_version > queuedVersion) {
-        console.log('[queue] skipped stale', job.type, 'v', queuedVersion, 'latest', row.local_version);
-        await markAndRemoveQueuedPayload(jobId);
-        await notifyQueueIdleIfDrained(env, installationId);
-        message.ack();
-        continue;
-      }
-
-      const { error: syncingError } = await supabase
-        .from('notion_block_sync')
-        .update({ status: 'syncing', updated_at: new Date().toISOString() })
-        .eq('installation_id', job.installationId)
-        .eq('local_id', job.localId)
-        .eq('local_version', queuedVersion);
-      if (syncingError) throw new Error('Unable to mark the sync as active.');
-
-      let notionBlockId: string | null = null;
-
-      if (job.type === 'block_op') {
-        const queuedPage = job.payload.page;
-        const queuedProject = job.payload.project;
-        if (!queuedPage || !queuedProject) throw new Error('Block queue job is missing page or project context.');
-        const result = await applyBlockOpsToNotionForInstallation(installationId, {
-          ops: job.payload.ops,
-          page: { ...queuedPage, content: queuedPage.content ?? { type: 'doc', content: [] } },
-          project: { ...queuedProject, stateContent: queuedProject.stateContent ?? { type: 'doc', content: [] } },
-          selectedParentPageId: job.payload.selectedParentPageId,
-        });
-        notionBlockId = result?.page?.notionPageId ?? null;
-      } else if (job.type === 'page') {
-        const queuedPage = job.payload.page;
-        const queuedProject = job.payload.project;
-        if (!queuedPage || !queuedProject) throw new Error('Page queue job is missing page or project context.');
-        const result = await pushPageToNotionForInstallation(installationId, {
-          page: { ...queuedPage, content: queuedPage.content ?? { type: 'doc', content: [] } },
-          project: { ...queuedProject, stateContent: queuedProject.stateContent ?? { type: 'doc', content: [] } },
-          selectedParentPageId: job.payload.selectedParentPageId,
-        });
-        notionBlockId = result?.page?.notionPageId ?? null;
-      } else {
-        const queuedProject = job.payload.project;
-        if (!queuedProject) throw new Error('Project queue job is missing project context.');
-        await syncProjectToNotionForInstallation(installationId, {
-          project: { ...queuedProject, stateContent: queuedProject.stateContent ?? { type: 'doc', content: [] } },
-          selectedParentPageId: job.payload.selectedParentPageId,
-        });
-      }
-
-      const isFinalBatchMessage = job.type !== 'block_op' || job.batchIndex === job.batchSize - 1;
-      const isCurrentVersion = row.local_version <= queuedVersion;
-      if (isFinalBatchMessage && isCurrentVersion) {
-        const { data: syncedRow, error: syncedStateError } = await supabase
-          .from('notion_block_sync')
-          .update({
-            status: 'synced',
-            synced_version: queuedVersion,
-            notion_block_id: notionBlockId,
-            updated_at: new Date().toISOString(),
-          })
+          .select('local_version')
           .eq('installation_id', job.installationId)
           .eq('local_id', job.localId)
-          .eq('local_version', queuedVersion)
-          .select('local_version')
           .maybeSingle();
-        if (syncedStateError) throw new Error('Unable to persist the completed sync state.');
-
-        if (syncedRow) {
-          const doStub = env.SYNC_EVENTS.get(env.SYNC_EVENTS.idFromName(installationId));
-          await doStub.fetch(new Request('http://do/notify', {
-            method: 'POST',
-            body: JSON.stringify({ status: 'synced', pageId: job.localId, notionBlockId, version: queuedVersion }),
-          })).catch(() => undefined);
-        } else {
-          // A newer edit may have been queued while Notion was being updated.
-          // Do not publish a stale "synced" event over its pending state.
-          const { data: latestRow, error: latestRowError } = await supabase
-            .from('notion_block_sync')
-            .select('local_version')
-            .eq('installation_id', job.installationId)
-            .eq('local_id', job.localId)
-            .maybeSingle();
-          if (latestRowError || !latestRow || latestRow.local_version <= queuedVersion) {
-            throw new Error('Unable to confirm the completed sync version.');
-          }
+        if (rereadError || !repairedRow) {
+          throw new Error('Unable to restore the sync version state.');
         }
+        row = repairedRow;
+      } else {
+        row = { local_version: queuedVersion };
       }
+      syncRow = row;
+    }
 
-      syncOperationSucceeded = true;
+    if (row.local_version < queuedVersion) {
+      throw new Error('The queued version is missing from durable sync state.');
+    }
+
+    // Older full-page snapshots can be discarded. Incremental block batches
+    // still run every chunk so the remote page is not left partially applied.
+    if (job.type !== 'block_op' && row.local_version > queuedVersion) {
+      console.log('[queue] skipped stale', job.type, 'v', queuedVersion, 'latest', row.local_version);
       await markAndRemoveQueuedPayload(jobId);
       await notifyQueueIdleIfDrained(env, installationId);
-      console.log('[queue] done', job.type);
       message.ack();
-    } catch (error) {
-      console.error(
-        '[queue] failed',
-        job.type,
-        error && typeof error === 'object' && 'isNotionApiError' in error
-          ? safeNotionErrorMetadata(error)
-          : safeErrorMetadata(error),
-      );
+      return;
+    }
 
-      // A remote mutation already succeeded; retry only the content-free
-      // reference cleanup, never replay the Notion write for this row.
-      if (syncOperationSucceeded) {
-        message.retry();
-        continue;
-      }
+    const { error: syncingError } = await supabase
+      .from('notion_block_sync')
+      .update({ status: 'syncing', updated_at: new Date().toISOString() })
+      .eq('installation_id', job.installationId)
+      .eq('local_id', job.localId)
+      .eq('local_version', queuedVersion);
+    if (syncingError) throw new Error('Unable to mark the sync as active.');
 
-      if (isRevokedInstallationError(error)) {
-        await ackAfterPayloadCleanup(message, jobId, env, String(job.installationId));
-        continue;
-      }
+    let notionBlockId: string | null = null;
 
-      const { error: failureStateError } = await supabase
+    if (job.type === 'block_op') {
+      const queuedPage = job.payload.page;
+      const queuedProject = job.payload.project;
+      if (!queuedPage || !queuedProject) throw new Error('Block queue job is missing page or project context.');
+      const result = await applyBlockOpsToNotionForInstallation(installationId, {
+        ops: job.payload.ops,
+        page: { ...queuedPage, content: queuedPage.content ?? { type: 'doc', content: [] } },
+        project: { ...queuedProject, stateContent: queuedProject.stateContent ?? { type: 'doc', content: [] } },
+        selectedParentPageId: job.payload.selectedParentPageId,
+      });
+      notionBlockId = result?.page?.notionPageId ?? null;
+    } else if (job.type === 'page') {
+      const queuedPage = job.payload.page;
+      const queuedProject = job.payload.project;
+      if (!queuedPage || !queuedProject) throw new Error('Page queue job is missing page or project context.');
+      const result = await pushPageToNotionForInstallation(installationId, {
+        page: { ...queuedPage, content: queuedPage.content ?? { type: 'doc', content: [] } },
+        project: { ...queuedProject, stateContent: queuedProject.stateContent ?? { type: 'doc', content: [] } },
+        selectedParentPageId: job.payload.selectedParentPageId,
+      });
+      notionBlockId = result?.page?.notionPageId ?? null;
+    } else {
+      const queuedProject = job.payload.project;
+      if (!queuedProject) throw new Error('Project queue job is missing project context.');
+      await syncProjectToNotionForInstallation(installationId, {
+        project: { ...queuedProject, stateContent: queuedProject.stateContent ?? { type: 'doc', content: [] } },
+        selectedParentPageId: job.payload.selectedParentPageId,
+      });
+    }
+
+    const isFinalBatchMessage = job.type !== 'block_op' || job.batchIndex === job.batchSize - 1;
+    const isCurrentVersion = row.local_version <= queuedVersion;
+    if (isFinalBatchMessage && isCurrentVersion) {
+      const { data: syncedRow, error: syncedStateError } = await supabase
         .from('notion_block_sync')
-        .update({ status: 'failed', updated_at: new Date().toISOString() })
+        .update({
+          status: 'synced',
+          synced_version: queuedVersion,
+          notion_block_id: notionBlockId,
+          updated_at: new Date().toISOString(),
+        })
         .eq('installation_id', job.installationId)
         .eq('local_id', job.localId)
-        .eq('local_version', job.queuedVersion);
-      if (failureStateError) {
-        console.error('[queue] failed sync state could not be persisted', safeErrorMetadata(failureStateError));
-        message.retry();
-        continue;
-      }
+        .eq('local_version', queuedVersion)
+        .select('local_version')
+        .maybeSingle();
+      if (syncedStateError) throw new Error('Unable to persist the completed sync state.');
 
-      if (!syncRow || syncRow.local_version <= job.queuedVersion) {
-        const installationId = String(job.installationId);
+      if (syncedRow) {
         const doStub = env.SYNC_EVENTS.get(env.SYNC_EVENTS.idFromName(installationId));
-        const errorRecord = error && typeof error === 'object'
-          ? error as { code?: unknown; message?: unknown; status?: unknown }
-          : undefined;
-        const statusCode = typeof errorRecord?.status === 'number' ? errorRecord.status : undefined;
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        const userMessage = notionApiHttpFailure(error)?.body.message ?? errorMessage;
         await doStub.fetch(new Request('http://do/notify', {
           method: 'POST',
-          body: JSON.stringify({
-            status: 'failed',
-            pageId: job.localId,
-            message: userMessage,
-            ...(typeof errorRecord?.code === 'string' ? { code: errorRecord.code } : {}),
-            ...(statusCode !== undefined ? { statusCode } : {}),
-          }),
+          body: JSON.stringify({ status: 'synced', pageId: job.localId, notionBlockId, version: queuedVersion }),
         })).catch(() => undefined);
-      }
-
-      if (isUnmappedNotionContentError(error) || isPermanentNotionFailure(error)) {
-        try {
-          // The extension removes operations from its local outbox as soon as
-          // this durable payload is accepted. Retain permanent failures in the
-          // server outbox so an explicit Sync retry can replay the exact edits.
-          await retainFailedQueuePayload(jobId, job);
-          await notifyQueueIdleIfDrained(env, String(job.installationId));
-          message.ack();
-        } catch (retentionError) {
-          console.error('[queue] failed sync payload could not be retained', safeErrorMetadata(retentionError));
-          message.retry();
-        }
       } else {
+        // A newer edit may have been queued while Notion was being updated.
+        // Do not publish a stale "synced" event over its pending state.
+        const { data: latestRow, error: latestRowError } = await supabase
+          .from('notion_block_sync')
+          .select('local_version')
+          .eq('installation_id', job.installationId)
+          .eq('local_id', job.localId)
+          .maybeSingle();
+        if (latestRowError || !latestRow || latestRow.local_version <= queuedVersion) {
+          throw new Error('Unable to confirm the completed sync version.');
+        }
+      }
+    }
+
+    syncOperationSucceeded = true;
+    await markAndRemoveQueuedPayload(jobId);
+    await notifyQueueIdleIfDrained(env, installationId);
+    console.log('[queue] done', job.type);
+    message.ack();
+  } catch (error) {
+    console.error(
+      '[queue] failed',
+      job.type,
+      error && typeof error === 'object' && 'isNotionApiError' in error
+        ? safeNotionErrorMetadata(error)
+        : safeErrorMetadata(error),
+    );
+
+    // A remote mutation already succeeded; retry only the content-free
+    // reference cleanup, never replay the Notion write for this row.
+    if (syncOperationSucceeded) {
+      message.retry();
+      return;
+    }
+
+    if (isRevokedInstallationError(error)) {
+      await ackAfterPayloadCleanup(message, jobId, env, String(job.installationId));
+      return;
+    }
+
+    const { error: failureStateError } = await supabase
+      .from('notion_block_sync')
+      .update({ status: 'failed', updated_at: new Date().toISOString() })
+      .eq('installation_id', job.installationId)
+      .eq('local_id', job.localId)
+      .eq('local_version', job.queuedVersion);
+    if (failureStateError) {
+      console.error('[queue] failed sync state could not be persisted', safeErrorMetadata(failureStateError));
+      message.retry();
+      return;
+    }
+
+    if (!syncRow || syncRow.local_version <= job.queuedVersion) {
+      const installationId = String(job.installationId);
+      const doStub = env.SYNC_EVENTS.get(env.SYNC_EVENTS.idFromName(installationId));
+      const errorRecord = error && typeof error === 'object'
+        ? error as { code?: unknown; message?: unknown; status?: unknown }
+        : undefined;
+      const statusCode = typeof errorRecord?.status === 'number' ? errorRecord.status : undefined;
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const userMessage = notionApiHttpFailure(error)?.body.message ?? errorMessage;
+      await doStub.fetch(new Request('http://do/notify', {
+        method: 'POST',
+        body: JSON.stringify({
+          status: 'failed',
+          pageId: job.localId,
+          message: userMessage,
+          ...(typeof errorRecord?.code === 'string' ? { code: errorRecord.code } : {}),
+          ...(statusCode !== undefined ? { statusCode } : {}),
+        }),
+      })).catch(() => undefined);
+    }
+
+    if (isUnmappedNotionContentError(error) || isPermanentNotionFailure(error)) {
+      try {
+        // The extension removes operations from its local outbox as soon as
+        // this durable payload is accepted. Retain permanent failures in the
+        // server outbox so an explicit Sync retry can replay the exact edits.
+        await retainFailedQueuePayload(jobId, job);
+        await notifyQueueIdleIfDrained(env, String(job.installationId));
+        message.ack();
+      } catch (retentionError) {
+        console.error('[queue] failed sync payload could not be retained', safeErrorMetadata(retentionError));
         message.retry();
       }
+    } else {
+      message.retry();
     }
   }
 }
