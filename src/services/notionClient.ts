@@ -425,6 +425,22 @@ async function recoverIdbWriteFence(): Promise<void> {
   await idbWriteRecoveryPromise;
 }
 
+/** Creates the starter project and page used to initialize an empty local workspace. */
+function createUntitledLocalWorkspaceContents(workspace: Workspace) {
+  const project = {
+    ...createProjectRecord('Untitled Project'),
+    workspaceId: workspace.id,
+    syncMode: 'local' as const,
+  };
+  const page = {
+    ...createEmptyPage(project.id, 'Untitled Page'),
+    workspaceId: workspace.id,
+    syncMode: 'local' as const,
+    syncAccountId: workspace.accountId,
+  };
+  return { project, page };
+}
+
 async function readStorage(): Promise<Required<JottathingStorage>> {
   await recoverIdbWriteFence();
   await migrateStorageToIdb();
@@ -552,17 +568,7 @@ async function readStorage(): Promise<Required<JottathingStorage>> {
     return { ...page, workspaceId, syncMode: workspace.kind, syncAccountId, syncWorkspaceId };
   });
   if (!allProjects.some((project) => project.workspaceId === localWorkspace.id)) {
-    const project = {
-      ...createProjectRecord('Untitled Project'),
-      workspaceId: localWorkspace.id,
-      syncMode: 'local' as const,
-    };
-    const page = {
-      ...createEmptyPage(project.id, 'Untitled Page'),
-      workspaceId: localWorkspace.id,
-      syncMode: 'local' as const,
-      syncAccountId: localWorkspace.accountId,
-    };
+    const { project, page } = createUntitledLocalWorkspaceContents(localWorkspace);
     allProjects = [project, ...allProjects];
     allPages = [...allPages, page];
     workspaceMigrationChanged = true;
@@ -621,17 +627,7 @@ async function readStorage(): Promise<Required<JottathingStorage>> {
     : localWorkspace.id;
   const selectedWorkspace = visibleWorkspaces.find((workspace) => workspace.id === currentWorkspaceId);
   if (selectedWorkspace?.kind === 'local' && !allProjects.some((project) => project.workspaceId === currentWorkspaceId)) {
-    const project = {
-      ...createProjectRecord('Untitled Project'),
-      workspaceId: currentWorkspaceId,
-      syncMode: 'local' as const,
-    };
-    const page = {
-      ...createEmptyPage(project.id, 'Untitled Page'),
-      workspaceId: currentWorkspaceId,
-      syncMode: 'local' as const,
-      syncAccountId: selectedWorkspace.accountId,
-    };
+    const { project, page } = createUntitledLocalWorkspaceContents(selectedWorkspace);
     allProjects = [project, ...allProjects];
     allPages = [...allPages, page];
     workspaceMigrationChanged = true;
@@ -3578,17 +3574,7 @@ export const notionClient = {
     let currentProjectIdByWorkspace = storage.currentProjectIdByWorkspace;
     let selectedProjectId = currentProjectIdByWorkspace[workspaceId];
     if (workspace.kind === 'local' && !projects.some((project) => project.workspaceId === workspaceId)) {
-      const project = {
-        ...createProjectRecord('Untitled Project'),
-        workspaceId,
-        syncMode: 'local' as const,
-      };
-      const page = {
-        ...createEmptyPage(project.id, 'Untitled Page'),
-        workspaceId,
-        syncMode: 'local' as const,
-        syncAccountId: workspace.accountId,
-      };
+      const { project, page } = createUntitledLocalWorkspaceContents(workspace);
       projects = [project, ...projects];
       pages = [...pages, page];
       activePageIdsByProject = { ...activePageIdsByProject, [project.id]: page.id };
@@ -3625,17 +3611,7 @@ export const notionClient = {
       createdAt: now,
       updatedAt: now,
     };
-    const project = {
-      ...createProjectRecord('Untitled Project'),
-      workspaceId: workspace.id,
-      syncMode: 'local' as const,
-    };
-    const page = {
-      ...createEmptyPage(project.id, 'Untitled Page'),
-      workspaceId: workspace.id,
-      syncAccountId: workspace.accountId,
-      syncMode: 'local' as const,
-    };
+    const { project, page } = createUntitledLocalWorkspaceContents(workspace);
     await writeStorage({
       activePageIdsByProject: { ...storage.activePageIdsByProject, [project.id]: page.id },
       currentWorkspaceId: workspace.id,

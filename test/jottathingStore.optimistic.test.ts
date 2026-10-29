@@ -103,6 +103,26 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+describe('local workspace defaults', () => {
+  test('creates a starter project and page owned by the active account', async () => {
+    const workspace = await notionClient.createLocalWorkspace('  Research  ');
+    const stored = readBrowserStorage();
+    const project = (stored.projects as Project[]).find((entry) => entry.workspaceId === workspace.id);
+    const page = (stored.pages as ProjectPage[]).find((entry) => entry.projectId === project?.id);
+
+    expect(workspace.name).toBe('Research');
+    expect(project).toMatchObject({ workspaceId: workspace.id, syncMode: 'local' });
+    expect(page).toMatchObject({
+      projectId: project?.id,
+      workspaceId: workspace.id,
+      syncAccountId: 'notion:test-user',
+      syncMode: 'local',
+    });
+    expect(stored.currentWorkspaceId).toBe(workspace.id);
+    expect(stored.activePageIdsByProject).toMatchObject({ [project?.id ?? '']: page?.id });
+  });
+});
+
 describe('optimistic project creation', () => {
   test('sync payload includes project database metadata defaults', async () => {
     const projectSync = deferred<Response>();
