@@ -562,6 +562,42 @@ async function replaceAfterUserConflictResolution({
   return { createdBlocks, notionBlocks };
 }
 
+type PreserveRemoteBlocksOptions = {
+  appendManagedBlocks: AppendManagedBlocks;
+  content: DocumentContent;
+  deleteManagedBlock: DeleteManagedBlock;
+  desiredBlocks: DesiredManagedBlock[];
+  listAllBlockChildren: ListAllBlockChildren;
+  localPageId: string;
+  notionBlocks: NotionBlockPayload[];
+  notionPageId: string;
+  store: WorkerStore;
+  updateManagedBlock: UpdateManagedBlock;
+};
+
+type ReviewedMergeContext = Pick<
+  PreserveRemoteBlocksOptions,
+  | 'appendManagedBlocks'
+  | 'deleteManagedBlock'
+  | 'listAllBlockChildren'
+  | 'notionPageId'
+  | 'store'
+  | 'updateManagedBlock'
+> & {
+  forcedRemoteIds: Set<string>;
+  knownRemoteIds: Set<string>;
+  remoteBlocks: NotionBlock[];
+  remoteById: Map<string, NotionBlock>;
+  usedRemoteIds: Set<string>;
+};
+
+type ReviewedBlockChoice = {
+  desired: DesiredManagedBlock;
+  explicitRemoteId?: string;
+  mapping?: BlockMapping;
+  previousBlockId?: string;
+};
+
 /** Applies a reviewed additive merge while retaining each confirmed Notion child. */
 async function preserveRemoteBlocksAfterUserConflictResolution({
   appendManagedBlocks,
@@ -574,107 +610,44 @@ async function preserveRemoteBlocksAfterUserConflictResolution({
   notionPageId,
   store,
   updateManagedBlock,
-}: {
-  appendManagedBlocks: AppendManagedBlocks;
-  content: DocumentContent;
-  deleteManagedBlock: DeleteManagedBlock;
-  desiredBlocks: DesiredManagedBlock[];
-  listAllBlockChildren: ListAllBlockChildren;
-  localPageId: string;
-  notionBlocks: NotionBlockPayload[];
-  notionPageId: string;
-  store: WorkerStore;
-  updateManagedBlock: UpdateManagedBlock;
-}) {
+}: PreserveRemoteBlocksOptions) {
   const remoteBlocks = await listAllBlockChildren(store, notionPageId);
   const remoteById = new Map(remoteBlocks.map((block) => [block.id, block]));
-  const isUserReviewedMerge = content.attrs?.jottathingConflictResolution === true;
   const knownRemoteIds = new Set(remoteBlocks.map((block) => block.id));
-  const mappingByJottathingId = new Map(
-    (store.blockMappings[localPageId] ?? []).map((mapping) => [
-      mapping.jottathingBlockId ?? mapping.localNodeId,
-      mapping,
-    ]),
-  );
-  const forcedRemoteIds = new Set<string>();
-  for (const desired of desiredBlocks) {
-    const node = content.content?.[desired.order];
-    const mapping = mappingByJottathingId.get(desired.jottathingBlockId);
-    const explicitRemoteId = stringValue(node?.attrs?.notionBlockId);
-    if (explicitRemoteId) forcedRemoteIds.add(explicitRemoteId);
-    if (mapping?.notionBlockId) forcedRemoteIds.add(mapping.notionBlockId);
-  }
+  const mappingByJottathingId = new Map((store.blockMappings[localPageId] ?? []).map((mapping) => [
+    mapping.jottathingBlockId ?? mapping.localNodeId,
+    mapping,
+  ]));
+  const forcedRemoteIds = collectForcedRemoteIds(content, desiredBlocks, mappingByJottathingId);
 
   const usedRemoteIds = new Set<string>();
   const createdBlocks: Array<NotionBlock | undefined> = [];
   const nextMappings: BlockMapping[] = [];
   let previousBlockId: string | undefined;
+  const mergeContext: ReviewedMergeContext = {
+    appendManagedBlocks,
+    deleteManagedBlock,
+    forcedRemoteIds,
+    knownRemoteIds,
+    listAllBlockChildren,
+    notionPageId,
+    remoteBlocks,
+    remoteById,
+    store,
+    updateManagedBlock,
+    usedRemoteIds,
+  };
 
   for (const desired of desiredBlocks) {
     const node = content.content?.[desired.order];
     const mapping = mappingByJottathingId.get(desired.jottathingBlockId);
     const explicitRemoteId = stringValue(node?.attrs?.notionBlockId);
-    const mappedRemoteId = mapping?.notionBlockId;
-    let remote = explicitRemoteId ? remoteById.get(explicitRemoteId) : undefined;
-    if (!remote && mappedRemoteId) remote = remoteById.get(mappedRemoteId);
-    let wasUpdated = false;
-
-    if (remote && usedRemoteIds.has(remote.id)) remote = undefined;
-    if (!remote) {
-      const signature = managedBlockSignature(desired.notionBlock);
-      remote = remoteBlocks.find((block) =>
-        !usedRemoteIds.has(block.id) &&
-        !forcedRemoteIds.has(block.id) &&
-        managedBlockSignature(block) === signature,
-      );
-    }
-
-    if (remote) {
-      const matches = managedBlockSignature(remote) === managedBlockSignature(desired.notionBlock) ||
-        Boolean(mapping && mappedMediaMatches(mapping, desired, remote));
-      const isReviewedChoice = isUserReviewedMerge && Boolean(mapping || explicitRemoteId);
-      // Stored mappings can lag a remote type change; Notion rejects PATCHes
-      // that send one block type's fields to a different existing block type.
-      const canUpdateBlockInPlace = mapping &&
-        remote.type === desired.notionBlock.type &&
-        isUpdateCompatible(mapping, desired);
-      if (!matches && isReviewedChoice && canUpdateBlockInPlace) {
-        await updateManagedBlock(store, remote.id, desired.notionBlock);
-        wasUpdated = true;
-      } else if (!matches && isReviewedChoice) {
-        const superseded = remote;
-        const desiredSignature = managedBlockSignature(desired.notionBlock);
-        const replacementAlreadyCreated = remoteBlocks.find((block) =>
-          block.id !== superseded.id &&
-          !usedRemoteIds.has(block.id) &&
-          !forcedRemoteIds.has(block.id) &&
-          managedBlockSignature(block) === desiredSignature,
-        );
-        remote = replacementAlreadyCreated ?? await appendReviewedMergeBlock(
-          store,
-          notionPageId,
-          desired.notionBlock,
-          positionAfter(previousBlockId),
-          knownRemoteIds,
-          appendManagedBlocks,
-          listAllBlockChildren,
-        );
-        await deleteManagedBlock(store, superseded.id);
-      } else if (!matches) {
-        throw new Error('The reviewed Notion block changed again. Reload its latest version and retry the merge.');
-      }
-    } else {
-      const created = await appendReviewedMergeBlock(
-        store,
-        notionPageId,
-        desired.notionBlock,
-        positionAfter(previousBlockId),
-        knownRemoteIds,
-        appendManagedBlocks,
-        listAllBlockChildren,
-      );
-      remote = created;
-    }
+    const { remote, wasUpdated } = await resolveReviewedBlock(mergeContext, {
+      desired,
+      explicitRemoteId,
+      mapping,
+      previousBlockId,
+    });
 
     usedRemoteIds.add(remote.id);
     createdBlocks[desired.order] = remote;
@@ -687,19 +660,149 @@ async function preserveRemoteBlocksAfterUserConflictResolution({
     previousBlockId = remote.id;
   }
 
-  const explicitlyDeletedIds = new Set(
-    Array.isArray(content.attrs?.jottathingDeleteNotionBlockIds)
-      ? content.attrs.jottathingDeleteNotionBlockIds.filter((id): id is string => typeof id === 'string')
-      : [],
+  await deleteExplicitlyRemovedBlocks(content, remoteById, usedRemoteIds, deleteManagedBlock, store);
+  store.blockMappings[localPageId] = nextMappings.filter((mapping) => mapping.notionBlockId);
+  return { createdBlocks, notionBlocks };
+}
+
+/** Reserves explicit and mapped IDs so signature matching cannot claim them twice. */
+function collectForcedRemoteIds(
+  content: DocumentContent,
+  desiredBlocks: DesiredManagedBlock[],
+  mappingsByLocalId: Map<string, BlockMapping>,
+): Set<string> {
+  const ids = new Set<string>();
+  for (const desired of desiredBlocks) {
+    const node = content.content?.[desired.order];
+    const mapping = mappingsByLocalId.get(desired.jottathingBlockId);
+    const explicitId = stringValue(node?.attrs?.notionBlockId);
+    if (explicitId) ids.add(explicitId);
+    if (mapping?.notionBlockId) ids.add(mapping.notionBlockId);
+  }
+  return ids;
+}
+
+/** Resolves the remote child for one reviewed local block, preserving append-before-delete safety. */
+async function resolveReviewedBlock(
+  context: ReviewedMergeContext,
+  { desired, explicitRemoteId, mapping, previousBlockId }: ReviewedBlockChoice,
+): Promise<{ remote: NotionBlock; wasUpdated: boolean }> {
+  const {
+    appendManagedBlocks,
+    deleteManagedBlock,
+    knownRemoteIds,
+    listAllBlockChildren,
+    notionPageId,
+    store,
+    updateManagedBlock,
+    usedRemoteIds,
+  } = context;
+  let remote = findReviewedRemoteBlock(context, { desired, explicitRemoteId, mapping });
+  if (!remote) {
+    remote = await appendReviewedMergeBlock(
+      store,
+      notionPageId,
+      desired.notionBlock,
+      positionAfter(previousBlockId),
+      knownRemoteIds,
+      appendManagedBlocks,
+      listAllBlockChildren,
+    );
+    return { remote, wasUpdated: false };
+  }
+
+  const matches = managedBlockSignature(remote) === managedBlockSignature(desired.notionBlock) ||
+    Boolean(mapping && mappedMediaMatches(mapping, desired, remote));
+  if (matches) return { remote, wasUpdated: false };
+
+  const isReviewedChoice = Boolean(mapping || explicitRemoteId);
+  if (!isReviewedChoice) {
+    throw new Error('The reviewed Notion block changed again. Reload its latest version and retry the merge.');
+  }
+
+  // Notion rejects PATCH when a stale mapping points to a different block type.
+  const canUpdateInPlace = mapping &&
+    remote.type === desired.notionBlock.type &&
+    isUpdateCompatible(mapping, desired);
+  if (canUpdateInPlace) {
+    await updateManagedBlock(store, remote.id, desired.notionBlock);
+    return { remote, wasUpdated: true };
+  }
+
+  remote = await replaceReviewedRemoteBlock(context, desired, remote, previousBlockId);
+  return { remote, wasUpdated: false };
+}
+
+/** Prefers reviewed IDs, then adopts an unclaimed exact-signature child. */
+function findReviewedRemoteBlock(
+  { forcedRemoteIds, remoteBlocks, remoteById, usedRemoteIds }: ReviewedMergeContext,
+  { desired, explicitRemoteId, mapping }: ReviewedBlockChoice,
+): NotionBlock | undefined {
+  let remote = explicitRemoteId ? remoteById.get(explicitRemoteId) : undefined;
+  if (!remote && mapping?.notionBlockId) remote = remoteById.get(mapping.notionBlockId);
+  if (remote && usedRemoteIds.has(remote.id)) remote = undefined;
+  if (remote) return remote;
+
+  const signature = managedBlockSignature(desired.notionBlock);
+  return remoteBlocks.find((block) =>
+    !usedRemoteIds.has(block.id) &&
+    !forcedRemoteIds.has(block.id) &&
+    managedBlockSignature(block) === signature,
   );
-  for (const blockId of explicitlyDeletedIds) {
-    if (remoteById.has(blockId) && !usedRemoteIds.has(blockId)) {
+}
+
+/** Appends a replacement before deleting the stale remote copy. */
+async function replaceReviewedRemoteBlock(
+  {
+    appendManagedBlocks,
+    deleteManagedBlock,
+    forcedRemoteIds,
+    knownRemoteIds,
+    listAllBlockChildren,
+    notionPageId,
+    remoteBlocks,
+    store,
+    usedRemoteIds,
+  }: ReviewedMergeContext,
+  desired: DesiredManagedBlock,
+  superseded: NotionBlock,
+  previousBlockId?: string,
+): Promise<NotionBlock> {
+  const desiredSignature = managedBlockSignature(desired.notionBlock);
+  const alreadyCreated = remoteBlocks.find((block) =>
+    block.id !== superseded.id &&
+    !usedRemoteIds.has(block.id) &&
+    !forcedRemoteIds.has(block.id) &&
+    managedBlockSignature(block) === desiredSignature,
+  );
+  const replacement = alreadyCreated ?? await appendReviewedMergeBlock(
+    store,
+    notionPageId,
+    desired.notionBlock,
+    positionAfter(previousBlockId),
+    knownRemoteIds,
+    appendManagedBlocks,
+    listAllBlockChildren,
+  );
+  await deleteManagedBlock(store, superseded.id);
+  return replacement;
+}
+
+/** Applies deletions only to existing remote blocks the reviewed merge did not keep. */
+async function deleteExplicitlyRemovedBlocks(
+  content: DocumentContent,
+  remoteById: Map<string, NotionBlock>,
+  usedRemoteIds: Set<string>,
+  deleteManagedBlock: DeleteManagedBlock,
+  store: WorkerStore,
+): Promise<void> {
+  const deletedIds = content.attrs?.jottathingDeleteNotionBlockIds;
+  if (!Array.isArray(deletedIds)) return;
+  for (const blockId of deletedIds) {
+    if (typeof blockId === 'string' && remoteById.has(blockId) && !usedRemoteIds.has(blockId)) {
       await deleteManagedBlock(store, blockId);
     }
   }
-
-  store.blockMappings[localPageId] = nextMappings.filter((mapping) => mapping.notionBlockId);
-  return { createdBlocks, notionBlocks };
 }
 
 /** Confirms a merge append by ID or discovers it after an incomplete API response. */
