@@ -3,12 +3,10 @@ import type { Context } from 'hono';
 import { pushPageToNotionCore, normalizeSyncedMediaContent } from '../pageSync.js';
 import { createProjectDatabaseHelpers } from '../projectDatabase.js';
 import { syncProjectFolder } from '../projectSync.js';
-import { createRootPageHelpers } from '../rootPages.js';
 import type {
   ConnectedWorkerStore,
   ManagedBlockOperation,
   ManagedBlockResult,
-  NotionObject,
   NotionRequester,
   WorkerEnv,
   WorkerStore,
@@ -17,7 +15,6 @@ import type {
 import type { DocumentContent, Project, ProjectPage } from '../../../../src/types/capture.js';
 
 type ApiContext = Context<{ Bindings: WorkerEnv }>;
-type RootHelpers = ReturnType<typeof createRootPageHelpers>;
 type DatabaseHelpers = ReturnType<typeof createProjectDatabaseHelpers>;
 
 /** Full page and project context required for a page synchronization. */
@@ -49,18 +46,9 @@ export interface WorkerSyncDependencies {
     content: DocumentContent,
     baselineContent?: DocumentContent,
   ) => Promise<ManagedBlockResult>;
-  archiveProjectRootPage: (store: WorkerStore, pageId: string) => Promise<NotionObject>;
   archiveThreadToggle: DatabaseHelpers['archiveThreadToggle'] | undefined;
-  createChildPage: (
-    store: WorkerStore,
-    parentPageId: string,
-    title: string,
-  ) => Promise<NotionObject>;
-  ensureJottathingRootPage: RootHelpers['ensureJottathingRootPage'];
   ensureProjectPage: DatabaseHelpers['ensureProjectPage'];
-  ensureProjectRootPage: RootHelpers['ensureProjectRootPage'];
   ensureThreadToggle: DatabaseHelpers['ensureThreadToggle'];
-  pageSummary: RootHelpers['pageSummary'];
   notionRequest: NotionRequester;
   pushPageToNotionCore: typeof pushPageToNotionCore;
   readStore: () => WorkerStore;
@@ -74,11 +62,6 @@ export interface WorkerSyncDependencies {
   requireConnectedStore: (context: ApiContext) => Promise<ConnectedWorkerStore>;
   supabase: WorkerSupabaseClient;
   syncProjectFolder: typeof syncProjectFolder;
-  updateChildNotePage: (
-    store: WorkerStore,
-    pageId: string,
-    page: ProjectPage,
-  ) => Promise<NotionObject>;
   updateThreadToggleTitle: DatabaseHelpers['updateThreadToggleTitle'] | undefined;
   withFreshInstallationStore: <Result>(
     store: WorkerStore,
@@ -92,20 +75,14 @@ export interface WorkerSyncDependencies {
 export function createWorkerSyncOperations(dependencies: WorkerSyncDependencies) {
   const {
     appendLog,
-    archiveProjectRootPage,
     archiveThreadToggle,
-    createChildPage,
-    ensureJottathingRootPage,
     ensureProjectPage,
-    ensureProjectRootPage,
     ensureThreadToggle,
-    pageSummary,
     notionRequest,
     pushPageToNotionCore: pushPageCore,
     replaceManagedBlocks,
     requireConnectedStore,
     syncProjectFolder: syncFolder,
-    updateChildNotePage,
     updateThreadToggleTitle,
     withFreshInstallationStore,
     writeStore,
@@ -150,11 +127,7 @@ export function createWorkerSyncOperations(dependencies: WorkerSyncDependencies)
       store: freshStore,
       project,
       selectedParentPageId,
-      ensureJottathingRootPage,
       ensureProjectPage,
-      ensureProjectRootPage,
-      archiveProjectRootPage,
-      pageSummary,
     });
     appendLog(
       freshStore,

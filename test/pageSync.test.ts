@@ -40,15 +40,11 @@ describe('Notion page sync recovery', () => {
     const dependencies = {
       appendLog,
       archiveThreadToggle: vi.fn(),
-      createChildPage: vi.fn(),
-      ensureJottathingRootPage: vi.fn(),
       ensureProjectPage,
-      ensureProjectRootPage: vi.fn(),
       ensureThreadToggle: vi.fn(async () => ({ id: 'thread-toggle' } as NotionObject)),
       notionRequest: vi.fn(async () => ({ last_edited_time: editedAt })),
       replaceManagedBlocks: vi.fn(async () => ({ createdBlocks: [], notionBlocks: [] })),
       requireConnectedStore: vi.fn(async () => store),
-      updateChildNotePage: vi.fn(),
       updateThreadToggleTitle: vi.fn(),
       writeStore: vi.fn(async () => undefined),
     } as never;
@@ -127,15 +123,11 @@ describe('Notion page sync recovery', () => {
     const dependencies = {
       appendLog: vi.fn(),
       archiveThreadToggle: vi.fn(),
-      createChildPage: vi.fn(),
-      ensureJottathingRootPage: vi.fn(),
       ensureProjectPage,
-      ensureProjectRootPage: vi.fn(),
       ensureThreadToggle,
       notionRequest,
       replaceManagedBlocks,
       requireConnectedStore: vi.fn(async () => store),
-      updateChildNotePage: vi.fn(),
       updateThreadToggleTitle: vi.fn(),
       writeStore: vi.fn(async () => undefined),
     } as never;

@@ -19,8 +19,7 @@ import type { BlockOpsInput, PageSyncInput, ProjectSyncInput } from './workerSyn
 import type { EnqueueJob } from './workerQueueOperations.js';
 import { createProjectDatabaseHelpers, projectStateKey } from '../projectDatabase.js';
 import { syncProjectFolder } from '../projectSync.js';
-import { createRootPageHelpers } from '../rootPages.js';
-import { isNotionObjectNotFound, titleFromPage } from '../workerUtils.js';
+import { isNotionObjectNotFound } from '../workerUtils.js';
 import type { BlockPosition } from '../workerUtils.js';
 import type { AuthService, AuthSessionResult } from '../auth.js';
 import type {
@@ -47,8 +46,6 @@ export type ApiContext = Context<{ Bindings: WorkerEnv }>;
 
 // ─── Per-request singletons ────────────────────────────────────────────────────
 
-/** Describes the root helpers contract used by this API feature. */
-type RootHelpers = ReturnType<typeof createRootPageHelpers>;
 /** Describes the database helpers contract used by this API feature. */
 type DatabaseHelpers = ReturnType<typeof createProjectDatabaseHelpers>;
 
@@ -60,9 +57,6 @@ let workerSyncOperations: ReturnType<typeof createWorkerSyncOperations>;
 let workerQueueOperations: ReturnType<typeof createWorkerQueueOperations>;
 let workerInstallationState: ReturnType<typeof createWorkerInstallationState>;
 let workerNotionOperations: ReturnType<typeof createWorkerNotionOperations>;
-let ensureJottathingRootPage: RootHelpers['ensureJottathingRootPage'];
-let ensureProjectRootPage: RootHelpers['ensureProjectRootPage'];
-let pageSummary: RootHelpers['pageSummary'];
 let archiveThreadToggle: DatabaseHelpers['archiveThreadToggle'];
 let ensureProjectDatabase: DatabaseHelpers['ensureProjectDatabase'];
 let ensureProjectPage: DatabaseHelpers['ensureProjectPage'];
@@ -85,28 +79,11 @@ function initSingletons(env: WorkerEnv): void {
   });
 
   const NOTION_VERSION = env.NOTION_VERSION ?? '2026-03-11';
-  const JOTTATHING_ROOT_PAGE_TITLE = env.JOTTATHING_ROOT_PAGE_TITLE ?? 'Jottathing';
-
   notionRequest = createNotionRequester({ notionVersion: NOTION_VERSION });
   workerNotionOperations = createWorkerNotionOperations({
     appendLog,
     notionRequest,
   });
-
-  const rootHelpers = createRootPageHelpers({
-    appendLog,
-    createChildPage,
-    createWorkspacePage,
-    isNotionObjectNotFound,
-    jottathingRootPageTitle: JOTTATHING_ROOT_PAGE_TITLE,
-    listAllBlockChildren,
-    notionRequest,
-    titleFromPage,
-    updatePageTitle,
-  });
-  ensureJottathingRootPage = rootHelpers.ensureJottathingRootPage;
-  ensureProjectRootPage = rootHelpers.ensureProjectRootPage;
-  pageSummary = rootHelpers.pageSummary;
 
   const dbHelpers = createProjectDatabaseHelpers({
     appendLog,
@@ -134,14 +111,9 @@ function initSingletons(env: WorkerEnv): void {
   const syncDependencies = {
     appendLog,
     applyManagedBlockOps,
-    archiveProjectRootPage,
     archiveThreadToggle,
-    createChildPage,
-    ensureJottathingRootPage,
     ensureProjectPage,
-    ensureProjectRootPage,
     ensureThreadToggle,
-    pageSummary,
     notionRequest,
     pushPageToNotionCore,
     readStore,
@@ -149,7 +121,6 @@ function initSingletons(env: WorkerEnv): void {
     requireConnectedStore,
     supabase,
     syncProjectFolder,
-    updateChildNotePage,
     updateThreadToggleTitle,
     withFreshInstallationStore,
     writeStore,
@@ -340,37 +311,9 @@ function listAllBlockChildren(store: WorkerStore, blockId: string): Promise<Noti
   return workerNotionOperations.listAllBlockChildren(store, blockId);
 }
 
-/** Creates a child page beneath a Notion page. */
-function createChildPage(
-  store: WorkerStore,
-  parentPageId: string,
-  title: string,
-): Promise<NotionObject> {
-  return workerNotionOperations.createChildPage(store, parentPageId, title);
-}
-
 /** Creates a top-level workspace page. */
 function createWorkspacePage(store: WorkerStore, title: string): Promise<NotionObject> {
   return workerNotionOperations.createWorkspacePage(store, title);
-}
-
-/** Updates a Notion page title. */
-function updatePageTitle(store: WorkerStore, pageId: string, title: string): Promise<NotionObject> {
-  return workerNotionOperations.updatePageTitle(store, pageId, title);
-}
-
-/** Updates a linked note page title and archive state. */
-function updateChildNotePage(
-  store: WorkerStore,
-  pageId: string,
-  page: ProjectPage,
-): Promise<NotionObject> {
-  return workerNotionOperations.updateChildNotePage(store, pageId, page);
-}
-
-/** Archives a legacy project root page. */
-function archiveProjectRootPage(store: WorkerStore, pageId: string): Promise<NotionObject> {
-  return workerNotionOperations.archiveProjectRootPage(store, pageId);
 }
 
 /** Deletes a managed Notion block. */
@@ -412,13 +355,10 @@ export {
   appendManagedBlocks,
   applyBlockOpsToNotionForInstallation,
   applyManagedBlockOps,
-  archiveProjectRootPage,
   archiveThreadToggle,
   auth,
-  createChildPage,
   createWorkspacePage,
   deleteManagedBlock,
-  ensureJottathingRootPage,
   ensureJottathingSyncStateRow,
   ensureProjectDatabase,
   ensureProjectPage,
@@ -433,7 +373,6 @@ export {
   listAllBlockChildren,
   notionObjectExists,
   notionRequest,
-  pageSummary,
   performSyncProjectFolder,
   pushPageToNotion,
   pushPageToNotionForInstallation,
@@ -449,8 +388,6 @@ export {
   syncProjectToNotion,
   syncProjectToNotionForInstallation,
   uncachePage,
-  updateChildNotePage,
-  updatePageTitle,
   updateThreadToggleTitle,
   validateNotionCache,
   withFreshInstallationStore,

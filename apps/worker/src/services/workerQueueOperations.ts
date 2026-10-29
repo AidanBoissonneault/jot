@@ -56,17 +56,13 @@ export function createWorkerQueueOperations(dependencies: WorkerQueueDependencie
     appendLog,
     applyManagedBlockOps,
     archiveThreadToggle,
-    createChildPage,
-    ensureJottathingRootPage,
     ensureProjectPage,
-    ensureProjectRootPage,
     ensureThreadToggle,
     notionRequest,
     pushPageToNotionCore: pushPageCore,
     readStore,
     replaceManagedBlocks,
     supabase,
-    updateChildNotePage,
     updateThreadToggleTitle,
     withFreshInstallationStore,
     writeStore,
@@ -238,160 +234,120 @@ export function createWorkerQueueOperations(dependencies: WorkerQueueDependencie
         );
       }
 
-      if (ensureProjectPage && ensureThreadToggle) {
-        let projectPage: Awaited<ReturnType<typeof ensureProjectPage>>;
-        try {
-          projectPage = await ensureProjectPage(freshStore, projectForPageSync, {
-            isForcedMerge: page.content.attrs?.jottathingConflictResolution === true,
-            selectedParentPageId,
-            syncState: false,
-          });
-        } catch (error) {
-          console.error('[queue] project row preparation failed before page sync', {
-            failureTarget: knownArchivedWriteTarget(
-              error,
-              freshStore,
-              projectForPageSync.id,
-              page.id,
-              selectedParentPageId,
-            ),
-            error: safeNotionErrorMetadata(error),
-          });
-          throw error;
-        }
-        if (page.status === 'archived' || ops.some((op) => op.type === 'page_archive')) {
-          await archiveThreadToggle?.(freshStore, page);
-          appendLog(freshStore, 'sync_thread_archived', page.title);
-          await writeStore(freshStore);
-          return { page: { ...page, notionParentPageId: projectPage.id, syncState: 'saved' } };
-        }
-
-        const content = syncContentForOps(ops, page.content);
-        let toggle: NotionObject;
-        let replacement: Awaited<ReturnType<typeof applyManagedBlockOps>>;
-        try {
-          toggle = await ensureThreadToggle(freshStore, projectPage.id, page);
-          await updateThreadToggleTitle?.(freshStore, page);
-          replacement = await applyManagedBlockOps(
+      let projectPage: Awaited<ReturnType<typeof ensureProjectPage>>;
+      try {
+        projectPage = await ensureProjectPage(freshStore, projectForPageSync, {
+          isForcedMerge: page.content.attrs?.jottathingConflictResolution === true,
+          selectedParentPageId,
+          syncState: false,
+        });
+      } catch (error) {
+        console.error('[queue] project row preparation failed before page sync', {
+          failureTarget: knownArchivedWriteTarget(
+            error,
             freshStore,
+            projectForPageSync.id,
             page.id,
-            toggle.id,
-            ops,
-            content,
-            page.syncBaselineContent,
-          );
-        } catch (error) {
-          const isArchivedWrite = isArchivedBlockEditError(error);
-          console.log('[queue] block operation write failed', {
-            classifiedArchivedBlock: isArchivedWrite,
-            projectArchived: projectForPageSync.status === 'archived',
-            restoredAfterNewerPageEdit: projectRecovery.reactivated,
-            error: safeNotionErrorMetadata(error),
-          });
-          if (!isArchivedWrite || projectForPageSync.status === 'archived') throw error;
-          const mappedToggleId = freshStore.threadBlocks?.[threadKey(page.id)]?.blockId;
-          const failedBlockId = notionBlockIdFromError(error);
-          const excludedBlockIds = failedBlockId && failedBlockId === mappedToggleId
-            ? new Set([failedBlockId])
-            : undefined;
-          const initialFailureTarget = archivedWriteTarget(error, projectPage.id, mappedToggleId);
-          console.log('[queue] archived Notion write recovery started', {
-            failureTarget: initialFailureTarget,
-            rejectedThreadToggle: Boolean(excludedBlockIds?.size),
-          });
-          freshStore.threadBlocks ??= {};
-          freshStore.blockMappings ??= {};
-          delete freshStore.threadBlocks[threadKey(page.id)];
-          // The archived child IDs cannot be edited. Keep the latest durable
-          // page snapshot and rebuild it under a fresh active thread toggle.
-          delete freshStore.blockMappings[page.id];
-          appendLog(freshStore, 'sync_thread_container_repaired', 'Replaced an archived Notion thread container.');
-          const originalProjectPageId = projectPage.id;
-          let recoveryProjectPageId = projectPage.id;
-          let recoveryThreadToggleId: string | undefined;
-          try {
-            projectPage = await ensureProjectPage(freshStore, projectForPageSync, {
-              selectedParentPageId,
-              syncState: false,
-            });
-            recoveryProjectPageId = projectPage.id;
-            toggle = await ensureThreadToggle(freshStore, projectPage.id, page, {
-              excludedBlockIds,
-            });
-            recoveryThreadToggleId = toggle.id;
-            await updateThreadToggleTitle?.(freshStore, page);
-            replacement = await replaceManagedBlocks(freshStore, page.id, toggle.id, content);
-          } catch (recoveryError) {
-            console.error('[queue] archived Notion write recovery failed', {
-              failureTarget: initialFailureTarget,
-              recoveryFailureTarget: archivedWriteTarget(
-                recoveryError,
-                recoveryProjectPageId,
-                recoveryThreadToggleId,
-              ),
-              error: safeNotionErrorMetadata(recoveryError),
-            });
-            throw recoveryError;
-          }
-          console.log('[queue] archived Notion write recovery completed', {
-            failureTarget: initialFailureTarget,
-            projectRowReplaced: recoveryProjectPageId !== originalProjectPageId,
-            threadToggleReplaced: Boolean(excludedBlockIds?.size) && recoveryThreadToggleId !== failedBlockId,
-          });
-        }
-        notionPageId = toggle.id;
-        parentPageId = projectPage.id;
-        page.content = normalizeSyncedMediaContent(content, replacement?.createdBlocks ?? []);
-        page.syncBaselineContent = replacement?.baselineContent ?? page.syncBaselineContent;
-        refreshed = await notionRequest(freshStore, `/blocks/${notionPageId}`).catch(() => toggle);
-        freshStore.notePages[page.id] = {
-          archived: false,
-          dataSourceId: undefined,
-          notionPageId,
-          parentPageId,
-          title: page.title,
-          lastEditedTime: refreshed.last_edited_time,
-          kind: 'thread',
-        };
-      } else {
-        const jottathingRootPage = await ensureJottathingRootPage(freshStore, { selectedParentPageId });
-        const projectRootPage = await ensureProjectRootPage(
-          freshStore,
-          jottathingRootPage.id,
-          project,
-          { candidateNotionPageId: page.notionParentPageId },
-        );
-        const existingPageId = page.notionPageId ?? freshStore.notePages[page.id]?.notionPageId;
-        const existingPage = existingPageId
-          ? await notionRequest(freshStore, `/pages/${existingPageId}`).catch(() => undefined)
-          : undefined;
-        const notePage =
-          existingPage ?? (await createChildPage(freshStore, projectRootPage.id, page.title));
-        await updateChildNotePage(freshStore, notePage.id, page);
-        notionPageId = notePage.id;
-        parentPageId = projectRootPage.id;
-        const content = syncContentForOps(ops, page.content);
-        const replacement = await applyManagedBlockOps(
+            selectedParentPageId,
+          ),
+          error: safeNotionErrorMetadata(error),
+        });
+        throw error;
+      }
+      if (page.status === 'archived' || ops.some((op) => op.type === 'page_archive')) {
+        await archiveThreadToggle?.(freshStore, page);
+        appendLog(freshStore, 'sync_thread_archived', page.title);
+        await writeStore(freshStore);
+        return { page: { ...page, notionParentPageId: projectPage.id, syncState: 'saved' } };
+      }
+
+      const content = syncContentForOps(ops, page.content);
+      let toggle: NotionObject;
+      let replacement: Awaited<ReturnType<typeof applyManagedBlockOps>>;
+      try {
+        toggle = await ensureThreadToggle(freshStore, projectPage.id, page);
+        await updateThreadToggleTitle?.(freshStore, page);
+        replacement = await applyManagedBlockOps(
           freshStore,
           page.id,
-          notionPageId,
+          toggle.id,
           ops,
           content,
           page.syncBaselineContent,
         );
-        page.content = normalizeSyncedMediaContent(content, replacement?.createdBlocks ?? []);
-        page.syncBaselineContent = replacement?.baselineContent ?? page.syncBaselineContent;
-        refreshed = await notionRequest(freshStore, `/pages/${notionPageId}`).catch(() => notePage);
-        freshStore.notePages[page.id] = {
-          archived: false,
-          dataSourceId: undefined,
-          kind: undefined,
-          notionPageId,
-          parentPageId,
-          title: page.title,
-          lastEditedTime: refreshed.last_edited_time,
-        };
+      } catch (error) {
+        const isArchivedWrite = isArchivedBlockEditError(error);
+        console.log('[queue] block operation write failed', {
+          classifiedArchivedBlock: isArchivedWrite,
+          projectArchived: projectForPageSync.status === 'archived',
+          restoredAfterNewerPageEdit: projectRecovery.reactivated,
+          error: safeNotionErrorMetadata(error),
+        });
+        if (!isArchivedWrite || projectForPageSync.status === 'archived') throw error;
+        const mappedToggleId = freshStore.threadBlocks?.[threadKey(page.id)]?.blockId;
+        const failedBlockId = notionBlockIdFromError(error);
+        const excludedBlockIds = failedBlockId && failedBlockId === mappedToggleId
+          ? new Set([failedBlockId])
+          : undefined;
+        const initialFailureTarget = archivedWriteTarget(error, projectPage.id, mappedToggleId);
+        console.log('[queue] archived Notion write recovery started', {
+          failureTarget: initialFailureTarget,
+          rejectedThreadToggle: Boolean(excludedBlockIds?.size),
+        });
+        freshStore.threadBlocks ??= {};
+        freshStore.blockMappings ??= {};
+        delete freshStore.threadBlocks[threadKey(page.id)];
+        // The archived child IDs cannot be edited. Keep the latest durable
+        // page snapshot and rebuild it under a fresh active thread toggle.
+        delete freshStore.blockMappings[page.id];
+        appendLog(freshStore, 'sync_thread_container_repaired', 'Replaced an archived Notion thread container.');
+        const originalProjectPageId = projectPage.id;
+        let recoveryProjectPageId = projectPage.id;
+        let recoveryThreadToggleId: string | undefined;
+        try {
+          projectPage = await ensureProjectPage(freshStore, projectForPageSync, {
+            selectedParentPageId,
+            syncState: false,
+          });
+          recoveryProjectPageId = projectPage.id;
+          toggle = await ensureThreadToggle(freshStore, projectPage.id, page, {
+            excludedBlockIds,
+          });
+          recoveryThreadToggleId = toggle.id;
+          await updateThreadToggleTitle?.(freshStore, page);
+          replacement = await replaceManagedBlocks(freshStore, page.id, toggle.id, content);
+        } catch (recoveryError) {
+          console.error('[queue] archived Notion write recovery failed', {
+            failureTarget: initialFailureTarget,
+            recoveryFailureTarget: archivedWriteTarget(
+              recoveryError,
+              recoveryProjectPageId,
+              recoveryThreadToggleId,
+            ),
+            error: safeNotionErrorMetadata(recoveryError),
+          });
+          throw recoveryError;
+        }
+        console.log('[queue] archived Notion write recovery completed', {
+          failureTarget: initialFailureTarget,
+          projectRowReplaced: recoveryProjectPageId !== originalProjectPageId,
+          threadToggleReplaced: Boolean(excludedBlockIds?.size) && recoveryThreadToggleId !== failedBlockId,
+        });
       }
+      notionPageId = toggle.id;
+      parentPageId = projectPage.id;
+      page.content = normalizeSyncedMediaContent(content, replacement?.createdBlocks ?? []);
+      page.syncBaselineContent = replacement?.baselineContent ?? page.syncBaselineContent;
+      refreshed = await notionRequest(freshStore, `/blocks/${notionPageId}`).catch(() => toggle);
+      freshStore.notePages[page.id] = {
+        archived: false,
+        dataSourceId: undefined,
+        notionPageId,
+        parentPageId,
+        title: page.title,
+        lastEditedTime: refreshed.last_edited_time,
+        kind: 'thread',
+      };
 
       appendLog(freshStore, 'sync_block_push', `${page.title} (${ops.length} ops)`);
       await writeStore(freshStore);

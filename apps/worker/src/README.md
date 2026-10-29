@@ -17,7 +17,7 @@ This directory contains the Cloudflare Worker API and separates transport, featu
 - `services/workerRuntime.ts` — initializes shared services and exposes the runtime facade used by routes and queues.
 - `services/workerInstallationState.ts` — resolves sessions and connected installations, then locks state updates per installation.
 - `services/workerNotionOperations.ts` — composes Notion cache, block transport, managed-block sync, and page mutation helpers.
-- `services/notionBlockOperations.ts` — paginated child reads and focused Notion page/block create, update, delete, and append operations.
+- `services/notionBlockOperations.ts` — paginated child reads, workspace-page creation, and focused block create, update, delete, and append operations.
 - `services/workerStorePersistence.ts` — normalized worker state, diagnostic logs, and Supabase installation-state persistence.
 - `services/notionObjectCache.ts` — validates cached Notion pages, databases, and thread blocks, then clears stale local mappings.
 - `auth.ts` and `notionAuth.ts` — application authentication persistence and Notion OAuth/webhook lifecycle behavior.
@@ -32,7 +32,7 @@ This directory contains the Cloudflare Worker API and separates transport, featu
 - `projectDatabaseDiscovery.ts` — database discovery, parent creation, schema upgrades, managed views, and candidate ranking.
 - `projectDatabaseRows.ts` and `projectDatabaseValues.ts` — managed-row queries, Notion row mapping, and database schema/value shaping.
 - `projectDatabaseState.ts` — project state containers and nested thread toggle import, update, and archive operations.
-- `projectSync.ts` and `rootPages.ts` — project folder and legacy page-tree synchronization.
+- `projectSync.ts` — database-only synchronization of project rows; legacy page-tree sync was removed.
 - `syncEvents.ts`, `syncQueueMessages.ts`, and `types.ts` — durable event delivery, queue shaping, and shared domain contracts.
 - `htmlPages.ts` and `workerUtils.ts` — isolated HTML rendering and stateless worker helpers.
 

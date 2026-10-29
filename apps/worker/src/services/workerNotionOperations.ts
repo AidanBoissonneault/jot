@@ -160,41 +160,9 @@ export function createWorkerNotionOperations({
     return notionBlockOperations.listAllBlockChildren(store, blockId);
   }
 
-  /** Creates a child page beneath a Notion page. */
-  function createChildPage(
-    store: WorkerStore,
-    parentPageId: string,
-    title: string,
-  ): Promise<NotionObject> {
-    return notionBlockOperations.createChildPage(store, parentPageId, title);
-  }
-
   /** Creates a top-level workspace page. */
   function createWorkspacePage(store: WorkerStore, title: string): Promise<NotionObject> {
     return notionBlockOperations.createWorkspacePage(store, title);
-  }
-
-  /** Updates a Notion page title. */
-  function updatePageTitle(
-    store: WorkerStore,
-    pageId: string,
-    title: string,
-  ): Promise<NotionObject> {
-    return notionBlockOperations.updatePageTitle(store, pageId, title);
-  }
-
-  /** Updates a linked note page title and archive state. */
-  function updateChildNotePage(
-    store: WorkerStore,
-    pageId: string,
-    page: ProjectPage,
-  ): Promise<NotionObject> {
-    return notionBlockOperations.updateChildNotePage(store, pageId, page);
-  }
-
-  /** Archives a legacy project root page. */
-  function archiveProjectRootPage(store: WorkerStore, pageId: string): Promise<NotionObject> {
-    return notionBlockOperations.archiveProjectRootPage(store, pageId);
   }
 
   /** Deletes one locally managed Notion block. */
@@ -235,8 +203,6 @@ export function createWorkerNotionOperations({
     appendBlocksWithFallback,
     appendManagedBlocks,
     applyManagedBlockOps,
-    archiveProjectRootPage,
-    createChildPage,
     createWorkspacePage,
     deleteManagedBlock,
     importManagedBlocks,
@@ -245,9 +211,7 @@ export function createWorkerNotionOperations({
     replaceManagedBlocks,
     retrieveNotionPageOrBlock,
     uncachePage,
-    updateChildNotePage,
     updateManagedBlock,
-    updatePageTitle,
     validateNotionCache,
   };
 }

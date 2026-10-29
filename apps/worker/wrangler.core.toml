@@ -43,6 +43,5 @@ max_retries       = 3
 
 [vars]
 NOTION_VERSION = "2026-03-11"
-JOTTATHING_ROOT_PAGE_TITLE = "Jottathing"
 WORKER_URL = "https://sync.jottathing.byaidan.com"
 TRUSTED_ORIGINS = "chrome-extension://mfpjgeohimhcjdnlikbaibjfijdchmhc,chrome-extension://fpmkfddbnjalacgkciemoceecidjnoee"

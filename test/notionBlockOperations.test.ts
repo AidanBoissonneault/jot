@@ -44,40 +44,6 @@ function returnedCodeBlock(id: string, sourceText: string): NotionBlock {
 }
 
 describe('Notion block append confirmation', () => {
-  it('uses the current Notion API field when archiving note and root pages', async () => {
-    const notionRequest = vi.fn(async () => ({ id: 'updated-page' })) as unknown as NotionRequester;
-    const operations = createNotionBlockOperations({
-      chunks,
-      isNotionFileUploadBlock,
-      mediaFallbackBlock,
-      notionRequest,
-      positionAfterCreatedBlocks,
-      updateBodyFromNotionBlock,
-    });
-
-    await operations.updateChildNotePage(store, 'note-page', {
-      status: 'archived',
-      title: 'Archived note',
-    });
-    await operations.archiveProjectRootPage(store, 'project-root');
-
-    expect(notionRequest).toHaveBeenNthCalledWith(
-      1,
-      store,
-      '/pages/note-page',
-      expect.objectContaining({
-        method: 'PATCH',
-        body: expect.objectContaining({ in_trash: true }),
-      }),
-    );
-    expect(notionRequest).toHaveBeenNthCalledWith(
-      2,
-      store,
-      '/pages/project-root',
-      { method: 'PATCH', body: { in_trash: true } },
-    );
-  });
-
   it('rejects a partial child list when Notion omits its next cursor', async () => {
     const notionRequest = vi.fn(async () => ({
       object: 'list',

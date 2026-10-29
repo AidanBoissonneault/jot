@@ -72,21 +72,6 @@ export function createNotionBlockOperations({
     return results;
   }
 
-  /** Creates a child page beneath a Notion page. */
-  async function createChildPage(
-    store: WorkerStore,
-    parentPageId: string,
-    title: string,
-  ): Promise<NotionObject> {
-    return notionRequest(store, '/pages', {
-      method: 'POST',
-      body: {
-        parent: { type: 'page_id', page_id: parentPageId },
-        properties: { title: [{ text: { content: title || 'Untitled Page' } }] },
-      },
-    });
-  }
-
   /** Creates a top-level workspace page. */
   async function createWorkspacePage(store: WorkerStore, title: string): Promise<NotionObject> {
     return notionRequest(store, '/pages', {
@@ -96,36 +81,6 @@ export function createNotionBlockOperations({
         properties: { title: [{ text: { content: title || 'Jottathing' } }] },
       },
     });
-  }
-
-  /** Updates a Notion page title. */
-  async function updatePageTitle(
-    store: WorkerStore,
-    pageId: string,
-    title: string,
-  ): Promise<NotionObject> {
-    return notionRequest(store, `/pages/${pageId}`, {
-      method: 'PATCH',
-      body: { properties: { title: [{ text: { content: title || 'Untitled Page' } }] } },
-    });
-  }
-
-  /** Updates a linked note page title and archive state. */
-  async function updateChildNotePage(
-    store: WorkerStore,
-    pageId: string,
-    page: { status?: string; title: string },
-  ): Promise<NotionObject> {
-    const body: JsonObject = {
-      properties: { title: [{ text: { content: page.title || 'Untitled Page' } }] },
-    };
-    if (page.status === 'archived') body.in_trash = true;
-    return notionRequest(store, `/pages/${pageId}`, { method: 'PATCH', body });
-  }
-
-  /** Archives a legacy project root page. */
-  async function archiveProjectRootPage(store: WorkerStore, pageId: string): Promise<NotionObject> {
-    return notionRequest(store, `/pages/${pageId}`, { method: 'PATCH', body: { in_trash: true } });
   }
 
   /** Deletes a managed Notion block. */
@@ -253,14 +208,10 @@ export function createNotionBlockOperations({
   return {
     appendBlocksWithFallback,
     appendManagedBlocks,
-    archiveProjectRootPage,
-    createChildPage,
     createWorkspacePage,
     deleteManagedBlock,
     listAllBlockChildren,
-    updateChildNotePage,
     updateManagedBlock,
-    updatePageTitle,
   };
 }
 
