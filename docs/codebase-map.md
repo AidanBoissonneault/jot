@@ -142,3 +142,5 @@ HTTP page sync now requires project-database and thread-toggle helpers. The alte
 Dead-code pruning removed unreferenced `CaptureType` and `HighlightMeta` contracts and the unused recursive pending-media scan. Upload lease checks and sync sanitization remain the active paths. Media-content, media-identity, and queue-payload tests pass (21), as do root and Worker typechecks.
 
 Worker routes and database sync now share one Notion page-title reader and one block/page error detector. Title reads tolerate missing properties; error detection handles both `Error` and API-shaped values while rejecting mismatched codes. Project database, cache, route utility, page sync, and security tests pass (50), as do both TypeScript projects.
+
+Notion query pagination now shares one cursor loop across database search, managed-row counts, project reload, and both row lookup paths. Missing or repeated cursors and malformed result pages still fail with caller-specific errors. Filtered project lookup now follows later pages to find an active row behind trashed duplicates. The focused database suites pass (28 tests), and root plus Worker typechecks pass.

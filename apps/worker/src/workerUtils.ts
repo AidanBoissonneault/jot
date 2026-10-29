@@ -7,10 +7,42 @@
 import { createHash, randomBytes } from 'node:crypto';
 import type { Context } from 'hono';
 import { notionApiHttpFailure } from './notionRequest.js';
-import type { JsonObject, NotionBlock, NotionBlockPayload, NotionObject, WorkerEnv, WorkerStore } from './types.js';
+import type { JsonObject, NotionBlock, NotionBlockPayload, NotionObject, NotionRequester, WorkerEnv, WorkerStore } from './types.js';
 
 export const MAX_SYNC_JSON_REQUEST_BYTES = 16 * 1024 * 1024;
 export const MAX_CONTROL_JSON_REQUEST_BYTES = 256 * 1024;
+
+/** Reads Notion query pages and rejects malformed results or cursor loops. */
+export async function* notionQueryPages<T>(
+  notionRequest: NotionRequester,
+  store: WorkerStore,
+  endpoint: string,
+  query: JsonObject,
+  errors: { invalidResults: string; incompleteResults: string },
+): AsyncGenerator<T[]> {
+  const seenCursors = new Set<string>();
+  let cursor: string | undefined;
+
+  while (true) {
+    const body = { ...query, ...(cursor ? { start_cursor: cursor } : {}) };
+    const response = await notionRequest(store, endpoint, { method: 'POST', body });
+    if (
+      !response || typeof response !== 'object' || Array.isArray(response) ||
+      !Array.isArray(response.results)
+    ) {
+      throw new Error(errors.invalidResults);
+    }
+    yield response.results as T[];
+
+    if (!response.has_more) return;
+    const nextCursor = response.next_cursor;
+    if (typeof nextCursor !== 'string' || !nextCursor || seenCursors.has(nextCursor)) {
+      throw new Error(errors.incompleteResults);
+    }
+    seenCursors.add(nextCursor);
+    cursor = nextCursor;
+  }
+}
 
 /** Reads and parses JSON while enforcing a limit even when Content-Length is absent. */
 export async function readLimitedJsonBody<T>(

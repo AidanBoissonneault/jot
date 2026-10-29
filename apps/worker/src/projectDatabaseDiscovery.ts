@@ -30,7 +30,7 @@ import type {
   NotionRequester,
   WorkerStore,
 } from './types.js';
-import { isNotionPageIdValidationError } from './workerUtils.js';
+import { isNotionPageIdValidationError, notionQueryPages } from './workerUtils.js';
 
 /** Parent selection passed to database discovery. */
 interface ParentSelection {
@@ -302,37 +302,22 @@ export function createProjectDatabaseDiscoveryHelpers({
     const seenDataSourceIds = new Set<string>();
     // Current Notion search results are data sources; title both current names.
     for (const query of [JOTTATHING_PROJECTS_DATA_SOURCE_TITLE, JOTTATHING_DATABASE_TITLE]) {
-      let cursor: string | undefined;
-      const seenCursors = new Set<string>();
-      do {
-        const body: JsonObject = {
-          query,
-          page_size: 100,
-          filter: { property: 'object', value: 'data_source' },
-        };
-        if (cursor) body.start_cursor = cursor;
-
-        const response = await notionRequest(store, '/search', { method: 'POST', body });
-        if (!Array.isArray(response.results)) {
-          throw new Error('Notion returned an invalid data source search result.');
-        }
-        for (const dataSource of response.results) {
+      for await (const page of notionQueryPages<NotionObject>(
+        notionRequest,
+        store,
+        '/search',
+        { query, page_size: 100, filter: { property: 'object', value: 'data_source' } },
+        {
+          invalidResults: 'Notion returned an invalid data source search result.',
+          incompleteResults: 'Notion returned an incomplete database search result.',
+        },
+      )) {
+        for (const dataSource of page) {
           if (seenDataSourceIds.has(dataSource.id)) continue;
           seenDataSourceIds.add(dataSource.id);
           dataSources.push(dataSource);
         }
-
-        if (!response.has_more) {
-          cursor = undefined;
-          continue;
-        }
-        const nextCursor = response.next_cursor;
-        if (!nextCursor || seenCursors.has(nextCursor)) {
-          throw new Error('Notion returned an incomplete database search result.');
-        }
-        seenCursors.add(nextCursor);
-        cursor = nextCursor;
-      } while (cursor);
+      }
     }
     return dataSources;
   }
@@ -381,9 +366,6 @@ export function createProjectDatabaseDiscoveryHelpers({
   /** Counts managed project rows. @param store - Worker state. @param dataSourceId - Data source ID. @returns Managed count. */
   async function managedProjectCount(store: WorkerStore, dataSourceId: string): Promise<number> {
     let count = 0;
-    let cursor;
-    const seenCursors = new Set<string>();
-
     try {
       const schema = await notionRequest(store, `/data_sources/${dataSourceId}`);
       const properties = schema.properties ?? {};
@@ -393,43 +375,28 @@ export function createProjectDatabaseDiscoveryHelpers({
       const managedPropertyType = typeof managedPropertySchema.type === 'string'
         ? managedPropertySchema.type
         : undefined;
-      do {
-        const body: JsonObject = { page_size: 100 };
-        // Only send a typed filter when the adopted schema confirms it is valid.
-        // Older workspaces may have customized or migrated this property to a
-        // different type, where a checkbox filter makes Notion reject discovery.
-        if (managedPropertyType === 'checkbox') {
-          body.filter = {
-            property: managedProperty,
-            checkbox: { equals: true },
-          };
-        }
-
-        if (cursor) {
-          body.start_cursor = cursor;
-        }
-
-        const response = await notionRequest(store, `/data_sources/${dataSourceId}/query`, {
-          method: 'POST',
-          body,
-        });
-        if (!Array.isArray(response.results)) {
-          throw new Error('Notion returned an invalid managed-project count result.');
-        }
+      const query: JsonObject = { page_size: 100 };
+      // Only filter by checkbox when the adopted schema supports it.
+      if (managedPropertyType === 'checkbox') {
+        query.filter = {
+          property: managedProperty,
+          checkbox: { equals: true },
+        };
+      }
+      for await (const rows of notionQueryPages<NotionObject>(
+        notionRequest,
+        store,
+        `/data_sources/${dataSourceId}/query`,
+        query,
+        {
+          invalidResults: 'Notion returned an invalid managed-project count result.',
+          incompleteResults: 'Notion returned an incomplete managed-project count.',
+        },
+      )) {
         count += managedPropertyType === 'checkbox'
-          ? response.results.length
-          : response.results.filter((page) => checkboxValue(page.properties?.[managedProperty])).length;
-        if (response.has_more) {
-          const nextCursor = response.next_cursor;
-          if (!nextCursor || seenCursors.has(nextCursor)) {
-            throw new Error('Notion returned an incomplete managed-project count.');
-          }
-          seenCursors.add(nextCursor);
-          cursor = nextCursor;
-        } else {
-          cursor = undefined;
-        }
-      } while (cursor);
+          ? rows.length
+          : rows.filter((page) => checkboxValue(page.properties?.[managedProperty])).length;
+      }
 
       return count;
     } catch (error) {

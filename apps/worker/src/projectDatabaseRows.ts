@@ -22,6 +22,7 @@ import type {
   NotionRequester,
   WorkerStore,
 } from './types.js';
+import { notionQueryPages } from './workerUtils.js';
 
 /** Clears derived database mappings, optionally retaining stable note block identities. */
 export function clearSyncMappings(
@@ -117,37 +118,21 @@ export function createProjectDatabaseRows(notionRequest: NotionRequester) {
     dataSourceId: string,
   ): Promise<NotionObject[]> {
     const results: NotionObject[] = [];
-    let cursor: string | undefined;
-    const seenCursors = new Set<string>();
-    do {
-      // Keep the API query independent of a user's property types. A database
-      // can retain an older Status property as a Notion `status` field, while
-      // current Jottathing tables use `select`; filtering with a fixed type
-      // makes both validation and full reload fail with Notion 400 responses.
-      // The result set is paged and narrowed locally using the managed marker.
-      const body: JsonObject = { page_size: 100 };
-      if (cursor) body.start_cursor = cursor;
-      const response = await notionRequest(store, `/data_sources/${dataSourceId}/query`, {
-        method: 'POST',
-        body,
-      });
-      if (!Array.isArray(response.results)) {
-        throw new Error('Notion returned an invalid managed-project page.');
-      }
-      results.push(...response.results.filter((row) =>
+    // Adopted databases can have different property types; filter locally.
+    for await (const rows of notionQueryPages<NotionObject>(
+      notionRequest,
+      store,
+      `/data_sources/${dataSourceId}/query`,
+      { page_size: 100 },
+      {
+        invalidResults: 'Notion returned an invalid managed-project page.',
+        incompleteResults: 'Notion returned an incomplete managed-project list.',
+      },
+    )) {
+      results.push(...rows.filter((row) =>
         isManagedProjectRow(row) && !isArchivedObject(row),
       ));
-      if (response.has_more) {
-        const nextCursor = response.next_cursor;
-        if (!nextCursor || seenCursors.has(nextCursor)) {
-          throw new Error('Notion returned an incomplete managed-project list.');
-        }
-        seenCursors.add(nextCursor);
-        cursor = nextCursor;
-      } else {
-        cursor = undefined;
-      }
-    } while (cursor);
+    }
     return results;
   }
 
@@ -161,57 +146,47 @@ export function createProjectDatabaseRows(notionRequest: NotionRequester) {
     const idProperty = PROJECT_PROPERTIES.jottathingId;
 
     if (properties[idProperty]?.type === 'rich_text') {
-      const response = await notionRequest(store, `/data_sources/${dataSourceId}/query`, {
-        method: 'POST',
-        body: {
-          // Several archived rows can share a Jottathing ID after a project
-          // has been recreated. Prefer an active row if one exists; callers
-          // can create a fresh row when the only match lives in the trash.
+      // Several archived rows can share an ID after recreation. Page until an
+      // active row is found or the filtered result is exhausted.
+      for await (const rows of notionQueryPages<NotionObject>(
+        notionRequest,
+        store,
+        `/data_sources/${dataSourceId}/query`,
+        {
           page_size: 100,
-          filter: {
-            property: idProperty,
-            rich_text: { equals: projectId },
-          },
+          filter: { property: idProperty, rich_text: { equals: projectId } },
         },
-      });
-      if (!Array.isArray(response.results)) {
-        throw new Error('Notion returned an invalid project lookup result.');
+        {
+          invalidResults: 'Notion returned an invalid project lookup result.',
+          incompleteResults: 'Notion returned an incomplete project lookup result.',
+        },
+      )) {
+        const activeRow = rows.find((row) => !isArchivedObject(row));
+        if (activeRow) return activeRow;
       }
-      return response.results.find((row) => !isArchivedObject(row));
+      return undefined;
     }
 
     // Adopted legacy databases may have had their ID field removed or changed
     // to a different type. In that case, scan safely rather than sending a
     // rich_text filter that Notion rejects with HTTP 400.
-    let cursor: string | undefined;
-    const seenCursors = new Set<string>();
-    do {
-      const body: JsonObject = { page_size: 100 };
-      if (cursor) body.start_cursor = cursor;
-      const response = await notionRequest(store, `/data_sources/${dataSourceId}/query`, {
-        method: 'POST',
-        body,
-      });
-      if (!Array.isArray(response.results)) {
-        throw new Error('Notion returned an invalid project lookup result.');
-      }
-      const match = response.results.find((row) => {
+    for await (const rows of notionQueryPages<NotionObject>(
+      notionRequest,
+      store,
+      `/data_sources/${dataSourceId}/query`,
+      { page_size: 100 },
+      {
+        invalidResults: 'Notion returned an invalid project lookup result.',
+        incompleteResults: 'Notion returned an incomplete project lookup result.',
+      },
+    )) {
+      const match = rows.find((row) => {
         if (isArchivedObject(row)) return false;
         const rowProperties = row.properties ?? {};
         return richTextProperty(rowProperties[PROJECT_PROPERTIES.jottathingId]).trim() === projectId;
       });
       if (match) return match;
-      if (response.has_more) {
-        const nextCursor = response.next_cursor;
-        if (!nextCursor || seenCursors.has(nextCursor)) {
-          throw new Error('Notion returned an incomplete project lookup result.');
-        }
-        seenCursors.add(nextCursor);
-        cursor = nextCursor;
-      } else {
-        cursor = undefined;
-      }
-    } while (cursor);
+    }
     return undefined;
   }
 
