@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 import { notionClient } from '@/src/services/notionClient';
-import { listPendingSyncOps } from '@/src/services/syncQueue';
+import {
+  addPendingProjectSyncEvent,
+  blockPendingProjectSyncEvents,
+  listPendingSyncOps,
+} from '@/src/services/syncQueue';
 import type { Project, ProjectPage, SyncConfig, Workspace } from '@/src/types/capture';
 import { doc, paragraph } from './helpers/docBuilders';
 import { readBrowserStorage, resetBrowserStorage } from './setup';
@@ -75,7 +79,11 @@ function seedResyncStorage() {
   });
 }
 
-function installFetchMock(pageResponse: unknown, onReload?: () => void) {
+function installFetchMock(
+  pageResponse: unknown,
+  onReload?: () => void,
+  projectResponse: unknown = { status: 'saved' },
+) {
   const fetchMock = vi.fn(async (input: string | URL) => {
     const route = String(input).replace(syncConfig.serverUrl, '');
     if (route.startsWith('/sync/retry')) {
@@ -85,7 +93,9 @@ function installFetchMock(pageResponse: unknown, onReload?: () => void) {
     if (route === '/sync/validate') {
       return jsonResponse({ aheadPageIds: [], failedPageIds: [], newPageIds: [], stalePageIds: [] });
     }
-    if (route === '/sync/project') return jsonResponse({ status: 'saved' });
+    if (route === '/sync/project') return projectResponse instanceof Response
+      ? projectResponse
+      : jsonResponse(projectResponse);
     if (route === '/sync/page/resync') return pageResponse instanceof Response
       ? pageResponse
       : jsonResponse(pageResponse);
@@ -156,6 +166,42 @@ describe('manual page resync', () => {
     expect(storedPage?.syncState).toBe('error');
     expect(blockedOps.length).toBeGreaterThan(0);
     expect(blockedOps.every((op) => op.deliveryBlocked?.code === 'unmapped_notion_content')).toBe(true);
+    expect(fetchMock.mock.calls.map(([url]) => String(url)))
+      .not.toContain('http://localhost:8787/sync/reload');
+  });
+
+  test('returns blocked project conflicts and keeps the remote reload pending', async () => {
+    const diff = {
+      baseContent: doc([]),
+      localContent: doc([paragraph('local project edit')]),
+      remoteContent: doc([paragraph('remote project edit')]),
+      reason: 'merge',
+      localChangedBlockIds: [],
+      remoteChangedBlockIds: [],
+    };
+    await addPendingProjectSyncEvent(project, syncConfig.selectedParentPageId);
+    await blockPendingProjectSyncEvents(project.id, {
+      code: 'unmapped_notion_content',
+      message: 'Project content needs review.',
+      diff,
+    });
+    const fetchMock = installFetchMock(
+      { status: 'saved', page },
+      undefined,
+      jsonResponse({
+        code: 'unmapped_notion_content',
+        message: 'Project content needs review.',
+        diff,
+      }, 409),
+    );
+
+    const result = await notionClient.resyncPendingChanges();
+
+    expect(result.blockedProjectCount).toBe(1);
+    expect(result.blockedMessage).toBe('Project content needs review.');
+    expect(result.remoteReloadPending).toBe(true);
+    expect(result.conflicts.filter((conflict) => conflict.targetType === 'project'))
+      .toEqual([expect.objectContaining({ targetId: project.id, targetTitle: project.name })]);
     expect(fetchMock.mock.calls.map(([url]) => String(url)))
       .not.toContain('http://localhost:8787/sync/reload');
   });

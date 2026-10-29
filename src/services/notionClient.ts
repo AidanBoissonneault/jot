@@ -3780,6 +3780,122 @@ async function reconcilePagesForManualSync(
   return conflicts;
 }
 
+type ManualResyncResult = {
+  blockedMessage?: string;
+  blockedProjectCount: number;
+  conflicts: SyncContentConflict[];
+  reloadedFromNotion: boolean;
+  remoteReloadPending: boolean;
+  failedUploadCount: number;
+  remainingCount: number;
+};
+
+/** Flushes reconciled page edits and waits for any accepted server jobs. */
+async function flushManualResyncQueues(
+  syncConfig: SyncConfig,
+  onProgress: ((progress: SyncProgressUpdate) => void) | undefined,
+  failedUploadCount: number,
+): Promise<number> {
+  onProgress?.({ phase: 'uploading', pending: await pendingLocalWorkCount() });
+  await flushPendingSyncOps({ force: true });
+  const queue = await requestServer<SyncQueueStatusResponse>('/sync/status', undefined, syncConfig);
+  failedUploadCount = Math.max(
+    failedUploadCount,
+    Number.isSafeInteger(queue.failedCount) ? Math.max(0, queue.failedCount ?? 0) : 0,
+  );
+  if (!queue.hasPending) return failedUploadCount;
+
+  onProgress?.({ phase: 'waiting_for_server', pending: queue.pendingCount ?? 0 });
+  return Math.max(
+    failedUploadCount,
+    await waitForRemoteSyncQueueToSettle(syncConfig, onProgress, undefined, true),
+  );
+}
+
+/** Restores blocked project conflicts and prunes source links to deleted blocks. */
+async function collectBlockedProjectConflicts(): Promise<{
+  events: ProjectSyncEvent[];
+  conflicts: SyncContentConflict[];
+}> {
+  const events = (await listPendingProjectSyncEvents()).filter((event) => event.deliveryBlocked);
+  const { pages, projects } = await readStorage();
+  const projectsById = new Map(projects.map((project) => [project.id, project]));
+  const blockIdsByProject = new Map<string, Set<string>>();
+  for (const page of pages) {
+    if (page.status === 'archived') continue;
+    const blockIds = blockIdsByProject.get(page.projectId) ?? new Set<string>();
+    collectJottathingBlockIds(page.content, blockIds);
+    blockIdsByProject.set(page.projectId, blockIds);
+  }
+
+  const conflicts: SyncContentConflict[] = [];
+  const uniqueEvents = [...new Map(events.map((event) => [event.projectId, event])).values()];
+  for (const event of uniqueEvents) {
+    let project = projectsById.get(event.projectId) ??
+      (event.type === 'project_source_upsert'
+        ? { ...event.payload.project, stateContent: { type: 'doc', content: [event.payload.block] } }
+        : event.payload.project);
+    const diff = event.deliveryBlocked?.diff;
+    if (!diff) continue;
+
+    const liveBlockIds = blockIdsByProject.get(event.projectId) ?? new Set<string>();
+    const localState = project.stateContent ?? diff.localContent;
+    const localContent = pruneOrphanedProjectStateSources(localState, liveBlockIds);
+    const remoteContent = diff.remoteContent
+      ? pruneOrphanedProjectStateSources(diff.remoteContent, liveBlockIds)
+      : null;
+    const baseContent = diff.baseContent
+      ? pruneOrphanedProjectStateSources(diff.baseContent, liveBlockIds)
+      : null;
+    if (localContent !== localState && projectsById.has(event.projectId)) {
+      project = { ...project, stateContent: localContent };
+      projectsById.set(project.id, project);
+      await persistRebasedProjectSnapshots([project]);
+    }
+
+    conflicts.push({
+      targetType: 'project',
+      targetId: event.projectId,
+      targetTitle: project.name,
+      baseContent,
+      reason: diff.reason,
+      localChangedBlockIds: diff.localChangedBlockIds,
+      remoteChangedBlockIds: diff.remoteChangedBlockIds,
+      localContent,
+      remoteContent,
+    });
+  }
+  return { events, conflicts };
+}
+
+/** Reloads remote inventory only after all local sync work is safe to replace. */
+async function finishManualResync(
+  syncConfig: SyncConfig,
+  onProgress: ((progress: SyncProgressUpdate) => void) | undefined,
+  pageConflicts: SyncContentConflict[],
+  failedUploadCount: number,
+): Promise<ManualResyncResult> {
+  failedUploadCount = await flushManualResyncQueues(syncConfig, onProgress, failedUploadCount);
+  const blocked = await collectBlockedProjectConflicts();
+  const canReload = !blocked.events.length && !pageConflicts.length &&
+    failedUploadCount === 0 && await pendingLocalWorkCount() === 0;
+  if (canReload) {
+    // Explicit manual sync refreshes full inventory because validation can miss older Notion records.
+    await notionClient.reloadFromNotion({ force: true, onProgress });
+  }
+  await persistPageSyncConflicts(pageConflicts);
+
+  return {
+    blockedMessage: blocked.events[0]?.deliveryBlocked?.message,
+    blockedProjectCount: new Set(blocked.events.map((event) => event.projectId)).size,
+    conflicts: [...pageConflicts, ...blocked.conflicts],
+    reloadedFromNotion: canReload,
+    remoteReloadPending: !canReload,
+    failedUploadCount,
+    remainingCount: await pendingLocalWorkCount(),
+  };
+}
+
 function msUntilOldestOpIsEligible(ops: BlockSyncOp[], now = Date.now()): number {
   const oldestCreatedAt = Math.min(
     ...ops.map((op) => Date.parse(op.createdAt)).filter((time) => Number.isFinite(time)),
@@ -3901,15 +4017,7 @@ export const notionClient = {
 
   async resyncPendingChanges(
     onProgress?: (progress: SyncProgressUpdate) => void,
-  ): Promise<{
-    blockedMessage?: string;
-    blockedProjectCount: number;
-    conflicts: SyncContentConflict[];
-    reloadedFromNotion: boolean;
-    remoteReloadPending: boolean;
-    failedUploadCount: number;
-    remainingCount: number;
-  }> {
+  ): Promise<ManualResyncResult> {
     const { syncConfig } = await readStorage();
     if (!syncConfig.connected || isBrowserOffline()) {
       throw new Error('Reconnect to Notion before resyncing. Your local changes remain saved.');
@@ -3923,8 +4031,6 @@ export const notionClient = {
     // local rows so an explicit hard sync cannot create a second Notion page.
     await reconcilePersistedTemporaryPageDuplicates();
 
-    let reloadedFromNotion = false;
-    let remoteReloadPending = false;
     let failedUploadCount = 0;
     const pendingQueue = await preparePendingQueueResync(syncConfig);
     failedUploadCount = pendingQueue.failedUploadCount;
@@ -3948,110 +4054,7 @@ export const notionClient = {
       onProgress,
     );
 
-    onProgress?.({ phase: 'uploading', pending: await pendingLocalWorkCount() });
-    await flushPendingSyncOps({ force: true });
-    const queueAfterLocalFlush = await requestServer<SyncQueueStatusResponse>(
-      '/sync/status',
-      undefined,
-      syncConfig,
-    );
-    failedUploadCount = Math.max(
-      failedUploadCount,
-      Number.isSafeInteger(queueAfterLocalFlush.failedCount)
-        ? Math.max(0, queueAfterLocalFlush.failedCount ?? 0)
-        : 0,
-    );
-    if (queueAfterLocalFlush.hasPending) {
-      onProgress?.({
-        phase: 'waiting_for_server',
-        pending: queueAfterLocalFlush.pendingCount ?? 0,
-      });
-      failedUploadCount = Math.max(
-        failedUploadCount,
-        await waitForRemoteSyncQueueToSettle(syncConfig, onProgress, undefined, true),
-      );
-    }
-    const projectEvents = await listPendingProjectSyncEvents();
-    const blockedEvents = projectEvents.filter((event) => event.deliveryBlocked);
-    const { pages, projects } = await readStorage();
-    const projectsById = new Map(projects.map((project) => [project.id, project]));
-    const blockIdsByProject = new Map<string, Set<string>>();
-    for (const page of pages) {
-      if (page.status === 'archived') continue;
-      const blockIds = blockIdsByProject.get(page.projectId) ?? new Set<string>();
-      collectJottathingBlockIds(page.content, blockIds);
-      blockIdsByProject.set(page.projectId, blockIds);
-    }
-    const conflicts: SyncContentConflict[] = [];
-    const uniqueBlockedEvents = [...new Map(
-      blockedEvents.map((event) => [event.projectId, event]),
-    ).values()];
-    for (const event of uniqueBlockedEvents) {
-      let project = projectsById.get(event.projectId) ??
-        (event.type === 'project_source_upsert'
-          ? { ...event.payload.project, stateContent: { type: 'doc', content: [event.payload.block] } }
-          : event.payload.project);
-      const diff = event.deliveryBlocked?.diff;
-      if (!diff) continue;
-
-      const liveBlockIds = blockIdsByProject.get(event.projectId) ?? new Set<string>();
-      const localState = project.stateContent ?? diff.localContent;
-      const localContent = pruneOrphanedProjectStateSources(localState, liveBlockIds);
-      const remoteContent = diff.remoteContent
-        ? pruneOrphanedProjectStateSources(diff.remoteContent, liveBlockIds)
-        : null;
-      const baseContent = diff.baseContent
-        ? pruneOrphanedProjectStateSources(diff.baseContent, liveBlockIds)
-        : null;
-
-      if (localContent !== localState && projectsById.has(event.projectId)) {
-        project = { ...project, stateContent: localContent };
-        projectsById.set(project.id, project);
-        await persistRebasedProjectSnapshots([project]);
-      }
-
-      conflicts.push({
-        targetType: 'project',
-        targetId: event.projectId,
-        targetTitle: project.name,
-        baseContent,
-        reason: diff.reason,
-        localChangedBlockIds: diff.localChangedBlockIds,
-        remoteChangedBlockIds: diff.remoteChangedBlockIds,
-        localContent,
-        remoteContent,
-      });
-    }
-
-    const canReloadRemoteWorkspace =
-      !blockedEvents.length &&
-      pageConflicts.length === 0 &&
-      failedUploadCount === 0 &&
-      await pendingLocalWorkCount() === 0;
-    if (canReloadRemoteWorkspace) {
-      // A manual Sync is also the user's explicit request to reconcile the
-      // workspace inventory. Validation signals can miss pages from older or
-      // differently-shaped Notion records, so always fetch the full snapshot
-      // once local writes and conflict handling are clear.
-      await notionClient.reloadFromNotion({ force: true, onProgress });
-      reloadedFromNotion = true;
-    } else {
-      // Keep remote discovery alive until local writes or conflict review no
-      // longer make replacing the workspace snapshot unsafe.
-      remoteReloadPending = true;
-    }
-
-    await persistPageSyncConflicts(pageConflicts);
-
-    return {
-      blockedMessage: blockedEvents[0]?.deliveryBlocked?.message,
-      blockedProjectCount: new Set(blockedEvents.map((event) => event.projectId)).size,
-      conflicts: [...pageConflicts, ...conflicts],
-      reloadedFromNotion,
-      remoteReloadPending,
-      failedUploadCount,
-      remainingCount: await pendingLocalWorkCount(),
-    };
+    return finishManualResync(syncConfig, onProgress, pageConflicts, failedUploadCount);
   },
 
   async resolveSyncConflict(
