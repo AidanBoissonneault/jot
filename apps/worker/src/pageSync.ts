@@ -1,10 +1,10 @@
 /**
- * @file Coordinates page synchronization for legacy page trees and project-database threads.
+ * @file Synchronizes project-database thread toggles and recovers archived containers.
  * @author Aidan Boissonneault
  * @lastModified September 2026
  */
 
-import type { DocumentContent, NotionParentPage, Project, ProjectPage } from '../../../src/types/capture.js';
+import type { DocumentContent, Project, ProjectPage } from '../../../src/types/capture.js';
 import {
   isArchivedBlockEditError,
   reactivateProjectForNewerPageEdit,
@@ -31,28 +31,17 @@ interface ProjectPageResult {
 interface PageSyncDependencies {
   appendLog: AppendLog;
   archiveThreadToggle: ((store: WorkerStore, page: ProjectPage) => Promise<void>) | undefined;
-  createChildPage: (store: WorkerStore, parentPageId: string, title: string) => Promise<NotionObject>;
-  ensureJottathingRootPage: (
-    store: WorkerStore,
-    options: { selectedParentPageId: string | undefined },
-  ) => Promise<NotionParentPage>;
-  ensureProjectPage: ((
+  ensureProjectPage: (
     store: WorkerStore,
     project: Project,
     options: { isForcedMerge?: boolean; selectedParentPageId: string | undefined; syncState?: boolean },
-  ) => Promise<ProjectPageResult>) | undefined;
-  ensureProjectRootPage: (
-    store: WorkerStore,
-    rootPageId: string,
-    project: Project,
-    options: { candidateNotionPageId: string | undefined },
-  ) => Promise<NotionParentPage>;
-  ensureThreadToggle: ((
+  ) => Promise<ProjectPageResult>;
+  ensureThreadToggle: (
     store: WorkerStore,
     projectPageId: string,
     page: ProjectPage,
     options?: { excludedBlockIds?: ReadonlySet<string> },
-  ) => Promise<NotionObject>) | undefined;
+  ) => Promise<NotionObject>;
   notionRequest: NotionRequester;
   replaceManagedBlocks: (
     store: WorkerStore,
@@ -62,7 +51,6 @@ interface PageSyncDependencies {
     baselineContent?: DocumentContent,
   ) => Promise<ManagedBlockResult>;
   requireConnectedStore: (request: unknown) => Promise<WorkerStore>;
-  updateChildNotePage: (store: WorkerStore, pageId: string, page: ProjectPage) => Promise<unknown>;
   updateThreadToggleTitle: ((store: WorkerStore, page: ProjectPage) => Promise<void>) | undefined;
   writeStore: (store: WorkerStore) => Promise<void>;
 }
@@ -76,7 +64,7 @@ interface PushPageOptions {
   selectedParentPageId: string | undefined;
 }
 
-/** Describes the project database push options contract used by this API feature. */
+/** Database and thread-toggle dependencies for pushing one page. */
 interface ProjectDatabasePushOptions {
   appendLog: AppendLog;
   archiveThreadToggle: ((store: WorkerStore, page: ProjectPage) => Promise<void>) | undefined;
@@ -93,7 +81,7 @@ interface ProjectDatabasePushOptions {
 }
 
 /**
- * Pushes a local page through the configured Notion storage strategy.
+ * Pushes a local page through its project's Notion database row and thread toggle.
  * @param options - Request context, page/project data, parent selection, and dependencies.
  * @returns The synchronization result and updated page metadata.
  */
@@ -107,16 +95,12 @@ export async function pushPageToNotionCore({
   const {
     archiveThreadToggle,
     appendLog,
-    createChildPage,
-    ensureJottathingRootPage,
     ensureProjectPage,
-    ensureProjectRootPage,
     ensureThreadToggle,
     notionRequest,
     replaceManagedBlocks,
     requireConnectedStore,
     updateThreadToggleTitle,
-    updateChildNotePage,
     writeStore,
   } = dependencies;
   const store = await requireConnectedStore(request);
@@ -130,107 +114,20 @@ export async function pushPageToNotionCore({
     );
   }
 
-  if (ensureProjectPage && ensureThreadToggle) {
-    return pushPageToProjectDatabase({
-      appendLog,
-      archiveThreadToggle,
-      ensureProjectPage,
-      ensureThreadToggle,
-      notionRequest,
-      page,
-      project: projectForPageSync,
-      replaceManagedBlocks,
-      selectedParentPageId,
-      store,
-      updateThreadToggleTitle,
-      writeStore,
-    });
-  }
-
-  const jottathingRootPage = await ensureJottathingRootPage(store, { selectedParentPageId });
-  const projectRootPage = await ensureProjectRootPage(store, jottathingRootPage.id, projectForPageSync, {
-    candidateNotionPageId: page.notionParentPageId,
-  });
-  const notionPageId = page.notionPageId ?? store.notePages[page.id]?.notionPageId;
-  const isUserReviewedReplacement = page.content.attrs?.jottathingConflictResolution === true;
-
-  let notePage = notionPageId
-    ? await notionRequest(store, `/pages/${notionPageId}`)
-    : undefined;
-
-  if (
-    !isUserReviewedReplacement &&
-    !page.syncBaselineContent &&
-    notePage?.last_edited_time &&
-    page.remoteRevision &&
-    notePage.last_edited_time !== page.remoteRevision
-  ) {
-    appendLog(store, 'sync_stale', `${page.title} changed in Notion.`);
-    await writeStore(store);
-    return {
-      page: {
-        ...page,
-        notionPageId,
-        notionDatabaseId: undefined,
-        notionDataSourceId: undefined,
-        notionParentPageId: projectRootPage.id,
-        notionLastEditedTime: notePage.last_edited_time,
-        remoteRevision: notePage.last_edited_time,
-      },
-      status: 'stale',
-      message: 'This page changed in Notion. Pull or review it before saving over it.',
-    };
-  }
-
-  if (!notePage) {
-    notePage = await createChildPage(store, projectRootPage.id, page.title);
-  } else {
-    await updateChildNotePage(store, notePage.id, page);
-  }
-
-  const replacement = await replaceManagedBlocks(
+  return pushPageToProjectDatabase({
+    appendLog,
+    archiveThreadToggle,
+    ensureProjectPage,
+    ensureThreadToggle,
+    notionRequest,
+    page,
+    project: projectForPageSync,
+    replaceManagedBlocks,
+    selectedParentPageId,
     store,
-    page.id,
-    notePage.id,
-    page.content,
-    page.syncBaselineContent,
-  );
-  const refreshedPage = await notionRequest(store, `/pages/${notePage.id}`);
-  const syncedContent = normalizeSyncedMediaContent(
-    replacement?.content ?? page.content,
-    replacement?.createdBlocks ?? [],
-  );
-  const syncedPage = {
-    ...page,
-    content: syncedContent,
-    syncBaselineContent: syncedContent,
-    notionPageId: notePage.id,
-    notionDatabaseId: undefined,
-    notionDataSourceId: undefined,
-    notionParentPageId: projectRootPage.id,
-    notionLastEditedTime: refreshedPage.last_edited_time,
-    remoteRevision: refreshedPage.last_edited_time,
-    syncState: 'saved',
-  };
-
-  store.notePages[page.id] = {
-    archived: false,
-    dataSourceId: undefined,
-    kind: undefined,
-    notionPageId: notePage.id,
-    parentPageId: projectRootPage.id,
-    title: page.title,
-    lastEditedTime: refreshedPage.last_edited_time,
-  };
-  appendLog(store, 'sync_push', page.title);
-  await writeStore(store);
-
-  return {
-    parentPage: jottathingRootPage,
-    page: syncedPage,
-    status: 'saved',
-    message: 'Synced to Notion.',
-  };
+    updateThreadToggleTitle,
+    writeStore,
+  });
 }
 
 /**

@@ -57,9 +57,9 @@ export interface WorkerSyncDependencies {
     title: string,
   ) => Promise<NotionObject>;
   ensureJottathingRootPage: RootHelpers['ensureJottathingRootPage'];
-  ensureProjectPage: DatabaseHelpers['ensureProjectPage'] | undefined;
+  ensureProjectPage: DatabaseHelpers['ensureProjectPage'];
   ensureProjectRootPage: RootHelpers['ensureProjectRootPage'];
-  ensureThreadToggle: DatabaseHelpers['ensureThreadToggle'] | undefined;
+  ensureThreadToggle: DatabaseHelpers['ensureThreadToggle'];
   pageSummary: RootHelpers['pageSummary'];
   notionRequest: NotionRequester;
   pushPageToNotionCore: typeof pushPageToNotionCore;
@@ -129,16 +129,12 @@ export function createWorkerSyncOperations(dependencies: WorkerSyncDependencies)
         dependencies: {
           appendLog,
           archiveThreadToggle,
-          createChildPage,
-          ensureJottathingRootPage,
           ensureProjectPage,
-          ensureProjectRootPage,
           ensureThreadToggle,
           notionRequest,
           replaceManagedBlocks,
           requireConnectedStore: async () => freshStore,
           updateThreadToggleTitle,
-          updateChildNotePage,
           writeStore,
         },
       }),
