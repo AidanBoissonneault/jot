@@ -46,9 +46,7 @@ export function invalidateProjectDatabase(store: WorkerStore, databaseId: string
 /** Converts a managed Notion database row into an Jottathing project. */
 export function projectFromNotionPage(page: NotionObject): Project | undefined {
   const properties = page.properties ?? {};
-  const id = richTextProperty(
-    properties[PROJECT_PROPERTIES.jottathingId] ?? properties['Inkwell ID'] ?? properties['Jot ID'],
-  ).trim();
+  const id = richTextProperty(properties[PROJECT_PROPERTIES.jottathingId]).trim();
   if (!id) return undefined;
 
   const createdAt =
@@ -76,13 +74,9 @@ export function projectFromNotionPage(page: NotionObject): Project | undefined {
   };
 }
 
-/** Reads the managed checkbox across current and legacy database schemas. */
+/** Reads the managed marker from the current project schema. */
 function isManagedProjectRow(page: NotionObject): boolean {
-  const properties = page.properties ?? {};
-  const managed = properties[PROJECT_PROPERTIES.managed]
-    ?? properties['Managed by Inkwell']
-    ?? properties['Managed by Jot'];
-  return managed?.checkbox === true;
+  return page.properties?.[PROJECT_PROPERTIES.managed]?.checkbox === true;
 }
 
 /** Stores the current Notion row identity for a synchronized project. */
@@ -164,13 +158,9 @@ export function createProjectDatabaseRows(notionRequest: NotionRequester) {
   ): Promise<NotionObject | undefined> {
     const dataSource = await notionRequest(store, `/data_sources/${dataSourceId}`);
     const properties = dataSource.properties ?? {};
-    const idProperty = [
-      PROJECT_PROPERTIES.jottathingId,
-      'Inkwell ID',
-      'Jot ID',
-    ].find((name) => properties[name]?.type === 'rich_text');
+    const idProperty = PROJECT_PROPERTIES.jottathingId;
 
-    if (idProperty) {
+    if (properties[idProperty]?.type === 'rich_text') {
       const response = await notionRequest(store, `/data_sources/${dataSourceId}/query`, {
         method: 'POST',
         body: {
@@ -208,11 +198,7 @@ export function createProjectDatabaseRows(notionRequest: NotionRequester) {
       const match = response.results.find((row) => {
         if (isArchivedObject(row)) return false;
         const rowProperties = row.properties ?? {};
-        return [
-          PROJECT_PROPERTIES.jottathingId,
-          'Inkwell ID',
-          'Jot ID',
-        ].some((name) => richTextProperty(rowProperties[name]).trim() === projectId);
+        return richTextProperty(rowProperties[PROJECT_PROPERTIES.jottathingId]).trim() === projectId;
       });
       if (match) return match;
       if (response.has_more) {

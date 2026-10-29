@@ -361,13 +361,7 @@ export function createProjectDatabaseDiscoveryHelpers({
     try {
       const schema = await notionRequest(store, `/data_sources/${dataSourceId}`);
       const properties = schema.properties ?? {};
-      const managedProperty = properties[PROJECT_PROPERTIES.managed]
-        ? PROJECT_PROPERTIES.managed
-        : properties['Managed by Inkwell']
-          ? 'Managed by Inkwell'
-          : properties['Managed by Jot']
-            ? 'Managed by Jot'
-            : PROJECT_PROPERTIES.managed;
+      const managedProperty = PROJECT_PROPERTIES.managed;
       const managedPropertySchema = properties[managedProperty];
       if (!managedPropertySchema) return -1;
       const managedPropertyType = typeof managedPropertySchema.type === 'string'
@@ -526,79 +520,6 @@ export function createProjectDatabaseDiscoveryHelpers({
       });
     }
 
-    if (
-      properties['Inkwell ID'] || properties['Jot ID'] ||
-      properties['Managed by Inkwell'] || properties['Managed by Jot']
-    ) {
-      await migrateLegacyProjectProperties(store, dataSourceId, properties);
-    }
-  }
-
-  /** Copies legacy managed fields forward before the renamed fields are used for queries. */
-  async function migrateLegacyProjectProperties(
-    store: WorkerStore,
-    dataSourceId: string,
-    properties: Record<string, JsonObject>,
-  ): Promise<void> {
-    const legacyIdName = properties['Inkwell ID']
-      ? 'Inkwell ID'
-      : properties['Jot ID']
-        ? 'Jot ID'
-        : undefined;
-    const legacyId = legacyIdName ? properties[legacyIdName] : undefined;
-    const legacyManagedName = properties['Managed by Inkwell']
-      ? 'Managed by Inkwell'
-      : properties['Managed by Jot']
-        ? 'Managed by Jot'
-        : undefined;
-    if (!legacyId && !legacyManagedName) return;
-
-    let cursor: string | undefined;
-    const seenCursors = new Set<string>();
-    do {
-      const body: JsonObject = { page_size: 100 };
-      if (cursor) body.start_cursor = cursor;
-      const response = await notionRequest(store, `/data_sources/${dataSourceId}/query`, {
-        method: 'POST',
-        body,
-      });
-      if (!Array.isArray(response.results)) {
-        throw new Error('Notion returned an invalid legacy project-property migration page.');
-      }
-      for (const page of response.results) {
-        const pageProperties = page.properties ?? {};
-        const updates: JsonObject = {};
-        if (
-          legacyId && !richTextProperty(pageProperties[PROJECT_PROPERTIES.jottathingId]).trim()
-        ) {
-          const idValue = legacyIdName ? richTextProperty(pageProperties[legacyIdName]) : '';
-          if (idValue) updates[PROJECT_PROPERTIES.jottathingId] = { rich_text: richText(idValue) };
-        }
-        if (
-          legacyManagedName &&
-          checkboxValue(pageProperties[legacyManagedName]) &&
-          !checkboxValue(pageProperties[PROJECT_PROPERTIES.managed])
-        ) {
-          updates[PROJECT_PROPERTIES.managed] = { checkbox: true };
-        }
-        if (Object.keys(updates).length) {
-          await notionRequest(store, `/pages/${page.id}`, {
-            method: 'PATCH',
-            body: { properties: updates },
-          });
-        }
-      }
-      if (response.has_more) {
-        const nextCursor = response.next_cursor;
-        if (!nextCursor || seenCursors.has(nextCursor)) {
-          throw new Error('Notion returned an incomplete legacy project-property migration.');
-        }
-        seenCursors.add(nextCursor);
-        cursor = nextCursor;
-      } else {
-        cursor = undefined;
-      }
-    } while (cursor);
   }
 
   /** Creates and updates managed views. @param store - Worker state. @param database - Database summary. @returns Completion promise. */
