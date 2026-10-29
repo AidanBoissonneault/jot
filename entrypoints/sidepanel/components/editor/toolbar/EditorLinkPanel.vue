@@ -3,11 +3,22 @@
 import type { EditorToolbarContext } from '../editorToolbarContext';
 
 const props = defineProps<{ context: EditorToolbarContext }>();
-const { editor, linkUrlDraft, setLink, openLinkTools } = props.context;
+const { editor, linkUrlDraft, setLink, openLinkTools, closeEditorMenu } = props.context;
+
+function applyLink() {
+  setLink();
+  closeEditorMenu();
+}
+
+function removeLink() {
+  linkUrlDraft.value = '';
+  setLink();
+  closeEditorMenu();
+}
 </script>
 
 <template>
-  <form class="tool-panel link-form" aria-label="Link editor" @submit.prevent="setLink">
+  <form class="tool-panel link-form" aria-label="Link editor" @submit.prevent="applyLink">
     <input
       v-model="linkUrlDraft"
       type="url"
@@ -32,10 +43,7 @@ const { editor, linkUrlDraft, setLink, openLinkTools } = props.context;
       :disabled="!editor"
       title="Remove link"
       aria-label="Remove link"
-      @click="
-        linkUrlDraft = '';
-        setLink();
-      "
+      @click="removeLink"
     >
       <font-awesome-icon :icon="['fas', 'xmark']" fixed-width />
       <span>Remove</span>

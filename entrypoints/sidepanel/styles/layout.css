@@ -118,6 +118,7 @@
 
 .project-title-sync-dot {
   justify-self: center;
+  transition: opacity 150ms ease;
 }
 
 .project-title-sync-dot.notion {
@@ -130,20 +131,26 @@
 }
 
 .project-title-sync-dot.error {
-  color: #dc2626;
+  color: var(--jottathing-status-error);
 }
 
 .project-title-sync-dot.stale {
-  color: #d97706;
+  color: var(--jottathing-status-stale);
 }
 
 .project-title-sync-dot.saving,
 .project-title-sync-dot.creating {
-  color: #2563eb;
+  color: var(--jottathing-status-progress);
 }
 
 .project-title-sync-dot.saved {
-  color: #16a34a;
+  color: var(--jottathing-status-success);
+  opacity: 0;
+}
+
+.project-header-control:hover .project-title-sync-dot.saved,
+.project-header-control:focus-within .project-title-sync-dot.saved {
+  opacity: 1;
 }
 
 .project-name-display,
@@ -296,10 +303,10 @@
   justify-content: space-between;
   gap: 8px;
   padding: 7px 12px;
-  background: #fffbeb;
-  border-bottom: 1px solid #f59e0b;
+  background: var(--jottathing-warning-surface);
+  border-bottom: 1px solid var(--jottathing-warning-border);
   font-size: 0.86rem;
-  color: #92400e;
+  color: var(--jottathing-warning);
   flex-shrink: 0;
 }
 
@@ -312,26 +319,53 @@
 .sync-change-banner-btn {
   padding: 3px 10px;
   border-radius: 5px;
-  border: 1px solid #d97706;
+  border: 1px solid var(--jottathing-warning-border);
   background: transparent;
-  color: #92400e;
+  color: var(--jottathing-warning);
   font-size: 0.86rem;
   cursor: pointer;
   white-space: nowrap;
 }
 
 .sync-change-banner-btn:hover {
-  background: #fef3c7;
+  background: color-mix(in srgb, var(--jottathing-warning) 10%, var(--jottathing-warning-surface));
 }
 
 .sync-change-banner-btn.primary {
-  background: #f59e0b;
+  background: var(--jottathing-warning);
   color: #fff;
-  border-color: #d97706;
+  border-color: var(--jottathing-warning);
 }
 
 .sync-change-banner-btn.primary:hover {
-  background: #d97706;
+  background: color-mix(in srgb, var(--jottathing-warning) 84%, #000);
+}
+
+:root[data-theme='dark'] .sync-change-banner {
+  border-color: var(--jottathing-warning-border);
+  background: var(--jottathing-warning-surface);
+  color: var(--jottathing-warning);
+}
+
+:root[data-theme='dark'] .sync-change-banner-btn {
+  border-color: var(--jottathing-warning-border);
+  color: var(--jottathing-warning);
+}
+
+:root[data-theme='dark'] .sync-change-banner-btn:hover {
+  background: color-mix(in srgb, var(--jottathing-warning) 10%, var(--jottathing-warning-surface));
+}
+
+:root[data-theme='dark'] .sync-change-banner-btn.primary {
+  background: var(--jottathing-warning);
+  color: var(--jottathing-bg);
+  border-color: var(--jottathing-warning);
+}
+
+:root[data-theme='dark'] .notion-logout-modal > .notion-logout-warning {
+  border-color: #765c2b;
+  background: #332b1d;
+  color: #f0dba8;
 }
 
 .topbar-actions {

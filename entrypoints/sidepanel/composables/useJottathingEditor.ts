@@ -8,6 +8,7 @@ import type { EditorView } from '@tiptap/pm/view';
 import { NodeSelection } from '@tiptap/pm/state';
 import { CodeNotebook } from '@/src/extensions/codeNotebook';
 import { JottathingBlockIds } from '@/src/extensions/jottathingBlockIds';
+import { JottathingBlockDragHandle } from '@/src/extensions/jottathingBlockDragHandle';
 import { notionClient } from '@/src/services/notionClient';
 import {
   decodeJottathingSource,
@@ -87,6 +88,7 @@ export function useJottathingEditor({
       CodeNotebook,
       JottathingLink,
       JottathingBlockIds,
+      JottathingBlockDragHandle,
       PortableTextEditingKit,
       MediaKit,
       JottathingSyncConflict.configure({ onResolve: resolveSyncConflict }),

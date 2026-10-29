@@ -11,8 +11,6 @@ export interface EditorContextMenuContext {
   editorContextMenuSource: Ref<SourceOpenPayload | null>;
   editorContextMenuSourceHost: ComputedRef<string>;
   editorContextMenuPanel: Ref<'main' | 'link' | 'color'>;
-  canMoveEditorContextBlockUp: ComputedRef<boolean>;
-  canMoveEditorContextBlockDown: ComputedRef<boolean>;
   contextMenuLinkDraft: Ref<string>;
   activeBlockType: ComputedRef<string>;
   activeFontSize: ComputedRef<string>;
@@ -25,7 +23,6 @@ export interface EditorContextMenuContext {
   cutEditorSelectionToClipboard: () => Promise<void>;
   copyEditorSelectionFromContextMenu: () => Promise<void>;
   pasteClipboardTextIntoEditor: () => Promise<void>;
-  moveEditorContextBlock: (direction: 'up' | 'down') => void;
   setContextBlockType: (event: Event) => void;
   setContextFontSize: (event: Event) => void;
   runContextMarkCommand: (command: 'bold' | 'italic' | 'underline' | 'strike' | 'code') => void;

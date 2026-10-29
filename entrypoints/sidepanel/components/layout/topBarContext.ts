@@ -5,14 +5,14 @@ import type { SyncContentConflict, SyncProgressUpdate } from '@/src/types/sync';
 
 type JottathingStore = ReturnType<typeof useJottathingStore>;
 export type CategoryColor =
-  | '#2563eb'
-  | '#7c3aed'
-  | '#c026d3'
-  | '#dc2626'
-  | '#d97706'
-  | '#16835f'
-  | '#0f766e'
-  | '#4b5563';
+  | '#315c76'
+  | '#5a4d78'
+  | '#824e5d'
+  | '#806039'
+  | '#3f6549'
+  | '#3c6668'
+  | '#525b65'
+  | '#405a78';
 
 /** State and commands the top bar needs from the sidepanel coordinator. */
 export interface TopBarContext {

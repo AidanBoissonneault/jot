@@ -1,5 +1,5 @@
-/** @file Persisted sidepanel display scale and immediate preview behavior. */
-import { computed, ref, watch } from 'vue';
+/** @file Persisted sidepanel appearance preferences and immediate updates. */
+import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import {
   DEFAULT_INTERFACE_SCALE,
   INTERFACE_SCALE_STEP,
@@ -7,7 +7,10 @@ import {
   MAX_INTERFACE_SCALE,
   MIN_INTERFACE_SCALE,
   normalizeInterfaceScale,
+  loadThemePreference,
   saveUserPreferences,
+  saveThemePreference,
+  type ThemePreference,
 } from '@/src/services/preferences';
 
 export {
@@ -17,11 +20,18 @@ export {
 } from '@/src/services/preferences';
 
 /**
- * Owns the sidepanel's persisted display scale, slider preview, presets, and
- * root font-size update so settings UI only needs to call these operations.
+ * Owns the sidepanel's persisted display scale, system theme, and root styles.
  */
 export function useInterfaceScale() {
   const interfaceScale = ref(DEFAULT_INTERFACE_SCALE);
+  const themePreference = ref<ThemePreference>('system');
+  const systemThemeQuery = window.matchMedia('(prefers-color-scheme: dark)');
+  const prefersDark = ref(systemThemeQuery.matches);
+  const resolvedTheme = computed(() =>
+    themePreference.value === 'system'
+      ? (prefersDark.value ? 'dark' : 'light')
+      : themePreference.value,
+  );
 
   const interfaceScaleLabel = computed(() => {
     if (interfaceScale.value < 100) return 'Compact';
@@ -41,9 +51,24 @@ export function useInterfaceScale() {
     { immediate: true },
   );
 
+  watch(
+    resolvedTheme,
+    (theme) => {
+      document.documentElement.dataset.theme = theme;
+    },
+    { immediate: true },
+  );
+
+  function handleSystemThemeChange(event: MediaQueryListEvent) {
+    prefersDark.value = event.matches;
+  }
+  systemThemeQuery.addEventListener('change', handleSystemThemeChange);
+  onBeforeUnmount(() => systemThemeQuery.removeEventListener('change', handleSystemThemeChange));
+
   async function loadPreferences() {
-    const preferences = await loadUserPreferences();
+    const [preferences, theme] = await Promise.all([loadUserPreferences(), loadThemePreference()]);
     interfaceScale.value = preferences.interfaceScale;
+    themePreference.value = theme;
   }
 
   function previewInterfaceScale(event: Event) {
@@ -59,17 +84,18 @@ export function useInterfaceScale() {
     interfaceScale.value = preferences.interfaceScale;
   }
 
-  function setInterfaceScale(scale: number) {
-    interfaceScale.value = normalizeInterfaceScale(scale);
-    void persistInterfaceScale();
+  async function setThemePreference(theme: ThemePreference) {
+    themePreference.value = theme;
+    await saveThemePreference(theme);
   }
 
   return {
     interfaceScale,
     interfaceScaleLabel,
+    themePreference,
+    setThemePreference,
     loadPreferences,
     previewInterfaceScale,
     persistInterfaceScale,
-    setInterfaceScale,
   };
 }

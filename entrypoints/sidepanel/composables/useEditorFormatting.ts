@@ -103,6 +103,10 @@ export function useEditorFormatting(
     applyFontSize((event.target as HTMLSelectElement).value);
   }
 
+  function setFontSizeValue(value: string) {
+    applyFontSize(value);
+  }
+
   function setContextFontSize(event: Event) {
     restoreContextSelection();
     setFontSize(event);
@@ -188,6 +192,7 @@ export function useEditorFormatting(
     setContextBlockType,
     applyFontSize,
     setFontSize,
+    setFontSizeValue,
     setContextFontSize,
     applyTextColor,
     setTextColor,

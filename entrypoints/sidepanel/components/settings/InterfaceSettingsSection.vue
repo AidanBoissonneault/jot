@@ -1,9 +1,13 @@
 <script setup lang="ts">
 /** Presents the InterfaceSettingsSection settings section; the parent owns the shared settings state. */
 import type { SettingsPageContext } from './settingsPageContext';
-import InterfaceScalePresets from '../lists/InterfaceScalePresets.vue';
 
 const props = defineProps<{ context: SettingsPageContext }>();
+const themeOptions = [
+  { value: 'system', label: 'System' },
+  { value: 'light', label: 'Light' },
+  { value: 'dark', label: 'Dark' },
+] as const;
 const {
   interfaceScaleLabel,
   interfaceScale,
@@ -12,7 +16,8 @@ const {
   INTERFACE_SCALE_STEP,
   previewInterfaceScale,
   persistInterfaceScale,
-  setInterfaceScale,
+  themePreference,
+  setThemePreference,
 } = props.context;
 </script>
 
@@ -32,8 +37,7 @@ const {
       <div class="setting-copy">
         <label for="interface-scale">Interface size</label>
         <p id="interface-scale-help">
-          Enlarges text throughout the sidebar. Changes appear immediately and are saved on this
-          browser.
+          Changes are applied immediately and saved on this browser.
         </p>
       </div>
 
@@ -54,13 +58,25 @@ const {
         <span>Smaller</span>
         <span>Larger</span>
       </div>
+    </div>
 
-      <InterfaceScalePresets :selected-scale="interfaceScale" @select="setInterfaceScale" />
-
-      <div class="scale-preview" aria-hidden="true">
-        <small>Preview</small>
-        <strong>Jottathing should feel easy to read.</strong>
-        <span>Adjust the slider until this text is comfortable.</span>
+    <div class="setting-card theme-setting-card">
+      <div class="setting-copy">
+        <span class="setting-label">Theme</span>
+        <p>Follow your browser appearance or choose a theme.</p>
+      </div>
+      <div class="theme-options" role="group" aria-label="Theme">
+        <button
+          v-for="option in themeOptions"
+          :key="option.value"
+          type="button"
+          class="theme-option"
+          :class="{ active: themePreference === option.value }"
+          :aria-pressed="themePreference === option.value"
+          @click="setThemePreference(option.value)"
+        >
+          {{ option.label }}
+        </button>
       </div>
     </div>
   </div>

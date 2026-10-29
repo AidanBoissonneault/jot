@@ -1,4 +1,5 @@
 import type { ComputedRef, Ref } from 'vue';
+import type { ThemePreference } from '@/src/services/preferences';
 import type { useJottathingStore } from '@/src/stores/jottathing';
 
 type JottathingStore = ReturnType<typeof useJottathingStore>;
@@ -32,5 +33,6 @@ export interface SettingsPageContext {
   INTERFACE_SCALE_STEP: number;
   previewInterfaceScale: (event: Event) => void;
   persistInterfaceScale: () => Promise<void>;
-  setInterfaceScale: (scale: number) => void;
+  themePreference: Ref<ThemePreference>;
+  setThemePreference: (theme: ThemePreference) => Promise<void>;
 }

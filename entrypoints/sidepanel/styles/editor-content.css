@@ -1,13 +1,91 @@
 /* Tiptap content, code cells, images, audio, and video embeds. */
 .editor {
+  position: relative;
   min-height: 0;
   overflow: auto;
 }
 
 .editor .tiptap {
   min-height: calc(100vh - 190px);
-  padding: 16px;
+  padding: 14px 16px 20px 36px;
   line-height: 1.55;
+}
+
+.jottathing-block-drag-handle {
+  position: absolute;
+  z-index: 5;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 25px;
+  min-height: 25px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--jottathing-muted);
+  cursor: grab;
+  line-height: 1;
+  opacity: 1;
+  transition: opacity 100ms ease, background-color 100ms ease, color 100ms ease;
+  user-select: none;
+}
+
+.jottathing-block-drag-handle::before {
+  width: 10px;
+  height: 16px;
+  background-image: radial-gradient(currentColor 1px, transparent 1.45px);
+  background-position: 0 0;
+  background-size: 5px 5px;
+  content: '';
+}
+
+.jottathing-block-drag-handle.is-hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.jottathing-block-drag-handle:hover,
+.jottathing-block-drag-handle:focus-visible {
+  background: var(--jottathing-surface-muted);
+  color: var(--jottathing-text);
+}
+
+.jottathing-block-drag-handle:active {
+  cursor: grabbing;
+}
+
+.editor.is-dragging-block .jottathing-block-drag-handle {
+  cursor: grabbing;
+}
+
+.editor .tiptap > .jottathing-is-dragged {
+  opacity: 0.38;
+}
+
+.editor .tiptap > .jottathing-drop-before,
+.editor .tiptap > .jottathing-drop-after {
+  position: relative;
+}
+
+.editor .tiptap > .jottathing-drop-before::before,
+.editor .tiptap > .jottathing-drop-after::after {
+  position: absolute;
+  right: 0;
+  left: -20px;
+  height: 2px;
+  border-radius: 999px;
+  background: var(--jottathing-accent);
+  content: '';
+  pointer-events: none;
+}
+
+.editor .tiptap > .jottathing-drop-before::before {
+  top: -4px;
+}
+
+.editor .tiptap > .jottathing-drop-after::after {
+  bottom: -4px;
 }
 
 .editor .tiptap:focus {
@@ -771,4 +849,32 @@
 .jottathing-sync-conflict__actions button:disabled {
   cursor: not-allowed;
   opacity: 0.55;
+}
+
+:root[data-theme='dark'] .editor .tiptap .jottathing-sync-conflict {
+  border-color: #765c2b;
+  border-left-color: #b18a3f;
+  background: #332b1d;
+  color: #f0e4c4;
+  box-shadow: none;
+}
+
+:root[data-theme='dark'] .jottathing-sync-conflict__title span,
+:root[data-theme='dark'] .jottathing-sync-conflict__candidate header span,
+:root[data-theme='dark'] .jottathing-sync-conflict footer span {
+  color: #c5b68e;
+}
+
+:root[data-theme='dark'] .jottathing-sync-conflict__candidate,
+:root[data-theme='dark'] .jottathing-sync-conflict__three-way > div {
+  border-color: rgb(221 201 151 / 16%);
+  background: #29281f;
+}
+
+:root[data-theme='dark'] .jottathing-sync-conflict__candidate pre,
+:root[data-theme='dark'] .jottathing-sync-conflict__inline-diff,
+:root[data-theme='dark'] .jottathing-sync-conflict__three-way pre {
+  border-color: rgb(221 201 151 / 12%);
+  background: #24231d;
+  color: #eee5ce;
 }

@@ -19,14 +19,14 @@ settings, and interaction behavior live in the feature composables below.
   selection; `EditorToolbar.vue`, `EditorCanvas.vue`, and `EditorContextMenu.vue`
   own the editor's visible control groups. Their context files define the data
   passed from the coordinator. `editorOptions.ts` holds shared formatting choices;
-  `editorImageMove.ts` contains ProseMirror image drag helpers and
-  `captureDropPayload.ts` reads capture payloads from drag events and the runtime.
-  `components/editor/toolbar/` contains the toolbar popover and one component per
-  block, mark, color, link, list, media, recording, and history panel.
+  `JottathingBlockDragHandle` adds top-level block reordering, `editorImageMove.ts`
+  contains ProseMirror image drag helpers, and `captureDropPayload.ts` reads
+  capture payloads from drag events and the runtime.
+  `components/editor/EditorToolbar.vue` renders direct formatting and editing
+  actions; its popover only contains link and media forms.
   `components/editor/contextMenu/` contains separate main, link, and color panels.
-- `components/settings/SettingsPage.vue` composes project details, sync/legal,
-  server, Notion parent-page, and interface sections. The section components
-  live alongside it; `LegalConsent.vue` owns the consent control.
+- `components/settings/SettingsPage.vue` composes the interface and legal
+  sections. `LegalConsent.vue` owns the Notion connection consent control.
 - `components/lists/` contains the project, page, category, parent-page, sync
   status, category color, and scale preset lists.
 - `components/shared/ArchiveConfirmModal.vue` emits confirmation actions; the
@@ -40,8 +40,8 @@ settings, and interaction behavior live in the feature composables below.
   lookup, saved selection, clipboard behavior, and page-change dismissal.
 - `composables/useJottathingEditor.ts` configures Tiptap extensions, link opening,
   editor events, and saves when focus leaves a block or the editor.
-- `composables/useEditorToolbar.ts` owns toolbar modes, active panels, panel
-  choices, and transitions for recording and link controls.
+- `composables/useEditorToolbar.ts` owns the link and media popover state; common
+  formatting actions are applied directly from the toolbar.
 - `composables/useEditorLinkActions.ts` owns link drafts, link commands, and
   formatting saves.
 - `composables/useSidepanelLifecycle.ts` owns startup, global event listeners,
@@ -56,8 +56,8 @@ settings, and interaction behavior live in the feature composables below.
   lifecycle; uploaded audio still goes through the shared media flow.
 - `composables/useWorkspaceActions.ts` owns page/project selection, create,
   rename, and archive operations.
-- `composables/useProjectCategories.ts` and `useInterfaceScale.ts` own their
-  persisted preference state.
+- `composables/useProjectCategories.ts` and `useInterfaceScale.ts` own persisted
+  category, interface scale, and theme preferences.
 - `composables/useProjectSettings.ts` and `useSettingsActions.ts` own project
   metadata, server URL, and Notion parent-page settings actions.
 - `composables/useTopBarStatus.ts` derives sync feedback and workspace labels.

@@ -1,12 +1,10 @@
-/** @file Shared editor toolbar modes, menu names, and coordinator bindings. */
-import type { IconProp } from '@fortawesome/fontawesome-svg-core';
+/** @file Shared direct formatting controls and toolbar popover bindings. */
 import type { Editor } from '@tiptap/core';
 import type { ComputedRef, Ref, ShallowRef } from 'vue';
 import type { useJottathingStore } from '@/src/stores/jottathing';
+import type { EditorToolbarMenu } from '../../composables/useEditorToolbar';
 
-export type EditorToolbarMode = 'style' | 'insert' | 'controls';
-export type EditorMenu =
-  'type' | 'marks' | 'color' | 'link' | 'lists' | 'blocks' | 'media' | 'history' | 'record' | null;
+export type EditorMenu = EditorToolbarMenu;
 export type RecordingPhase = 'idle' | 'requesting_permission' | 'recording' | 'processing';
 type JottathingStore = ReturnType<typeof useJottathingStore>;
 
@@ -14,16 +12,8 @@ export interface EditorToolbarContext {
   editor: ShallowRef<Editor | undefined>;
   store: JottathingStore;
   audioStream: Ref<MediaStream | null>;
-  editorToolbarModes: ComputedRef<
-    ReadonlyArray<{ id: EditorToolbarMode; label: string; icon: IconProp }>
-  >;
-  editorToolbarMode: Ref<EditorToolbarMode>;
-  setEditorToolbarMode: (mode: EditorToolbarMode) => void;
-  activeToolbarItems: ComputedRef<
-    ReadonlyArray<{ id: NonNullable<EditorMenu>; label: string; icon: IconProp; title: string }>
-  >;
   activeEditorMenu: Ref<EditorMenu>;
-  toggleEditorMenu: (menu: NonNullable<EditorMenu>) => void;
+  toggleEditorMenu: (menu: Exclude<EditorMenu, null>) => void;
   closeEditorMenu: () => void;
   activeEditorMarks: ComputedRef<
     Readonly<Record<'bold' | 'italic' | 'underline' | 'strike' | 'code', boolean>>
@@ -34,6 +24,7 @@ export interface EditorToolbarContext {
   activeFontSize: ComputedRef<string>;
   fontSizes: ReadonlyArray<{ label: string; value: string }>;
   setFontSize: (event: Event) => void;
+  setFontSizeValue: (value: string) => void;
   runEditorMarkCommand: (
     command: 'bold' | 'italic' | 'underline' | 'strike' | 'code' | 'superscript' | 'subscript',
   ) => void;

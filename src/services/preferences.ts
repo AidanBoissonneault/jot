@@ -7,10 +7,28 @@ export const INTERFACE_SCALE_STEP = 5;
 
 const USER_PREFERENCES_KEY = 'jottathingUserPreferences';
 const LEGACY_USER_PREFERENCES_KEY = 'inkwellUserPreferences';
+const THEME_PREFERENCE_KEY = 'jottathingThemePreference';
+
+export type ThemePreference = 'system' | 'light' | 'dark';
 
 export type UserPreferences = {
   interfaceScale: number;
 };
+
+export function normalizeThemePreference(value: unknown): ThemePreference {
+  return value === 'light' || value === 'dark' || value === 'system' ? value : 'system';
+}
+
+export async function loadThemePreference(): Promise<ThemePreference> {
+  const stored = await browser.storage.local.get(THEME_PREFERENCE_KEY);
+  return normalizeThemePreference(stored[THEME_PREFERENCE_KEY]);
+}
+
+export async function saveThemePreference(value: ThemePreference): Promise<ThemePreference> {
+  const normalized = normalizeThemePreference(value);
+  await browser.storage.local.set({ [THEME_PREFERENCE_KEY]: normalized });
+  return normalized;
+}
 
 export function normalizeInterfaceScale(value: unknown): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) {

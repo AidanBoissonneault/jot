@@ -80,20 +80,20 @@
 }
 
 .page-header-sync-dot.error {
-  color: #dc2626;
+  color: var(--jottathing-status-error);
 }
 
 .page-header-sync-dot.stale {
-  color: #d97706;
+  color: var(--jottathing-status-stale);
 }
 
 .page-header-sync-dot.saving,
 .page-header-sync-dot.creating {
-  color: #2563eb;
+  color: var(--jottathing-status-progress);
 }
 
 .page-header-sync-dot.saved {
-  color: #16a34a;
+  color: var(--jottathing-status-success);
 }
 
 .page-list-sync-dot,
@@ -106,6 +106,7 @@
   border-radius: 50%;
   color: var(--jottathing-muted);
   background: currentColor;
+  transition: opacity 150ms ease;
 }
 
 .page-list-sync-dot.notion,
@@ -115,24 +116,36 @@
 
 .page-list-sync-dot.error,
 .project-list-sync-dot.error {
-  color: #dc2626;
+  color: var(--jottathing-status-error);
 }
 
 .page-list-sync-dot.stale,
 .project-list-sync-dot.stale {
-  color: #d97706;
+  color: var(--jottathing-status-stale);
 }
 
 .page-list-sync-dot.saving,
 .page-list-sync-dot.creating,
 .project-list-sync-dot.saving,
 .project-list-sync-dot.creating {
-  color: #2563eb;
+  color: var(--jottathing-status-progress);
 }
 
 .page-list-sync-dot.saved,
 .project-list-sync-dot.saved {
-  color: #16a34a;
+  color: var(--jottathing-status-success);
+  opacity: 0;
+}
+
+.workspace-tree-row:hover .page-list-sync-dot.saved,
+.workspace-tree-row:hover .project-list-sync-dot.saved,
+.workspace-tree-row:focus-within .page-list-sync-dot.saved,
+.workspace-tree-row:focus-within .project-list-sync-dot.saved {
+  opacity: 1;
+}
+
+.workspace-tree-page.active .page-list-sync-dot.saved {
+  opacity: 1;
 }
 
 .page-list-sync-dot.local.authenticated,
@@ -773,6 +786,7 @@
   border-radius: 50%;
   color: var(--jottathing-muted);
   background: currentColor;
+  transition: opacity 150ms ease;
 }
 
 .workspace-sync-dot.notion {
@@ -780,20 +794,26 @@
 }
 
 .workspace-sync-dot.error {
-  color: #dc2626;
+  color: var(--jottathing-status-error);
 }
 
 .workspace-sync-dot.stale {
-  color: #d97706;
+  color: var(--jottathing-status-stale);
 }
 
 .workspace-sync-dot.saving,
 .workspace-sync-dot.creating {
-  color: #2563eb;
+  color: var(--jottathing-status-progress);
 }
 
 .workspace-sync-dot.saved {
-  color: #16a34a;
+  color: var(--jottathing-status-success);
+  opacity: 0;
+}
+
+.workspace-tree-row:hover .workspace-sync-dot.saved,
+.workspace-tree-row:focus-within .workspace-sync-dot.saved {
+  opacity: 1;
 }
 
 .workspace-sync-dot.local.authenticated {

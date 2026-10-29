@@ -1,5 +1,5 @@
 /** @file Project category labels and persisted category color choices. */
-import { computed, ref, type Ref } from 'vue';
+import { computed, ref, watch, type Ref } from 'vue';
 import { useJottathingStore } from '@/src/stores/jottathing';
 import { getBrandedStorageValue } from '@/src/services/brandedStorage';
 
@@ -7,15 +7,26 @@ const CATEGORY_COLORS_KEY = 'jottathingCategoryColors';
 const LEGACY_CATEGORY_COLORS_KEY = 'inkwellCategoryColors';
 
 export const categoryColorOptions = [
-  '#2563eb',
-  '#7c3aed',
-  '#c026d3',
-  '#dc2626',
-  '#d97706',
-  '#16835f',
-  '#0f766e',
-  '#4b5563',
+  '#405a78',
+  '#5a4d78',
+  '#824e5d',
+  '#806039',
+  '#3f6549',
+  '#3c6668',
+  '#525b65',
+  '#315c76',
 ] as const;
+
+const legacyCategoryColorMap: Record<string, (typeof categoryColorOptions)[number]> = {
+  '#2563eb': '#315c76',
+  '#7c3aed': '#5a4d78',
+  '#c026d3': '#824e5d',
+  '#dc2626': '#824e5d',
+  '#d97706': '#806039',
+  '#16835f': '#3f6549',
+  '#0f766e': '#3c6668',
+  '#4b5563': '#525b65',
+};
 
 /** Owns category labels, deterministic colors, and persisted user color choices. */
 export function useProjectCategories(
@@ -39,7 +50,7 @@ export function useProjectCategories(
 
   function colorForCategory(value: string) {
     const key = normalizeCategoryName(value);
-    if (!key) return '#6b6f76';
+    if (!key) return categoryColorOptions[0];
     const savedColor = categoryColors.value[key];
     if (savedColor) return savedColor;
 
@@ -50,6 +61,19 @@ export function useProjectCategories(
 
     return categoryColorOptions[Math.abs(hash) % categoryColorOptions.length];
   }
+
+  const draftCategoryColor = ref(colorForCategory(projectCategoryDraft.value));
+  watch(activeTitleMenu, (menu) => {
+    if (menu === 'category') {
+      draftCategoryColor.value = colorForCategory(projectCategoryDraft.value);
+    }
+  });
+  watch(projectCategoryDraft, (category) => {
+    if (activeTitleMenu.value !== 'category') {
+      draftCategoryColor.value = colorForCategory(category);
+    }
+  });
+  const currentCategoryColor = computed(() => draftCategoryColor.value);
 
   const knownCategories = computed(() => {
     const categories = new Map<string, string>();
@@ -64,7 +88,6 @@ export function useProjectCategories(
     }));
   });
 
-  const currentCategoryColor = computed(() => colorForCategory(projectCategoryDraft.value));
   const currentCategoryStyle = computed(() => ({
     backgroundColor: currentCategoryColor.value,
     borderColor: currentCategoryColor.value,
@@ -74,16 +97,22 @@ export function useProjectCategories(
     const value = await getBrandedStorageValue<unknown>(CATEGORY_COLORS_KEY, LEGACY_CATEGORY_COLORS_KEY);
     if (value && typeof value === 'object' && !Array.isArray(value)) {
       categoryColors.value = Object.fromEntries(
-        Object.entries(value as Record<string, unknown>).filter(
-          (entry): entry is [string, string] =>
-            typeof entry[1] === 'string' &&
-            categoryColorOptions.includes(entry[1] as (typeof categoryColorOptions)[number]),
-        ),
+        Object.entries(value as Record<string, unknown>).flatMap(([key, color]) => {
+          if (typeof color !== 'string') return [];
+          const migratedColor = legacyCategoryColorMap[color] ?? color;
+          return categoryColorOptions.includes(migratedColor as (typeof categoryColorOptions)[number])
+            ? [[key, migratedColor] as [string, string]]
+            : [];
+        }),
       );
+      if (activeTitleMenu.value !== 'category') {
+        draftCategoryColor.value = colorForCategory(projectCategoryDraft.value);
+      }
     }
   }
 
   async function chooseCategoryColor(color: (typeof categoryColorOptions)[number]) {
+    draftCategoryColor.value = color;
     const key = normalizeCategoryName(projectCategoryDraft.value);
     if (!key) return;
     categoryColors.value = { ...categoryColors.value, [key]: color };
@@ -91,6 +120,7 @@ export function useProjectCategories(
   }
 
   async function selectCategory(category: string) {
+    draftCategoryColor.value = colorForCategory(category);
     projectCategoryDraft.value = category;
     markCategoryDraftEdited();
     activeTitleMenu.value = null;
@@ -99,6 +129,11 @@ export function useProjectCategories(
 
   async function commitCategory() {
     projectCategoryDraft.value = projectCategoryDraft.value.trim();
+    const key = normalizeCategoryName(projectCategoryDraft.value);
+    if (key) {
+      categoryColors.value = { ...categoryColors.value, [key]: draftCategoryColor.value };
+      await browser.storage.local.set({ [CATEGORY_COLORS_KEY]: categoryColors.value });
+    }
     if (projectCategoryDraft.value !== (store.currentProject?.category ?? '')) {
       markCategoryDraftEdited();
     }

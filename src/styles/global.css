@@ -1,23 +1,30 @@
 :root {
   color-scheme: light;
-  --jottathing-bg: #fafafa;
+  --jottathing-bg: #f6f7f8;
   --jottathing-surface: #ffffff;
-  --jottathing-surface-muted: #f4f4f5;
+  --jottathing-surface-raised: #ffffff;
+  --jottathing-surface-muted: #f0f2f3;
 
-  --jottathing-border: #e4e4e7;
-  --jottathing-border-strong: #c7c7cc;
+  --jottathing-border: #e1e5e7;
+  --jottathing-border-strong: #c5cdd1;
 
-  --jottathing-text: #111113;
-  --jottathing-muted: #6b6f76;
+  --jottathing-text: #20282c;
+  --jottathing-muted: #657177;
 
   --jottathing-accent: #173494;
   --jottathing-accent-soft: rgb(23 52 148 / 10%);
   --jottathing-accent-strong: #0f2673;
 
-  --jottathing-warning: #9a6700;
+  --jottathing-warning: #8a5c08;
+  --jottathing-warning-surface: #fff8e7;
+  --jottathing-warning-border: #e8b95c;
+  --jottathing-status-error: #dc2626;
+  --jottathing-status-stale: #d97706;
+  --jottathing-status-progress: #2563eb;
+  --jottathing-status-success: #16a34a;
 
-  --jottathing-radius: 8px;
-  --jottathing-shadow: 0 8px 28px rgb(17 17 19 / 8%);
+  --jottathing-radius: 7px;
+  --jottathing-shadow: 0 2px 10px rgb(20 32 38 / 7%);
   font-family:
     Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
     sans-serif;
@@ -26,6 +33,29 @@
   line-height: 1.45;
   background: var(--jottathing-bg);
   color: var(--jottathing-text);
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --jottathing-bg: #14191c;
+  --jottathing-surface: #1d2428;
+  --jottathing-surface-raised: #232c30;
+  --jottathing-surface-muted: #252e32;
+  --jottathing-border: #303b40;
+  --jottathing-border-strong: #46545a;
+  --jottathing-text: #e7edef;
+  --jottathing-muted: #a5b1b5;
+  --jottathing-accent: #6f89e7;
+  --jottathing-accent-soft: rgb(111 137 231 / 16%);
+  --jottathing-accent-strong: #a8b8ff;
+  --jottathing-warning: #e2bd6d;
+  --jottathing-warning-surface: #332b1d;
+  --jottathing-warning-border: #765c2b;
+  --jottathing-status-error: #ff6b6b;
+  --jottathing-status-stale: #f3ac43;
+  --jottathing-status-progress: #6d9eff;
+  --jottathing-status-success: #4ade80;
+  --jottathing-shadow: 0 3px 14px rgb(0 0 0 / 28%);
 }
 
 * {
@@ -59,6 +89,12 @@ button {
   background: var(--jottathing-accent);
   color: white;
   cursor: pointer;
+  transition: background-color 130ms ease, border-color 130ms ease, color 130ms ease,
+    box-shadow 130ms ease, transform 130ms ease;
+}
+
+button:active:not(:disabled) {
+  transform: scale(0.98);
 }
 
 button:disabled {
@@ -83,4 +119,15 @@ textarea:focus,
 button:focus-visible {
   outline: 2px solid color-mix(in srgb, var(--jottathing-accent) 34%, transparent);
   outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

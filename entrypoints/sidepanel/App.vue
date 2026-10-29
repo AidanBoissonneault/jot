@@ -45,7 +45,6 @@ import { useJottathingEditor } from './composables/useJottathingEditor';
 import type { JottathingEditorHandlers } from './composables/useJottathingEditor';
 import { useSidepanelLifecycle } from './composables/useSidepanelLifecycle';
 import { useEditorToolbar } from './composables/useEditorToolbar';
-import type { EditorToolbarHandlers } from './composables/useEditorToolbar';
 import { useEditorLinkActions } from './composables/useEditorLinkActions';
 import {
   blockTypes,
@@ -86,10 +85,11 @@ const activeTitleMenu = ref<'project' | 'page' | 'category' | null>(null);
 const {
   interfaceScale,
   interfaceScaleLabel,
+  themePreference,
+  setThemePreference,
   loadPreferences,
   previewInterfaceScale,
   persistInterfaceScale,
-  setInterfaceScale,
 } = useInterfaceScale();
 const {
   projectCategoryDraft,
@@ -253,20 +253,12 @@ const { editor, skipNextEditorUpdate, clearEditorUpdateSkip } = useJottathingEdi
 const { applyLink, clearFormatting, linkUrlDraft, runEditorFormattingCommand, setLink } =
   useEditorLinkActions(editor, saveTimer, saveEditorContentOptimistically);
 
-const editorToolbarHandlers: EditorToolbarHandlers = {
-  isRecording: () => false,
-  stopAudioRecording: () => undefined,
-};
 const {
   activeEditorMenu,
-  activeToolbarItemsForComponent,
   closeEditorMenu,
-  editorToolbarMode,
-  editorToolbarModesForComponent,
   openLinkTools,
-  setEditorToolbarMode,
   toggleEditorMenu,
-} = useEditorToolbar(editor, linkUrlDraft, editorToolbarHandlers);
+} = useEditorToolbar(editor, linkUrlDraft);
 
 editorPersistence = useEditorPersistence(
   editor,
@@ -325,9 +317,6 @@ const {
   stopRecording: stopAudioRecording,
   toggleAudioRecording,
 } = useAudioRecording(editor, uiMessage, handleUploadableAudioFile);
-editorToolbarHandlers.isRecording = () => recordingPhase.value === 'recording';
-editorToolbarHandlers.stopAudioRecording = stopAudioRecording;
-
 const {
   editorContextMenuRef,
   editorContextMenu,
@@ -335,13 +324,10 @@ const {
   editorContextMenuSource,
   editorContextMenuSourceHost,
   editorContextMenuPanel,
-  canMoveEditorContextBlockUp,
-  canMoveEditorContextBlockDown,
   contextMenuLinkDraft,
   showEditorContextMenu,
   restoreEditorContextSelection,
   hideEditorContextMenu,
-  moveEditorContextBlock,
   openEditorContextSource,
   handleEditorContextMenuPointerDown,
   handleEditorContextMenuKeydown,
@@ -363,6 +349,7 @@ const {
   setBlockType,
   setContextBlockType,
   setFontSize,
+  setFontSizeValue,
   setContextFontSize,
   setTextColor,
   applyContextTextColor,
@@ -831,7 +818,8 @@ const settingsPageContext: SettingsPageContext = {
   INTERFACE_SCALE_STEP,
   previewInterfaceScale,
   persistInterfaceScale,
-  setInterfaceScale,
+  themePreference,
+  setThemePreference,
 };
 const editorContextMenuContext: EditorContextMenuContext = {
   editor,
@@ -841,8 +829,6 @@ const editorContextMenuContext: EditorContextMenuContext = {
   editorContextMenuSource,
   editorContextMenuSourceHost,
   editorContextMenuPanel,
-  canMoveEditorContextBlockUp,
-  canMoveEditorContextBlockDown,
   contextMenuLinkDraft,
   activeBlockType,
   activeFontSize,
@@ -855,7 +841,6 @@ const editorContextMenuContext: EditorContextMenuContext = {
   cutEditorSelectionToClipboard,
   copyEditorSelectionFromContextMenu,
   pasteClipboardTextIntoEditor,
-  moveEditorContextBlock,
   setContextBlockType,
   setContextFontSize,
   runContextMarkCommand,
@@ -870,10 +855,6 @@ const editorToolbarContext: EditorToolbarContext = {
   editor,
   store,
   audioStream,
-  editorToolbarModes: editorToolbarModesForComponent,
-  editorToolbarMode,
-  setEditorToolbarMode,
-  activeToolbarItems: activeToolbarItemsForComponent,
   activeEditorMenu,
   toggleEditorMenu,
   closeEditorMenu,
@@ -884,6 +865,7 @@ const editorToolbarContext: EditorToolbarContext = {
   activeFontSize,
   fontSizes,
   setFontSize,
+  setFontSizeValue,
   runEditorMarkCommand,
   activeTextColor,
   textColors,
