@@ -250,74 +250,18 @@ export function createProjectDatabaseDiscoveryHelpers({
     store: WorkerStore,
     { parentPageId, ignoredDatabaseIds = new Set<string>() }: Partial<DatabaseSearchOptions> = {},
   ): Promise<JottathingDatabase | undefined> {
-    const dataSources: NotionObject[] = [];
-    const seenDataSourceIds = new Set<string>();
-    // Since Notion API version 2025-09-03, database search results are data
-    // sources. The current Jottathing database uses "Projects" as its data
-    // source title and "Jottathing" as its database title.
-    const searchTitles = [JOTTATHING_PROJECTS_DATA_SOURCE_TITLE, JOTTATHING_DATABASE_TITLE];
-    for (const query of searchTitles) {
-      let cursor: string | undefined;
-      const seenCursors = new Set<string>();
-      do {
-        const body: JsonObject = {
-          query,
-          page_size: 100,
-          filter: { property: 'object', value: 'data_source' },
-        };
-        if (cursor) body.start_cursor = cursor;
-
-        // Discovery failures must stop the operation. Treating an API failure
-        // as empty would create a duplicate database and split user data.
-        const response = await notionRequest(store, '/search', { method: 'POST', body });
-        if (!Array.isArray(response.results)) {
-          throw new Error('Notion returned an invalid data source search result.');
-        }
-        for (const dataSource of response.results) {
-          if (!seenDataSourceIds.has(dataSource.id)) {
-            seenDataSourceIds.add(dataSource.id);
-            dataSources.push(dataSource);
-          }
-        }
-        if (response.has_more) {
-          const nextCursor = response.next_cursor;
-          if (!nextCursor || seenCursors.has(nextCursor)) {
-            throw new Error('Notion returned an incomplete database search result.');
-          }
-          seenCursors.add(nextCursor);
-          cursor = nextCursor;
-        } else {
-          cursor = undefined;
-        }
-      } while (cursor);
-    }
-
-    const candidates = [];
+    const dataSources = await searchProjectDataSources(store);
+    const candidates: DatabaseCandidate[] = [];
     const databaseIds = new Set<string>();
-
     for (const dataSource of dataSources) {
-      const databaseId = dataSource.parent?.database_id;
-      if (!databaseId || ignoredDatabaseIds.has(databaseId) || databaseIds.has(databaseId)) continue;
-
-      // Search returns a data_source object. Resolve its parent database so
-      // we can verify the managed database title and its page/workspace parent.
-      const database = await notionRequest(store, `/databases/${databaseId}`);
-      databaseIds.add(databaseId);
-      const dataSourceId = dataSource.id ?? firstDataSourceId(database);
-
-      if (
-        !isArchivedObject(database) &&
-        titleFromDatabase(database) === JOTTATHING_DATABASE_TITLE &&
-        (parentPageId === undefined || parentPageIdFromObject(database) === parentPageId) &&
-        dataSourceId
-      ) {
-        candidates.push({
-          database,
-          dataSourceId,
-          mappedProjects: mappedProjectCount(store, databaseId),
-          managedProjects: await managedProjectCount(store, dataSourceId),
-        });
-      }
+      const candidate = await databaseCandidateForDataSource(
+        store,
+        dataSource,
+        parentPageId,
+        ignoredDatabaseIds,
+        databaseIds,
+      );
+      if (candidate) candidates.push(candidate);
     }
 
     candidates.sort(compareDatabaseCandidates);
@@ -331,6 +275,81 @@ export function createProjectDatabaseDiscoveryHelpers({
       selected.dataSourceId,
       parentPageId ?? parentPageIdFromObject(database),
     );
+  }
+
+  /** Searches current data source and database titles, following every result page. */
+  async function searchProjectDataSources(store: WorkerStore): Promise<NotionObject[]> {
+    const dataSources: NotionObject[] = [];
+    const seenDataSourceIds = new Set<string>();
+    // Current Notion search results are data sources; title both current names.
+    for (const query of [JOTTATHING_PROJECTS_DATA_SOURCE_TITLE, JOTTATHING_DATABASE_TITLE]) {
+      let cursor: string | undefined;
+      const seenCursors = new Set<string>();
+      do {
+        const body: JsonObject = {
+          query,
+          page_size: 100,
+          filter: { property: 'object', value: 'data_source' },
+        };
+        if (cursor) body.start_cursor = cursor;
+
+        const response = await notionRequest(store, '/search', { method: 'POST', body });
+        if (!Array.isArray(response.results)) {
+          throw new Error('Notion returned an invalid data source search result.');
+        }
+        for (const dataSource of response.results) {
+          if (seenDataSourceIds.has(dataSource.id)) continue;
+          seenDataSourceIds.add(dataSource.id);
+          dataSources.push(dataSource);
+        }
+
+        if (!response.has_more) {
+          cursor = undefined;
+          continue;
+        }
+        const nextCursor = response.next_cursor;
+        if (!nextCursor || seenCursors.has(nextCursor)) {
+          throw new Error('Notion returned an incomplete database search result.');
+        }
+        seenCursors.add(nextCursor);
+        cursor = nextCursor;
+      } while (cursor);
+    }
+    return dataSources;
+  }
+
+  /** Loads a parent database and counts it only when its current Jottathing identity matches. */
+  async function databaseCandidateForDataSource(
+    store: WorkerStore,
+    dataSource: NotionObject,
+    parentPageId: string | undefined,
+    ignoredDatabaseIds: Set<string>,
+    seenDatabaseIds: Set<string>,
+  ): Promise<DatabaseCandidate | undefined> {
+    const databaseId = dataSource.parent?.database_id;
+    if (!databaseId || ignoredDatabaseIds.has(databaseId) || seenDatabaseIds.has(databaseId)) {
+      return undefined;
+    }
+    seenDatabaseIds.add(databaseId);
+
+    // A search hit is only a data source. Resolve its parent to verify title and scope.
+    const database = await notionRequest(store, `/databases/${databaseId}`);
+    const dataSourceId = dataSource.id ?? firstDataSourceId(database);
+    if (
+      isArchivedObject(database) ||
+      titleFromDatabase(database) !== JOTTATHING_DATABASE_TITLE ||
+      (parentPageId !== undefined && parentPageIdFromObject(database) !== parentPageId) ||
+      !dataSourceId
+    ) {
+      return undefined;
+    }
+
+    return {
+      database,
+      dataSourceId,
+      mappedProjects: mappedProjectCount(store, databaseId),
+      managedProjects: await managedProjectCount(store, dataSourceId),
+    };
   }
 
   /** Counts mapped projects. @param store - Worker state. @param databaseId - Database ID. @returns Mapping count. */
