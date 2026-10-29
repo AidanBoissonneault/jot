@@ -323,42 +323,41 @@ export function isSupportedMediaMimeType(mimeType: string): boolean {
 }
 
 /** Confirms image bytes carry the file signature declared by the upload request. */
-export function hasValidImageSignature(data: Uint8Array, mimeType: string): boolean {
-  const mime = mimeType.trim().toLowerCase();
-  const ascii = (start: number, end: number) =>
-    String.fromCharCode(...data.subarray(start, end));
-  const startsWith = (...bytes: number[]) =>
-    bytes.every((byte, index) => data[index] === byte);
+type ImageSignatureValidator = (data: Uint8Array) => boolean;
 
-  if (mime === 'image/jpeg') return data.length >= 3 && startsWith(0xff, 0xd8, 0xff);
-  if (mime === 'image/png') {
-    return data.length >= 8 && startsWith(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a);
-  }
-  if (mime === 'image/apng') {
-    return hasPngSignature(data) && hasPngAnimationControlChunk(data);
-  }
-  if (mime === 'image/gif') return data.length >= 6 && ['GIF87a', 'GIF89a'].includes(ascii(0, 6));
-  if (mime === 'image/webp') {
-    return data.length >= 12 && ascii(0, 4) === 'RIFF' && ascii(8, 12) === 'WEBP';
-  }
-  if (mime === 'image/avif') return hasIsoBmffBrand(data, ['avif', 'avis']);
-  if (mime === 'image/heic') {
-    return hasIsoBmffBrand(data, ['heic', 'heix', 'hevc', 'hevx', 'heim', 'heis', 'hevm', 'hevs']);
-  }
-  if (mime === 'image/bmp') return data.length >= 2 && ascii(0, 2) === 'BM';
-  if (mime === 'image/tiff') {
-    return data.length >= 4 && (
-      ascii(0, 4) === 'II*\u0000' || ascii(0, 4) === 'MM\u0000*' ||
-      ascii(0, 4) === 'II+\u0000' || ascii(0, 4) === 'MM\u0000+'
-    );
-  }
-  if (mime === 'image/vnd.microsoft.icon' || mime === 'image/x-icon') {
-    return data.length >= 4 && startsWith(0x00, 0x00, 0x01, 0x00);
-  }
-  if (mime === 'image/svg+xml') {
-    return /<svg(?:\s|>)/i.test(new TextDecoder().decode(data.subarray(0, 4096)));
-  }
-  return false;
+const IMAGE_SIGNATURE_VALIDATORS: Record<string, ImageSignatureValidator> = {
+  'image/jpeg': (data) => startsWithBytes(data, 0xff, 0xd8, 0xff),
+  'image/png': (data) =>
+    startsWithBytes(data, 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a),
+  'image/apng': (data) => hasPngSignature(data) && hasPngAnimationControlChunk(data),
+  'image/gif': (data) =>
+    data.length >= 6 && ['GIF87a', 'GIF89a'].includes(asciiAt(data, 0, 6)),
+  'image/webp': (data) =>
+    data.length >= 12 && asciiAt(data, 0, 4) === 'RIFF' && asciiAt(data, 8, 12) === 'WEBP',
+  'image/avif': (data) => hasIsoBmffBrand(data, ['avif', 'avis']),
+  'image/heic': (data) => hasIsoBmffBrand(data, [
+    'heic', 'heix', 'hevc', 'hevx', 'heim', 'heis', 'hevm', 'hevs',
+  ]),
+  'image/bmp': (data) => data.length >= 2 && asciiAt(data, 0, 2) === 'BM',
+  'image/tiff': (data) =>
+    data.length >= 4 &&
+    ['II*\u0000', 'MM\u0000*', 'II+\u0000', 'MM\u0000+'].includes(asciiAt(data, 0, 4)),
+  'image/vnd.microsoft.icon': (data) => startsWithBytes(data, 0x00, 0x00, 0x01, 0x00),
+  'image/x-icon': (data) => startsWithBytes(data, 0x00, 0x00, 0x01, 0x00),
+  'image/svg+xml': (data) =>
+    /<svg(?:\s|>)/i.test(new TextDecoder().decode(data.subarray(0, 4096))),
+};
+
+export function hasValidImageSignature(data: Uint8Array, mimeType: string): boolean {
+  return IMAGE_SIGNATURE_VALIDATORS[mimeType.trim().toLowerCase()]?.(data) ?? false;
+}
+
+function asciiAt(data: Uint8Array, start: number, end: number): string {
+  return String.fromCharCode(...data.subarray(start, end));
+}
+
+function startsWithBytes(data: Uint8Array, ...bytes: number[]): boolean {
+  return data.length >= bytes.length && bytes.every((byte, index) => data[index] === byte);
 }
 
 function hasPngSignature(data: Uint8Array): boolean {
