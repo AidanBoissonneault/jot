@@ -113,6 +113,11 @@ type OptimisticPageCreation = {
   settled: Promise<ProjectPage>;
 };
 
+type SyncStateCarrier = {
+  syncState?: SaveStatus;
+  syncMessage?: string;
+};
+
 
 const STORAGE_KEYS: Array<keyof JottathingStorage> = [
   'activePageIdsByProject',
@@ -370,6 +375,31 @@ function touchProject(project: Project, updates: Partial<Project> = {}): Project
 
 function sortProjectsByUpdatedDesc(first: Project, second: Project) {
   return new Date(second.updatedAt).getTime() - new Date(first.updatedAt).getTime();
+}
+
+const SYNC_STATE_RANK: Record<SaveStatus, number> = {
+  error: 5,
+  stale: 4,
+  saving: 3,
+  creating: 2,
+  saved: 1,
+  idle: 0,
+};
+
+/** Returns the highest-priority state and keeps the first message when priorities tie. */
+function summarizeSyncState(items: SyncStateCarrier[]) {
+  let worstState: SaveStatus | undefined;
+  let worstMessage: string | undefined;
+
+  for (const item of items) {
+    const state = item.syncState;
+    if (state && (!worstState || SYNC_STATE_RANK[state] > SYNC_STATE_RANK[worstState])) {
+      worstState = state;
+      worstMessage = item.syncMessage;
+    }
+  }
+
+  return { syncState: worstState ?? 'saved', syncMessage: worstMessage };
 }
 
 async function migrateStorageToIdb(): Promise<void> {
@@ -700,41 +730,23 @@ async function readStorage(): Promise<Required<JottathingStorage>> {
     pages,
     stored.activePageIdsByProject,
   );
-  const syncStateRank: Record<string, number> = {
-    error: 5,
-    stale: 4,
-    saving: 3,
-    creating: 2,
-    saved: 1,
-    idle: 0,
-  };
   const projects = visibleProjects.map((project) => {
     const projectPages = pages.filter((page) => page.projectId === project.id);
-    const pageWorstState = projectPages
-      .map((page) => page.syncState)
-      .filter((state): state is NonNullable<Project['syncState']> => Boolean(state))
-      .sort((first, second) => (syncStateRank[second] ?? 0) - (syncStateRank[first] ?? 0))[0];
-    const worstPage = projectPages.find((page) => page.syncState === pageWorstState);
     return {
       ...project,
       // A project's menu badge represents its pages. Project-state edits and
       // conflicts stay in the conflict flow and must not make unchanged pages
       // appear to have block differences.
-      syncState: pageWorstState ?? 'saved',
-      syncMessage: worstPage?.syncMessage,
+      ...summarizeSyncState(projectPages),
     };
   });
   const workspacesWithSyncState = visibleWorkspaces.map((workspace) => {
     const workspaceProjects = projects.filter((project) =>
       project.workspaceId === workspace.id && project.status !== 'archived',
     );
-    const itemWorst = workspaceProjects.map((project) => project.syncState).filter(Boolean)
-      .sort((first, second) => (syncStateRank[second!] ?? 0) - (syncStateRank[first!] ?? 0))[0];
-    const worstItem = workspaceProjects.find((project) => project.syncState === itemWorst);
     return {
       ...workspace,
-      syncState: itemWorst ?? 'saved',
-      syncMessage: worstItem?.syncMessage,
+      ...summarizeSyncState(workspaceProjects),
     };
   });
 

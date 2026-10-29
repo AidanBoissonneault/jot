@@ -123,6 +123,70 @@ describe('local workspace defaults', () => {
   });
 });
 
+describe('workspace sync status', () => {
+  test('uses the highest page state and keeps the first message when states tie', async () => {
+    const workspace: Workspace = {
+      id: 'workspace-local-status',
+      name: 'Local notes',
+      kind: 'local',
+      accountId: 'notion:test-user',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    };
+    const project = {
+      ...baseProject,
+      workspaceId: workspace.id,
+      syncMode: 'local' as const,
+    };
+    const pages: ProjectPage[] = [
+      {
+        ...basePage,
+        id: 'page-stale',
+        projectId: project.id,
+        workspaceId: workspace.id,
+        syncMode: 'local',
+        syncState: 'stale',
+        syncMessage: 'older warning',
+      },
+      {
+        ...basePage,
+        id: 'page-error-first',
+        projectId: project.id,
+        workspaceId: workspace.id,
+        syncMode: 'local',
+        syncState: 'error',
+        syncMessage: 'first error',
+      },
+      {
+        ...basePage,
+        id: 'page-error-second',
+        projectId: project.id,
+        workspaceId: workspace.id,
+        syncMode: 'local',
+        syncState: 'error',
+        syncMessage: 'second error',
+      },
+    ];
+    resetBrowserStorage({
+      activePageIdsByProject: { [project.id]: pages[0]!.id },
+      currentProjectId: project.id,
+      currentProjectIdByWorkspace: { [workspace.id]: project.id },
+      currentWorkspaceId: workspace.id,
+      hasMigratedCapturesToPages: true,
+      pages,
+      projects: [project],
+      syncConfig: connectedConfig,
+      workspaces: [workspace],
+    });
+
+    const [visibleProject] = await notionClient.listProjects();
+    const [visibleWorkspace] = await notionClient.listWorkspaces();
+
+    expect(visibleProject).toMatchObject({ syncState: 'error', syncMessage: 'first error' });
+    expect(visibleWorkspace).toMatchObject({ syncState: 'error', syncMessage: 'first error' });
+  });
+});
+
 describe('optimistic project creation', () => {
   test('sync payload includes project database metadata defaults', async () => {
     const projectSync = deferred<Response>();
