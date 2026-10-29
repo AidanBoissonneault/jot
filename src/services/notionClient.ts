@@ -2319,11 +2319,30 @@ async function replayTempPageSave(tempPageId: string, realPage: ProjectPage) {
     return storedPage ?? realPage;
   }
 
-  return notionClient.updateProjectPage({
+  // Compare the edit with the exact snapshot used to enqueue the first create.
+  // The stored row may already contain the newer title because replaceTempPage
+  // preserves edits made while the temporary ID was being reconciled. Passing
+  // that row as the previous value would make the diff look empty and leave the
+  // original auto-title in the outbox until a hard sync rebuilt the snapshot.
+  const { projects } = await readStorage();
+  const project = projects.find((candidate) => candidate.id === latestPage.projectId);
+  if (!project) throw new Error('This project is no longer available.');
+
+  const rebasedPage = {
+    ...latestPage,
     ...realPage,
+    id: realPage.id,
+    projectId: realPage.projectId,
     title: latestPage.title,
     content: latestPage.content,
-  });
+    status: latestPage.status,
+    pageOrder: latestPage.pageOrder,
+    localRevision: latestPage.localRevision,
+    updatedAt: latestPage.updatedAt,
+  };
+  const queuedPage = await enqueuePageSync(rebasedPage, project, realPage);
+  await persistPage(queuedPage);
+  return queuedPage;
 }
 
 /** Reads the freshest optimistic page edit before assigning its durable ID. */
