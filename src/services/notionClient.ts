@@ -1035,23 +1035,37 @@ function projectUsesNotionSync(
     pages.some((page) => page.projectId === project.id && page.syncMode === 'notion');
 }
 
+function projectUsesNotionWorkspace(project: Project, workspaces: Workspace[]): boolean {
+  const workspace = workspaces.find((entry) => entry.id === project.workspaceId);
+  return workspace ? workspace.kind === 'notion' : project.syncMode === 'notion';
+}
+
 function withoutJottathingBlockIds(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(withoutJottathingBlockIds);
   if (!value || typeof value !== 'object') return value;
 
-  return Object.fromEntries(
-    Object.entries(value)
-      .filter(([key]) => key !== 'jottathingBlockId')
-      .map(([key, nested]) => [key, withoutJottathingBlockIds(nested)]),
-  );
+  const normalizedEntries = Object.entries(value)
+    .filter(([key]) => key !== 'jottathingBlockId')
+    .map(([key, nested]) => [key, withoutJottathingBlockIds(nested)] as const);
+  return Object.fromEntries(normalizedEntries.filter(([key, nested]) =>
+    key !== 'attrs' || !nested || typeof nested !== 'object' ||
+    Array.isArray(nested) || Object.keys(nested).length > 0,
+  ));
 }
 
 function hasUnuploadedSnapshot(
   content: DocumentContent | undefined,
   baseline: DocumentContent | undefined,
+  requireBaseline = false,
 ): boolean {
-  if (!baseline) return true;
-  return JSON.stringify(withoutJottathingBlockIds(stripConflictResolutionMarkers(content ?? emptyDocument()))) !==
+  const normalizedContent = withoutJottathingBlockIds(
+    stripConflictResolutionMarkers(content ?? emptyDocument()),
+  );
+  if (!baseline) {
+    const normalizedEmptyDocument = withoutJottathingBlockIds(emptyDocument());
+    return requireBaseline || JSON.stringify(normalizedContent) !== JSON.stringify(normalizedEmptyDocument);
+  }
+  return JSON.stringify(normalizedContent) !==
     JSON.stringify(withoutJottathingBlockIds(stripConflictResolutionMarkers(baseline)));
 }
 
@@ -2991,9 +3005,9 @@ export const notionClient = {
     const pendingProjectEvents = await listPendingProjectSyncEvents();
     const pendingProjectIds = new Set(pendingProjectEvents.map((event) => event.projectId));
     const projectsNeedingReconciliation = projectSnapshot.projects.filter((project) =>
-      projectUsesNotionSync(project, projectSnapshot.pages, projectSnapshot.workspaces) &&
+      projectUsesNotionWorkspace(project, projectSnapshot.workspaces) &&
       (project.syncState !== undefined && project.syncState !== 'saved' ||
-        hasUnuploadedSnapshot(project.stateContent, project.stateSyncBaselineContent)),
+        hasUnuploadedSnapshot(project.stateContent, project.stateSyncBaselineContent, true)),
     );
     for (const project of projectsNeedingReconciliation) {
       if (pendingProjectIds.has(project.id)) continue;
@@ -3032,7 +3046,7 @@ export const notionClient = {
           project &&
           page.status !== 'archived' &&
           project.status !== 'archived' &&
-          projectUsesNotionSync(project, workspace.pages, workspace.workspaces) &&
+          projectUsesNotionWorkspace(project, workspace.workspaces) &&
           ((page.syncState !== undefined && page.syncState !== 'saved') ||
             hasUnuploadedSnapshot(page.content, page.syncBaselineContent) ||
             (typeof page.localSyncVersion === 'number' &&
@@ -3040,7 +3054,6 @@ export const notionClient = {
         );
       }).map((page) => page.id),
     ]);
-
     let reconciledPageCount = 0;
     onProgress?.({
       phase: 'syncing_pages',

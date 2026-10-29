@@ -50,6 +50,7 @@ const baseProject: Project = {
   createdAt: '2026-01-01T00:00:00.000Z',
   updatedAt: '2026-01-01T00:00:00.000Z',
   stateContent: emptyDocument(),
+  stateSyncBaselineContent: emptyDocument(),
   tags: ['jottathing'],
   syncState: 'saved',
 };
@@ -60,6 +61,7 @@ const basePage: ProjectPage = {
   title: 'Untitled Page',
   status: 'active',
   content: emptyDocument(),
+  syncBaselineContent: emptyDocument(),
   createdAt: '2026-01-01T00:00:00.000Z',
   updatedAt: '2026-01-01T00:00:00.000Z',
   syncState: 'saved',
@@ -938,6 +940,7 @@ describe('project metadata', () => {
       name: 'Local project snapshot',
       workspaceId: workspace.id,
       syncMode: 'notion',
+      stateSyncBaselineContent: undefined,
       stateContent: docWithText('local project state'),
     };
     const localPage: ProjectPage = {
@@ -946,6 +949,7 @@ describe('project metadata', () => {
       projectId: localProject.id,
       workspaceId: workspace.id,
       syncMode: 'notion',
+      syncBaselineContent: undefined,
       content: docWithText('local page snapshot'),
       localSyncVersion: 2,
       knownSyncVersion: 1,
