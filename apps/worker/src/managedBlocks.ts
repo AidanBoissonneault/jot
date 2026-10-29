@@ -165,6 +165,13 @@ export async function replaceManagedBlocks({
 
   if (!existingMappings.length) {
     const remoteBlocks = await listAllBlockChildren(store, notionPageId);
+    if (isExactOrderedSnapshot(desiredBlocks, remoteBlocks)) {
+      store.blockMappings[localPageId] = desiredBlocks.map((desired, index) =>
+        mappingFromDesired(desired, remoteBlocks[index].id, {}, remoteBlocks[index]),
+      );
+      return { createdBlocks: [], content, baselineContent: baselineContent ?? content, notionBlocks };
+    }
+
     if (
       hasUnresolvedExactDuplicates(existingMappings, desiredBlocks, remoteBlocks) &&
       notionBlocksToTiptapDocumentStrict(remoteBlocks)
@@ -283,6 +290,16 @@ export async function replaceManagedBlocks({
   });
 
   return { ...result, content, baselineContent: content };
+}
+
+/** Matches only a complete ordered snapshot, making retries safe to adopt by position. */
+function isExactOrderedSnapshot(
+  desiredBlocks: DesiredManagedBlock[],
+  remoteBlocks: NotionBlock[],
+): boolean {
+  return desiredBlocks.length === remoteBlocks.length && desiredBlocks.every((desired, index) =>
+    managedBlockSignature(desired.notionBlock) === managedBlockSignature(remoteBlocks[index]),
+  );
 }
 
 /** Rehydrates comparison baselines from the locally stored last synced snapshot. */
