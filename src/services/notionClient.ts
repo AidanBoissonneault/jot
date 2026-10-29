@@ -1,5 +1,4 @@
 import type {
-  Capture,
   DocumentContent,
   NotionParentPage,
   Project,
@@ -82,12 +81,10 @@ import {
 
 type JottathingStorage = {
   activePageIdsByProject?: Record<string, string>;
-  captures?: Capture[];
   currentProjectId?: string;
   currentWorkspaceId?: string;
   currentProjectIdByWorkspace?: Record<string, string>;
   hasExplicitlyLoggedOut?: boolean;
-  hasMigratedCapturesToPages?: boolean;
   notionHydrationSource?: string;
   pages?: ProjectPage[];
   projects?: Project[];
@@ -120,12 +117,10 @@ type SyncStateCarrier = {
 
 const STORAGE_KEYS: Array<keyof JottathingStorage> = [
   'activePageIdsByProject',
-  'captures',
   'currentProjectId',
   'currentWorkspaceId',
   'currentProjectIdByWorkspace',
   'hasExplicitlyLoggedOut',
-  'hasMigratedCapturesToPages',
   'notionHydrationSource',
   'pages',
   'projects',
@@ -676,7 +671,6 @@ function shouldPersistStorageNormalization(check: StorageNormalizationCheck): bo
       JSON.stringify(check.currentProjectIdByWorkspace),
     stored.hasExplicitlyLoggedOut === undefined && check.hasExplicitlyLoggedOut,
     check.shouldCreatePages,
-    stored.hasMigratedCapturesToPages !== true,
     check.sourceMigrationChanged,
     hasPageScopeMigration,
     hasQueueScopeMigration,
@@ -796,7 +790,6 @@ type PersistedStorageValues = Required<Pick<JottathingStorage,
   | 'workspaces'
   | 'hasExplicitlyLoggedOut'
   | 'notionHydrationSource'
-  | 'hasMigratedCapturesToPages'
 >>;
 
 /** Strips any stored token copy, then writes normalized records once when needed. */
@@ -828,16 +821,9 @@ async function readStorage(): Promise<Required<JottathingStorage>> {
     syncQueueOwnerWorkspaceId: storedSyncConfig.syncQueueOwnerWorkspaceId ??
       (legacyAccountId ? legacyWorkspaceId : undefined),
   });
-  let allProjects = (isLegacyStubProjectSet(storedProjects)
-    ? defaultProjects
-    : storedProjects
-  ).map(normalizeProject)
+  let allProjects = storedProjects.map(normalizeProject)
     .sort(sortProjectsByUpdatedDesc);
-  const captures = stored.captures ?? [];
-  const shouldCreatePages =
-    !stored.pages?.length ||
-    !stored.hasMigratedCapturesToPages ||
-    isLegacyStubProjectSet(storedProjects);
+  const shouldCreatePages = !stored.pages?.length;
   let allPages = (shouldCreatePages
     ? createDefaultPages(allProjects)
     : stored.pages ?? createDefaultPages(allProjects)
@@ -920,7 +906,6 @@ async function readStorage(): Promise<Required<JottathingStorage>> {
     workspaces: allWorkspaces,
     hasExplicitlyLoggedOut,
     notionHydrationSource,
-    hasMigratedCapturesToPages: true,
   }, hasStoredSyncCredentials);
 
   const visibleRecords = createVisibleStorageRecords(
@@ -933,13 +918,11 @@ async function readStorage(): Promise<Required<JottathingStorage>> {
   );
 
   return {
-    captures,
     currentProjectId,
     currentWorkspaceId,
     currentProjectIdByWorkspace,
     hasExplicitlyLoggedOut,
     activePageIdsByProject: visibleRecords.activePageIdsByProject,
-    hasMigratedCapturesToPages: true,
     pages: visibleRecords.pages,
     projects: visibleRecords.projects,
     syncConfig,
@@ -999,12 +982,6 @@ function syncQueueBelongsToActiveAccount(syncConfig: SyncConfig): boolean {
   ) && (
     !syncConfig.syncQueueOwnerWorkspaceId || !syncConfig.workspaceId ||
     syncConfig.syncQueueOwnerWorkspaceId === syncConfig.workspaceId
-  );
-}
-
-function isLegacyStubProjectSet(projects: Project[]) {
-  return projects.some((project) =>
-    ['project-product-research', 'project-writing'].includes(project.id),
   );
 }
 
@@ -5301,7 +5278,6 @@ export const notionClient = {
     const reloadedStorage = {
       activePageIdsByProject,
       currentProjectId: nextCurrentProjectId,
-      hasMigratedCapturesToPages: true,
       pages,
       projects,
       syncConfig: nextSyncConfig,

@@ -8,7 +8,6 @@ const workspaceKeys = [
   'pages',
   'currentProjectId',
   'activePageIdsByProject',
-  'hasMigratedCapturesToPages',
   preparedKey,
 ];
 
@@ -100,7 +99,6 @@ export async function prepareDemoWorkspace(): Promise<void> {
     pages,
     currentProjectId: project.id,
     activePageIdsByProject: activePageIds,
-    hasMigratedCapturesToPages: true,
   });
   await idbSet(preparedKey, true);
 }

@@ -121,6 +121,33 @@ describe('local workspace defaults', () => {
     expect(stored.currentWorkspaceId).toBe(workspace.id);
     expect(stored.activePageIdsByProject).toMatchObject({ [project?.id ?? '']: page?.id });
   });
+
+  test('keeps stored projects without the retired capture migration', async () => {
+    const retiredProjects = ['project-product-research', 'project-writing'].map((id) => ({
+      ...baseProject,
+      id,
+      name: id,
+    }));
+    resetBrowserStorage({
+      projects: retiredProjects,
+      pages: [],
+      captures: [{ id: 'old-capture', projectId: retiredProjects[0].id }],
+      hasMigratedCapturesToPages: false,
+      activePageIdsByProject: {},
+      currentProjectId: retiredProjects[0].id,
+      syncConfig: connectedConfig,
+    });
+
+    await notionClient.createLocalWorkspace('Research');
+
+    const stored = readBrowserStorage();
+    expect((stored.projects as Project[]).map((project) => project.id)).toEqual(
+      expect.arrayContaining(retiredProjects.map((project) => project.id)),
+    );
+    expect((stored.pages as ProjectPage[]).map((page) => page.projectId)).toEqual(
+      expect.arrayContaining(retiredProjects.map((project) => project.id)),
+    );
+  });
 });
 
 describe('workspace sync status', () => {

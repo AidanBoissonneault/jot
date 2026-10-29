@@ -27,19 +27,6 @@ export type HighlightMeta = {
   codeLanguage?: string;
 };
 
-/** Describes one captured item stored inside a page. */
-export type Capture = {
-  id: string;
-  projectId: string;
-  type: CaptureType;
-  content: string;
-  note?: string;
-  sourceUrl: string;
-  pageTitle: string;
-  highlightMeta?: HighlightMeta;
-  createdAt: string;
-};
-
 /** Describes a project and its workspace-derived synchronization state. */
 export type Project = {
   id: string;
