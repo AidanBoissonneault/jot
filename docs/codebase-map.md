@@ -141,4 +141,4 @@ HTTP page sync now requires project-database and thread-toggle helpers. The alte
 
 Dead-code pruning removed unreferenced `CaptureType` and `HighlightMeta` contracts and the unused recursive pending-media scan. Upload lease checks and sync sanitization remain the active paths. Media-content, media-identity, and queue-payload tests pass (21), as do root and Worker typechecks.
 
-Notion page-title extraction and block/page mismatch detection now each have one Worker implementation shared by database sync and routes. Title reads tolerate a missing `properties` object, and mismatch detection accepts both `Error` and API-shaped error values. Project database, cache, route utility, page sync, and security tests pass (50), with both TypeScript projects typechecked.
+Worker routes and database sync now share one Notion page-title reader and one block/page error detector. Title reads tolerate missing properties; error detection handles both `Error` and API-shaped values while rejecting mismatched codes. Project database, cache, route utility, page sync, and security tests pass (50), as do both TypeScript projects.
