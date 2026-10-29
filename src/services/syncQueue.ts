@@ -95,13 +95,6 @@ export async function addPendingSyncOps(ops: Omit<BlockSyncOp, 'opId' | 'sequenc
   });
 }
 
-export async function replacePendingSyncOps(ops: BlockSyncOp[]): Promise<void> {
-  await mutateQueue(async () => {
-    await idbSet(PENDING_SYNC_OPS_KEY, ops);
-    notifyQueueChanged();
-  });
-}
-
 export async function removePendingSyncOps(opIds: string[]): Promise<void> {
   if (!opIds.length) return;
   await mutateQueue(async () => {
