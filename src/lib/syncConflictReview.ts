@@ -155,37 +155,9 @@ export function buildSyncConflictMerge(
 ): DocumentContent {
   const chosen: DocumentContent[] = [];
   const deleteNotionBlockIds: string[] = [];
-  for (const row of rows) {
-    const choice = choices[row.id];
-    if (row.duplicate && row.local && row.notion) {
-      if (choice === 'local') chosen.push(markBlock(row.local, remoteBlockId(row.notion)));
-      else if (choice === 'both') chosen.push(markBlock(row.local));
-      if (choice === 'notion' || choice === 'both') {
-        chosen.push(markBlock(row.notion, remoteBlockId(row.notion)));
-      }
-      continue;
-    }
-    if (row.localDeleted) {
-      if (choice === 'notion' && row.notion) chosen.push(row.notion);
-      else if (choice === 'local' && row.notion) {
-        const notionId = remoteBlockId(row.notion);
-        if (notionId) deleteNotionBlockIds.push(notionId);
-      }
-      continue;
-    }
-    if (row.notionDeleted) {
-      if (choice === 'local' && row.local) chosen.push(row.local);
-      continue;
-    }
-    if (row.local && row.notion && row.changed) {
-      const selected = choice || (row.notionChanged ? 'notion' : 'local');
-      if (selected === 'local') chosen.push(markBlock(row.local, remoteBlockId(row.notion)));
-      else if (selected === 'notion') chosen.push(markBlock(row.notion, remoteBlockId(row.notion)));
-      continue;
-    }
-    if (row.local) chosen.push(row.local);
-    else if (row.notion) chosen.push(row.notion);
-  }
+  rows.forEach((row) => chosen.push(
+    ...resolvedConflictRow(row, choices[row.id], deleteNotionBlockIds),
+  ));
 
   return normalizeJottathingBlockIds({
     type: conflict.localContent.type ?? 'doc',
@@ -199,6 +171,71 @@ export function buildSyncConflictMerge(
       attrs: { ...block.attrs, jottathingConflictResolution: true },
     })),
   });
+}
+
+/** Resolves one row while keeping deletion bookkeeping separate from content. */
+function resolvedConflictRow(
+  row: SyncConflictRow,
+  choice: SyncConflictChoice,
+  deleteNotionBlockIds: string[],
+): DocumentContent[] {
+  if (row.duplicate && row.local && row.notion) {
+    return duplicateConflictBlocks(row.local, row.notion, choice);
+  }
+  if (row.localDeleted) return locallyDeletedConflictBlocks(row, choice, deleteNotionBlockIds);
+  if (row.notionDeleted) return remotelyDeletedConflictBlocks(row, choice);
+  if (row.local && row.notion && row.changed) {
+    return changedConflictBlocks(row.local, row.notion, row.notionChanged, choice);
+  }
+  const unchanged = row.local ?? row.notion;
+  return unchanged ? [unchanged] : [];
+}
+
+/** Applies the local, remote, or both choice for duplicate additions. */
+function duplicateConflictBlocks(
+  local: DocumentContent,
+  notion: DocumentContent,
+  choice: SyncConflictChoice,
+): DocumentContent[] {
+  if (choice === 'local') return [markBlock(local, remoteBlockId(notion))];
+  if (choice === 'notion') return [markBlock(notion, remoteBlockId(notion))];
+  if (choice === 'both') return [markBlock(local), markBlock(notion, remoteBlockId(notion))];
+  return [];
+}
+
+/** Applies the user's choice to a block deleted locally. */
+function locallyDeletedConflictBlocks(
+  row: SyncConflictRow,
+  choice: SyncConflictChoice,
+  deleteNotionBlockIds: string[],
+): DocumentContent[] {
+  if (choice === 'notion' && row.notion) return [row.notion];
+  if (choice === 'local' && row.notion) {
+    const notionId = remoteBlockId(row.notion);
+    if (notionId) deleteNotionBlockIds.push(notionId);
+  }
+  return [];
+}
+
+/** Keeps a remotely deleted block only when the user selects the local copy. */
+function remotelyDeletedConflictBlocks(
+  row: SyncConflictRow,
+  choice: SyncConflictChoice,
+): DocumentContent[] {
+  return choice === 'local' && row.local ? [row.local] : [];
+}
+
+/** Applies an explicit choice or prefers the side that changed from the base. */
+function changedConflictBlocks(
+  local: DocumentContent,
+  notion: DocumentContent,
+  notionChanged: boolean | undefined,
+  choice: SyncConflictChoice,
+): DocumentContent[] {
+  const selected = choice || (notionChanged ? 'notion' : 'local');
+  if (selected === 'local') return [markBlock(local, remoteBlockId(notion))];
+  if (selected === 'notion') return [markBlock(notion, remoteBlockId(notion))];
+  return [];
 }
 
 export function syncConflictDiffParts(
