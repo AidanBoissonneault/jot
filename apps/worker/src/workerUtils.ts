@@ -403,7 +403,7 @@ export function sanitizeMediaFilename(filename: string | undefined, mimeType: st
 }
 
 /** Maps a media MIME type to a safe extension. @param mimeType - MIME type. @returns Extension. */
-export function mediaExtensionFromMimeType(mimeType: string): string {
+function mediaExtensionFromMimeType(mimeType: string): string {
   const extensions: Record<string, string> = {
     'image/jpeg': 'jpg', 'image/png': 'png', 'image/gif': 'gif', 'image/webp': 'webp',
     'image/svg+xml': 'svg', 'image/avif': 'avif', 'image/heic': 'heic', 'image/tiff': 'tiff',

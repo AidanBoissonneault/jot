@@ -14,7 +14,7 @@ import {
   toggleTitle,
 } from './projectDatabaseValues.js';
 
-export { projectStateKey, threadKey } from './projectDatabaseValues.js';
+export { projectStateKey } from './projectDatabaseValues.js';
 import {
   clearSyncMappings,
   createProjectDatabaseRows,

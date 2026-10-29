@@ -43,7 +43,7 @@ export function normalizeYoutubeVideoUrl(src: string): string {
  * @param sourceParams - Query parameters from the source URL.
  * @returns Canonical watch URL.
  */
-export function youtubeWatchUrl(id: string, sourceParams: URLSearchParams): string {
+function youtubeWatchUrl(id: string, sourceParams: URLSearchParams): string {
   const url = new URL('https://www.youtube.com/watch');
   url.searchParams.set('v', id);
 

@@ -58,7 +58,7 @@ interface BackoffOptions {
 }
 
 /** Describes the notion api error contract used by this API feature. */
-export class NotionApiError extends Error {
+class NotionApiError extends Error {
   readonly code: string | undefined;
   readonly endpoint: string;
   readonly isNotionApiError = true;

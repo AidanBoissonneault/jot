@@ -17,7 +17,7 @@ import { createWorkerInstallationState } from './workerInstallationState.js';
 import { createWorkerNotionOperations } from './workerNotionOperations.js';
 import type { BlockOpsInput, PageSyncInput, ProjectSyncInput } from './workerSyncOperations.js';
 import type { EnqueueJob } from './workerQueueOperations.js';
-import { createProjectDatabaseHelpers, projectStateKey, threadKey } from '../projectDatabase.js';
+import { createProjectDatabaseHelpers, projectStateKey } from '../projectDatabase.js';
 import { syncProjectFolder } from '../projectSync.js';
 import { createRootPageHelpers } from '../rootPages.js';
 import { isNotionObjectNotFound, titleFromPage } from '../workerUtils.js';

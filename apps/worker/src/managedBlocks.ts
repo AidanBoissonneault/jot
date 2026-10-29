@@ -28,7 +28,7 @@ import { notionBlocksToTiptapDocumentStrict } from './blockConversion/notionToTi
 import { mediaFallbackBlock } from './workerUtils.js';
 
 export const UNMAPPED_NOTION_CONTENT_CODE = 'unmapped_notion_content';
-export const UNMAPPED_NOTION_CONTENT_MESSAGE =
+const UNMAPPED_NOTION_CONTENT_MESSAGE =
   'Notion and local content differ in blocks that could not be matched automatically. Review the sync diff and merge the blocks.';
 
 export type UnmappedNotionContentDiff = {

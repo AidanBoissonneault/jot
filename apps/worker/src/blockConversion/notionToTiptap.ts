@@ -3,7 +3,7 @@ import { normalizeCodeLanguage } from '../../../../src/lib/codeLanguages.js';
 import type { DocumentContent } from '../../../../src/types/capture.js';
 import type { NotionBlock, NotionBlockPayload, NotionRichText } from '../types.js';
 import { objectProperty, richTextProperty, stringProperty } from './valueReaders.js';
-import { normalizeYoutubeVideoUrl, youtubeWatchUrl } from './youtubeUrls.js';
+import { normalizeYoutubeVideoUrl } from './youtubeUrls.js';
 /**
  * Converts supported Notion blocks to a Tiptap document, skipping unsupported blocks.
  * @param blocks - Notion blocks to convert.
