@@ -345,12 +345,10 @@ describe('Jottathing project database selection', () => {
     expect(selected.databaseId).toBe('db-main');
     expect(store.jottathingDatabase?.databaseId).toBe('db-main');
     const searchCalls = notionRequest.mock.calls.filter(([, endpoint]) => endpoint === '/search');
-    expect(searchCalls).toHaveLength(8);
+    expect(searchCalls).toHaveLength(4);
     expect(searchCalls.map(([, , init]) => init.body.query)).toEqual([
       'Projects', 'Projects',
       'Jottathing', 'Jottathing',
-      'Inkwell', 'Inkwell',
-      'Jot', 'Jot',
     ]);
     expect(searchCalls[1][2].body.start_cursor).toBe('next');
   });

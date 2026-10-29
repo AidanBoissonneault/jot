@@ -68,7 +68,6 @@ export function createProjectDatabaseDiscoveryHelpers({
   isNotionObjectNotFound,
   notionRequest,
 }: ProjectDatabaseDiscoveryDependencies) {
-  const legacyDatabaseTitles = ['Inkwell', 'Jot'];
   /** Ensures the managed project database exists. @param store - Worker state. @param options - Parent selection. @returns Active database. */
   async function ensureProjectDatabase(
     store: WorkerStore,
@@ -255,13 +254,8 @@ export function createProjectDatabaseDiscoveryHelpers({
     const seenDataSourceIds = new Set<string>();
     // Since Notion API version 2025-09-03, database search results are data
     // sources. The current Jottathing database uses "Projects" as its data
-    // source title; the database titles cover installations created by older
-    // versions of the API.
-    const searchTitles = [
-      JOTTATHING_PROJECTS_DATA_SOURCE_TITLE,
-      JOTTATHING_DATABASE_TITLE,
-      ...legacyDatabaseTitles,
-    ];
+    // source title and "Jottathing" as its database title.
+    const searchTitles = [JOTTATHING_PROJECTS_DATA_SOURCE_TITLE, JOTTATHING_DATABASE_TITLE];
     for (const query of searchTitles) {
       let cursor: string | undefined;
       const seenCursors = new Set<string>();
@@ -313,7 +307,7 @@ export function createProjectDatabaseDiscoveryHelpers({
 
       if (
         !isArchivedObject(database) &&
-        [JOTTATHING_DATABASE_TITLE, ...legacyDatabaseTitles].includes(titleFromDatabase(database)) &&
+        titleFromDatabase(database) === JOTTATHING_DATABASE_TITLE &&
         (parentPageId === undefined || parentPageIdFromObject(database) === parentPageId) &&
         dataSourceId
       ) {
@@ -331,13 +325,7 @@ export function createProjectDatabaseDiscoveryHelpers({
 
     if (!selected) return undefined;
 
-    let database = selected.database;
-    if (titleFromDatabase(database) !== JOTTATHING_DATABASE_TITLE) {
-      database = await notionRequest(store, `/databases/${database.id}`, {
-        method: 'PATCH',
-        body: { title: richText(JOTTATHING_DATABASE_TITLE) },
-      });
-    }
+    const database = selected.database;
     return databaseSummary(
       database,
       selected.dataSourceId,

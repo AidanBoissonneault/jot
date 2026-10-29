@@ -93,3 +93,5 @@ The granular managed-block operation path now shares the retry recovery and appe
 The IndexedDB opener now connects directly to the current database; the old `inkwell` database copier and recursive renamed-key converter were removed (75 net lines). Editor autosave and source provenance suites pass (14 tests), and root typecheck passes.
 
 The block identity path now reads only `jottathingBlockId`: old `inkwellBlockId` editor attributes, HTML attributes, source records, and Worker mappings are no longer adapted. The managed-block, source-provenance, block-conversion, and page-move suites pass (44 tests), and root typecheck passes.
+
+Project database discovery now searches only the current `Projects` data source and `Jottathing` database titles; legacy `Inkwell` / `Jot` title searches and rename writes are removed. The project database suite passes (8 tests), and root typecheck passes.
