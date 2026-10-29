@@ -304,6 +304,124 @@ describe('page ordering and moves', () => {
     });
     expect(stored.currentProjectId).toBe(destinationProject.id);
   });
+
+  test('rejects moving a page between local workspaces owned by different accounts', async () => {
+    const sourceWorkspace: Workspace = {
+      id: 'workspace-account-a',
+      name: 'Account A',
+      kind: 'local',
+      accountId: 'account-a',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    };
+    const destinationWorkspace: Workspace = {
+      ...sourceWorkspace,
+      id: 'workspace-account-b',
+      name: 'Account B',
+      accountId: 'account-b',
+    };
+    const sourceProject = {
+      ...baseProject,
+      id: 'project-account-a',
+      workspaceId: sourceWorkspace.id,
+      syncMode: 'local' as const,
+    };
+    const destinationProject = {
+      ...baseProject,
+      id: 'project-account-b',
+      workspaceId: destinationWorkspace.id,
+      syncMode: 'local' as const,
+    };
+    const sourcePage = {
+      ...basePage,
+      id: 'page-account-a',
+      projectId: sourceProject.id,
+      workspaceId: sourceWorkspace.id,
+      syncMode: 'local' as const,
+      syncAccountId: 'account-a',
+    };
+    const destinationPage = {
+      ...basePage,
+      id: 'page-account-b',
+      projectId: destinationProject.id,
+      workspaceId: destinationWorkspace.id,
+      syncMode: 'local' as const,
+      syncAccountId: 'account-b',
+    };
+    resetBrowserStorage({
+      currentProjectId: sourceProject.id,
+      currentWorkspaceId: sourceWorkspace.id,
+      hasMigratedCapturesToPages: true,
+      pages: [sourcePage, destinationPage],
+      projects: [sourceProject, destinationProject],
+      syncConfig: { serverUrl: 'http://localhost:8787', connected: false, authenticated: false },
+      workspaces: [sourceWorkspace, destinationWorkspace],
+    });
+
+    await expect(notionClient.movePageToProject(sourcePage.id, destinationProject.id))
+      .rejects.toThrow('Projects and pages cannot move between different accounts.');
+    expect((readBrowserStorage().pages as ProjectPage[])
+      .find((page) => page.id === sourcePage.id)?.status).toBe('active');
+  });
+
+  test('requires an active Notion connection when either workspace is Notion-backed', async () => {
+    const localWorkspace: Workspace = {
+      id: 'workspace-local-connected',
+      name: 'Local notes',
+      kind: 'local',
+      accountId: 'notion:test-user',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    };
+    const notionWorkspace: Workspace = {
+      ...localWorkspace,
+      id: 'workspace-notion-connected',
+      name: 'Notion notes',
+      kind: 'notion',
+      notionWorkspaceId: 'notion-workspace',
+    };
+    const localProject = {
+      ...baseProject,
+      id: 'project-local-connected',
+      workspaceId: localWorkspace.id,
+      syncMode: 'local' as const,
+    };
+    const notionProject = {
+      ...baseProject,
+      id: 'project-notion-connected',
+      workspaceId: notionWorkspace.id,
+      syncMode: 'notion' as const,
+    };
+    const localPage = {
+      ...basePage,
+      id: 'page-local-connected',
+      projectId: localProject.id,
+      workspaceId: localWorkspace.id,
+      syncMode: 'local' as const,
+      syncAccountId: 'notion:test-user',
+    };
+    const notionPage = {
+      ...basePage,
+      id: 'page-notion-connected',
+      projectId: notionProject.id,
+      workspaceId: notionWorkspace.id,
+      syncMode: 'notion' as const,
+      syncAccountId: 'notion:test-user',
+      syncWorkspaceId: notionWorkspace.notionWorkspaceId,
+    };
+    resetBrowserStorage({
+      currentProjectId: localProject.id,
+      currentWorkspaceId: localWorkspace.id,
+      hasMigratedCapturesToPages: true,
+      pages: [localPage, notionPage],
+      projects: [localProject, notionProject],
+      syncConfig: { ...connectedConfig, connected: false, workspaceId: notionWorkspace.notionWorkspaceId },
+      workspaces: [localWorkspace, notionWorkspace],
+    });
+
+    await expect(notionClient.movePageToProject(localPage.id, notionProject.id))
+      .rejects.toThrow('Sign in to the Notion account that should own this page.');
+  });
 });
 
 describe('optimistic project creation', () => {

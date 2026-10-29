@@ -2076,6 +2076,58 @@ function getPageMoveContext(
   return { page, sourceProject, destinationProject, sourceWorkspace, destinationWorkspace };
 }
 
+/** Enforces account and active Notion-workspace ownership before a page move. */
+function validatePageMoveAccess(context: PageMoveContext, syncConfig: SyncConfig): string | undefined {
+  const activeAccountId = syncConfig.userId ?? syncConfig.syncQueueOwnerUserId ?? undefined;
+  const workspaces = [context.sourceWorkspace, context.destinationWorkspace];
+
+  if (workspaces.some((workspace) =>
+    workspace.accountId && activeAccountId && workspace.accountId !== activeAccountId,
+  )) {
+    throw new Error('This workspace is locked to another account.');
+  }
+  if (
+    context.sourceWorkspace.accountId && context.destinationWorkspace.accountId &&
+    context.sourceWorkspace.accountId !== context.destinationWorkspace.accountId
+  ) {
+    throw new Error('Projects and pages cannot move between different accounts.');
+  }
+
+  const touchesNotion = workspaces.some((workspace) => workspace.kind === 'notion');
+  if (touchesNotion && (
+    !syncConfig.connected || !syncConfig.authenticated || !syncConfig.userId || !syncConfig.workspaceId
+  )) {
+    throw new Error('Sign in to the Notion account that should own this page.');
+  }
+  if (touchesNotion && !syncQueueBelongsToActiveAccount(syncConfig)) {
+    throw new Error('Local sync work is locked to another Notion account.');
+  }
+
+  for (const workspace of workspaces) {
+    if (workspace.kind === 'notion' && (
+      workspace.accountId !== syncConfig.userId ||
+      (workspace.notionWorkspaceId && workspace.notionWorkspaceId !== syncConfig.workspaceId)
+    )) {
+      throw new Error('This Notion workspace belongs to another account.');
+    }
+  }
+  return activeAccountId;
+}
+
+/** Flushes source edits and reloads the move target before a Notion-backed page leaves. */
+async function refreshPageMoveContext(
+  pageId: string,
+  destinationProjectId: string,
+): Promise<PageMoveContext & { storage: Required<JottathingStorage> }> {
+  await flushPendingSyncOps({ force: true });
+  const storage = await readStorage();
+  const context = getPageMoveContext(storage, pageId, destinationProjectId);
+  if (!storage.syncConfig.authenticated || !syncQueueBelongsToActiveAccount(storage.syncConfig)) {
+    throw new Error('Sign in to the Notion account that should own this page.');
+  }
+  return { storage, ...context };
+}
+
 /** Reorders pages in place within one project without syncing or cloning them. */
 async function reorderPageWithinProject(
   storage: Required<JottathingStorage>,
@@ -3944,68 +3996,21 @@ export const notionClient = {
     }
 
     let syncConfig = storage.syncConfig;
-    let activeAccountId = syncConfig.userId ?? syncConfig.syncQueueOwnerUserId;
-    for (const workspace of [sourceWorkspace, destinationWorkspace]) {
-      if (workspace.accountId && activeAccountId && workspace.accountId !== activeAccountId) {
-        throw new Error('This workspace is locked to another account.');
-      }
-    }
-    if (
-      sourceWorkspace.accountId && destinationWorkspace.accountId &&
-      sourceWorkspace.accountId !== destinationWorkspace.accountId
-    ) {
-      throw new Error('Projects and pages cannot move between different accounts.');
-    }
-    if (sourceWorkspace.kind === 'notion' || destinationWorkspace.kind === 'notion') {
-      if (!syncConfig.connected || !syncConfig.authenticated || !syncConfig.userId || !syncConfig.workspaceId) {
-        throw new Error('Sign in to the Notion account that should own this page.');
-      }
-      if (!syncQueueBelongsToActiveAccount(syncConfig)) {
-        throw new Error('Local sync work is locked to another Notion account.');
-      }
-    }
-    for (const workspace of [sourceWorkspace, destinationWorkspace]) {
-      if (workspace.kind === 'notion' && (
-        workspace.accountId !== syncConfig.userId ||
-        (workspace.notionWorkspaceId && workspace.notionWorkspaceId !== syncConfig.workspaceId)
-      )) {
-        throw new Error('This Notion workspace belongs to another account.');
-      }
-    }
+    let activeAccountId = validatePageMoveAccess(
+      { page, sourceProject, destinationProject, sourceWorkspace, destinationWorkspace },
+      syncConfig,
+    );
 
     if (sourceWorkspace.kind === 'notion') {
-      await flushPendingSyncOps({ force: true });
-      const latestStorage = await readStorage();
-      const latestPage = latestStorage.pages.find((entry) => entry.id === pageId && entry.status !== 'archived');
-      const latestSourceProject = latestStorage.projects.find((entry) =>
-        entry.id === latestPage?.projectId && entry.status !== 'archived',
-      );
-      const latestDestinationProject = latestStorage.projects.find((entry) =>
-        entry.id === destinationProjectId && entry.status !== 'archived',
-      );
-      const latestSourceWorkspace = latestStorage.workspaces.find((entry) =>
-        entry.id === latestSourceProject?.workspaceId,
-      );
-      const latestDestinationWorkspace = latestStorage.workspaces.find((entry) =>
-        entry.id === latestDestinationProject?.workspaceId,
-      );
-      if (
-        !latestPage || !latestSourceProject || !latestDestinationProject ||
-        !latestSourceWorkspace || !latestDestinationWorkspace
-      ) {
-        throw new Error('The page or destination project is no longer available.');
-      }
-      storage = latestStorage;
-      page = latestPage;
-      sourceProject = latestSourceProject;
-      destinationProject = latestDestinationProject;
-      sourceWorkspace = latestSourceWorkspace;
-      destinationWorkspace = latestDestinationWorkspace;
-      syncConfig = latestStorage.syncConfig;
-      activeAccountId = syncConfig.userId ?? syncConfig.syncQueueOwnerUserId;
-      if (!syncConfig.authenticated || !syncQueueBelongsToActiveAccount(syncConfig)) {
-        throw new Error('Sign in to the Notion account that should own this page.');
-      }
+      const latest = await refreshPageMoveContext(pageId, destinationProjectId);
+      storage = latest.storage;
+      page = latest.page;
+      sourceProject = latest.sourceProject;
+      destinationProject = latest.destinationProject;
+      sourceWorkspace = latest.sourceWorkspace;
+      destinationWorkspace = latest.destinationWorkspace;
+      syncConfig = storage.syncConfig;
+      activeAccountId = syncConfig.userId ?? syncConfig.syncQueueOwnerUserId ?? undefined;
     }
 
     const movedAt = new Date(Math.max(Date.now(), Date.parse(page.updatedAt) + 1)).toISOString();
