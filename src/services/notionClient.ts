@@ -3575,6 +3575,80 @@ async function retryUndeliveredQueuePayloads(
   }
 }
 
+type PendingQueueResync = {
+  remoteQueue: SyncQueueStatusResponse;
+  requeuedCount: number;
+  failedUploadCount: number;
+};
+
+/** Unblocks explicit retry work, redrives durable payloads, and reads queue status. */
+async function preparePendingQueueResync(syncConfig: SyncConfig): Promise<PendingQueueResync> {
+  await unblockPendingSyncOps();
+  await unblockPendingProjectSyncEvents();
+  const pendingBeforeRetry = await listPendingSyncOps();
+  const retry = await retryUndeliveredQueuePayloads(
+    syncConfig,
+    pendingBeforeRetry.map((op) => op.opId),
+  );
+  const requeuedCount = Number.isSafeInteger(retry?.requeuedCount)
+    ? Math.max(0, retry?.requeuedCount ?? 0)
+    : 0;
+  const requeuedIds = new Set(retry?.requeuedOperationIds ?? []);
+  const requeuedOps = pendingBeforeRetry.filter((op) => requeuedIds.has(op.opId));
+  if (requeuedOps.length && retry) {
+    await removePendingSyncOps(requeuedOps.map((op) => op.opId));
+    await applyQueuedVersions(requeuedOps, retry);
+  }
+
+  const remoteQueue = await requestServer<SyncQueueStatusResponse>(
+    '/sync/status',
+    undefined,
+    syncConfig,
+  );
+  const failedUploadCount = Number.isSafeInteger(remoteQueue.failedCount)
+    ? Math.max(0, remoteQueue.failedCount ?? 0)
+    : 0;
+  return { remoteQueue, requeuedCount, failedUploadCount };
+}
+
+/** Delivers project snapshots before allowing the remote page snapshot to replace them. */
+async function deliverProjectStateBeforePageReconciliation(
+  syncConfig: SyncConfig,
+  onProgress: ((progress: SyncProgressUpdate) => void) | undefined,
+  remoteQueue: SyncQueueStatusResponse,
+  requeuedCount: number,
+  failedUploadCount: number,
+): Promise<number> {
+  const projectSnapshot = await readStorage();
+  const pendingProjectEvents = await listPendingProjectSyncEvents();
+  const pendingProjectIds = new Set(pendingProjectEvents.map((event) => event.projectId));
+  const projectsNeedingReconciliation = projectSnapshot.projects.filter((project) =>
+    projectUsesNotionWorkspace(project, projectSnapshot.workspaces) &&
+    (project.syncState !== undefined && project.syncState !== 'saved' ||
+      hasUnuploadedSnapshot(project.stateContent, project.stateSyncBaselineContent, true)),
+  );
+  for (const project of projectsNeedingReconciliation) {
+    if (pendingProjectIds.has(project.id)) continue;
+    await addPendingProjectSyncEvent(project, syncConfig.selectedParentPageId);
+    pendingProjectIds.add(project.id);
+  }
+
+  onProgress?.({ phase: 'uploading', pending: await pendingLocalWorkCount() });
+  const delivery = await deliverPendingProjectSyncEvents(syncConfig);
+  const blockedCount = delivery.blockedProjectIds.size;
+  if (blockedCount || delivery.retryError) {
+    failedUploadCount = Math.max(failedUploadCount, blockedCount || 1);
+  }
+  if (remoteQueue.hasPending) {
+    onProgress?.({ phase: 'waiting_for_server', pending: remoteQueue.pendingCount ?? requeuedCount });
+    failedUploadCount = Math.max(
+      failedUploadCount,
+      await waitForRemoteSyncQueueToSettle(syncConfig, onProgress, undefined, true),
+    );
+  }
+  return failedUploadCount;
+}
+
 function msUntilOldestOpIsEligible(ops: BlockSyncOp[], now = Date.now()): number {
   const oldestCreatedAt = Math.min(
     ...ops.map((op) => Date.parse(op.createdAt)).filter((time) => Number.isFinite(time)),
@@ -3723,67 +3797,15 @@ export const notionClient = {
     let failedUploadCount = 0;
     const pageConflicts: SyncContentConflict[] = [];
 
-    // Retry blocked snapshots only from this explicit user action.
-    await unblockPendingSyncOps();
-    await unblockPendingProjectSyncEvents();
-
-    // Queue bodies are durably stored in Supabase. Redrive them before
-    // reconciling, and remove only local operations covered by those payloads.
-    const pendingBeforeRetry = await listPendingSyncOps();
-    const retry = await retryUndeliveredQueuePayloads(
+    const pendingQueue = await preparePendingQueueResync(syncConfig);
+    failedUploadCount = pendingQueue.failedUploadCount;
+    failedUploadCount = await deliverProjectStateBeforePageReconciliation(
       syncConfig,
-      pendingBeforeRetry.map((op) => op.opId),
+      onProgress,
+      pendingQueue.remoteQueue,
+      pendingQueue.requeuedCount,
+      failedUploadCount,
     );
-    const requeuedCount = Number.isSafeInteger(retry?.requeuedCount)
-      ? Math.max(0, retry?.requeuedCount ?? 0)
-      : 0;
-    const requeuedIds = new Set(retry?.requeuedOperationIds ?? []);
-    const requeuedOps = pendingBeforeRetry.filter((op) => requeuedIds.has(op.opId));
-    if (requeuedOps.length) {
-      await removePendingSyncOps(requeuedOps.map((op) => op.opId));
-      await applyQueuedVersions(requeuedOps, retry!);
-    }
-
-    const remoteQueue = await requestServer<SyncQueueStatusResponse>(
-      '/sync/status',
-      undefined,
-      syncConfig,
-    );
-    failedUploadCount = Number.isSafeInteger(remoteQueue.failedCount)
-      ? Math.max(0, remoteQueue.failedCount ?? 0)
-      : 0;
-
-    // Project state uses a separate durable client outbox. Repair active local
-    // snapshots that never acquired a remote baseline before any full reload;
-    // otherwise a reload can replace a project whose first state upload never
-    // reached Notion.
-    const projectSnapshot = await readStorage();
-    const pendingProjectEvents = await listPendingProjectSyncEvents();
-    const pendingProjectIds = new Set(pendingProjectEvents.map((event) => event.projectId));
-    const projectsNeedingReconciliation = projectSnapshot.projects.filter((project) =>
-      projectUsesNotionWorkspace(project, projectSnapshot.workspaces) &&
-      (project.syncState !== undefined && project.syncState !== 'saved' ||
-        hasUnuploadedSnapshot(project.stateContent, project.stateSyncBaselineContent, true)),
-    );
-    for (const project of projectsNeedingReconciliation) {
-      if (pendingProjectIds.has(project.id)) continue;
-      await addPendingProjectSyncEvent(project, syncConfig.selectedParentPageId);
-      pendingProjectIds.add(project.id);
-    }
-
-    onProgress?.({ phase: 'uploading', pending: await pendingLocalWorkCount() });
-    const projectDelivery = await deliverPendingProjectSyncEvents(syncConfig);
-    const unresolvedProjectCount = projectDelivery.blockedProjectIds.size;
-    if (unresolvedProjectCount || projectDelivery.retryError) {
-      failedUploadCount = Math.max(failedUploadCount, unresolvedProjectCount || 1);
-    }
-    if (remoteQueue.hasPending) {
-      onProgress?.({ phase: 'waiting_for_server', pending: remoteQueue.pendingCount ?? requeuedCount });
-      failedUploadCount = Math.max(
-        failedUploadCount,
-        await waitForRemoteSyncQueueToSettle(syncConfig, onProgress, undefined, true),
-      );
-    }
 
     const workspace = await readStorage();
     const pendingOps = await listPendingSyncOps();
