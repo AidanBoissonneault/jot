@@ -2047,6 +2047,71 @@ function sortProjectPages(pages: ProjectPage[]): ProjectPage[] {
   });
 }
 
+type PageMoveContext = {
+  page: ProjectPage;
+  sourceProject: Project;
+  destinationProject: Project;
+  sourceWorkspace: Workspace;
+  destinationWorkspace: Workspace;
+};
+
+/** Resolves the active page and both workspace owners before a move. */
+function getPageMoveContext(
+  storage: Required<JottathingStorage>,
+  pageId: string,
+  destinationProjectId: string,
+): PageMoveContext {
+  const page = storage.pages.find((entry) => entry.id === pageId && entry.status !== 'archived');
+  const sourceProject = storage.projects.find((entry) =>
+    entry.id === page?.projectId && entry.status !== 'archived',
+  );
+  const destinationProject = storage.projects.find((entry) =>
+    entry.id === destinationProjectId && entry.status !== 'archived',
+  );
+  const sourceWorkspace = storage.workspaces.find((entry) => entry.id === sourceProject?.workspaceId);
+  const destinationWorkspace = storage.workspaces.find((entry) => entry.id === destinationProject?.workspaceId);
+  if (!page || !sourceProject || !destinationProject || !sourceWorkspace || !destinationWorkspace) {
+    throw new Error('The page or destination project is no longer available.');
+  }
+  return { page, sourceProject, destinationProject, sourceWorkspace, destinationWorkspace };
+}
+
+/** Reorders pages in place within one project without syncing or cloning them. */
+async function reorderPageWithinProject(
+  storage: Required<JottathingStorage>,
+  page: ProjectPage,
+  targetPageId: string | undefined,
+  position: 'before' | 'after',
+): Promise<ProjectPage> {
+  const pagesInOrder = sortProjectPages(storage.pages.filter((entry) =>
+    entry.projectId === page.projectId && entry.status !== 'archived',
+  ));
+  if (targetPageId === page.id) return page;
+
+  const reorderedPages = pagesInOrder.filter((entry) => entry.id !== page.id);
+  const targetIndex = targetPageId
+    ? reorderedPages.findIndex((entry) => entry.id === targetPageId)
+    : -1;
+  const insertionIndex = targetIndex < 0
+    ? reorderedPages.length
+    : targetIndex + (position === 'after' ? 1 : 0);
+  reorderedPages.splice(insertionIndex, 0, page);
+
+  const orderByPageId = new Map<string, number>(
+    reorderedPages.map((entry, index) => [entry.id, index] as const),
+  );
+  const hasChanged = reorderedPages.some((entry, index) =>
+    entry.id !== pagesInOrder[index]?.id || entry.pageOrder !== index,
+  );
+  if (!hasChanged) return page;
+
+  const pages = storage.pages.map((entry) => orderByPageId.has(entry.id)
+    ? { ...entry, pageOrder: orderByPageId.get(entry.id) }
+    : entry);
+  await writeStorage({ pages });
+  return pages.find((entry) => entry.id === page.id)!;
+}
+
 function normalizeStoredPage<T extends {
   content?: DocumentContent;
   localRevision?: string;
@@ -3872,45 +3937,10 @@ export const notionClient = {
     position: 'before' | 'after' = 'after',
   ): Promise<ProjectPage> {
     let storage = await readStorage();
-    let page = storage.pages.find((entry) => entry.id === pageId && entry.status !== 'archived');
-    let sourceProject = storage.projects.find((entry) =>
-      entry.id === page?.projectId && entry.status !== 'archived',
-    );
-    let destinationProject = storage.projects.find((entry) =>
-      entry.id === destinationProjectId && entry.status !== 'archived',
-    );
-    let sourceWorkspace = storage.workspaces.find((entry) => entry.id === sourceProject?.workspaceId);
-    let destinationWorkspace = storage.workspaces.find((entry) => entry.id === destinationProject?.workspaceId);
-    if (!page || !sourceProject || !destinationProject || !sourceWorkspace || !destinationWorkspace) {
-      throw new Error('The page or destination project is no longer available.');
-    }
-    const initialPage = page;
-    const initialSourceProject = sourceProject;
-    if (initialSourceProject.id === destinationProject.id) {
-      const pagesInOrder = sortProjectPages(storage.pages.filter((entry) =>
-        entry.projectId === initialSourceProject.id && entry.status !== 'archived',
-      ));
-      if (targetPageId === initialPage.id) return initialPage;
-      const reorderedPages = pagesInOrder.filter((entry) => entry.id !== initialPage.id);
-      const targetIndex = targetPageId
-        ? reorderedPages.findIndex((entry) => entry.id === targetPageId)
-        : -1;
-      const insertionIndex = targetIndex < 0
-        ? reorderedPages.length
-        : targetIndex + (position === 'after' ? 1 : 0);
-      reorderedPages.splice(insertionIndex, 0, initialPage);
-      const orderByPageId = new Map<string, number>(
-        reorderedPages.map((entry, index) => [entry.id, index] as const),
-      );
-      const hasChanged = reorderedPages.some((entry, index) =>
-        entry.id !== pagesInOrder[index]?.id || entry.pageOrder !== index,
-      );
-      if (!hasChanged) return initialPage;
-      const nextPages = storage.pages.map((entry) => orderByPageId.has(entry.id)
-        ? { ...entry, pageOrder: orderByPageId.get(entry.id) }
-        : entry);
-      await writeStorage({ pages: nextPages });
-      return nextPages.find((entry) => entry.id === initialPage.id)!;
+    let { page, sourceProject, destinationProject, sourceWorkspace, destinationWorkspace } =
+      getPageMoveContext(storage, pageId, destinationProjectId);
+    if (sourceProject.id === destinationProject.id) {
+      return reorderPageWithinProject(storage, page, targetPageId, position);
     }
 
     let syncConfig = storage.syncConfig;
