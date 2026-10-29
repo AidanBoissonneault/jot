@@ -2951,12 +2951,10 @@ export const notionClient = {
       ? Math.max(0, remoteQueue.failedCount ?? 0)
       : 0;
 
-    // Project state uses a separate durable client outbox. Deliver it before
-    // waiting for accepted page jobs so a slow or parked page cannot block a
-    // newly created Notion project from receiving its state.
-    if (remoteQueue.hasPending || failedUploadCount > 0) {
-      await deliverPendingProjectSyncEvents(syncConfig);
-    }
+    // Project state uses a separate durable client outbox. It can be the only
+    // pending work after page uploads have drained, so always check it during
+    // an explicit Sync instead of tying delivery to the server page queue.
+    await deliverPendingProjectSyncEvents(syncConfig);
     if (remoteQueue.hasPending) {
       onProgress?.({ phase: 'waiting_for_server', pending: remoteQueue.pendingCount ?? requeuedCount });
       failedUploadCount = Math.max(

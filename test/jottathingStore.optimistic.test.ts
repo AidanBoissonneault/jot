@@ -956,6 +956,45 @@ describe('project metadata', () => {
     expect(calls).not.toContain('http://localhost:8787/sync/reload');
   });
 
+  test('manual resync delivers project state when the page queue is already empty', async () => {
+    await addPendingProjectSyncEvent({ ...baseProject, syncMode: 'notion' });
+    const fetchMock = vi.fn(async (url: string) => {
+      if (String(url).endsWith('/sync/retry')) return jsonResponse({ requeuedCount: 0 });
+      if (String(url).endsWith('/sync/status')) return jsonResponse({ hasPending: false });
+      if (String(url).endsWith('/sync/project')) {
+        return jsonResponse({ status: 'saved', project: baseProject });
+      }
+      if (String(url).endsWith('/sync/validate')) {
+        return jsonResponse({
+          aheadPageIds: [],
+          failedPageIds: [],
+          newPageIds: [],
+          stalePageIds: [],
+          workspaceChanged: false,
+        });
+      }
+      if (String(url).endsWith('/sync/reload')) {
+        return jsonResponse({
+          activePageIdsByProject: { [baseProject.id]: basePage.id },
+          currentProjectId: baseProject.id,
+          pages: [basePage],
+          projects: [baseProject],
+          status: 'saved',
+        });
+      }
+      throw new Error(`Unexpected sync request: ${String(url)}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await notionClient.resyncPendingChanges();
+
+    expect(result.reloadedFromNotion).toBe(true);
+    expect(await listPendingProjectSyncEvents()).toEqual([]);
+    const calls = fetchMock.mock.calls.map(([url]) => String(url));
+    expect(calls.indexOf('http://localhost:8787/sync/project'))
+      .toBeLessThan(calls.indexOf('http://localhost:8787/sync/validate'));
+  });
+
   test('manual resync refreshes the session without running a second sync validation', async () => {
     const store = useJottathingStore();
     await seedStore(store);
