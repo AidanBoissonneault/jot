@@ -97,3 +97,5 @@ The block identity path now reads only `jottathingBlockId`: old `inkwellBlockId`
 Project database discovery now searches only the current `Projects` data source and `Jottathing` database titles; legacy `Inkwell` / `Jot` title searches and rename writes are removed. The project database suite passes (8 tests), and root typecheck passes.
 
 Local preferences, category colors, and legal consent now read only current Jottathing keys. Removed the old preference-key copy, old category palette translation, and Inkwell-domain legal acceptance rewrite. Preferences, legal, and category-color tests pass (9 tests), and root typecheck passes.
+
+Pending connection deletion now resumes only from `jottathingPendingConnectionDeletion`; old-key copying and the now-unused branded storage helper are removed. The startup deletion-resume test passes, and root typecheck passes.

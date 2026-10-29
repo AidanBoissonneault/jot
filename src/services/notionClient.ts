@@ -31,7 +31,6 @@ import type {
 } from '@/src/types/messages';
 import { normalizeCodeLanguage } from '@/src/lib/codeLanguages';
 import { cleanSyncServerUrl } from '@/src/lib/syncServerUrl';
-import { getBrandedStorageValue } from '@/src/services/brandedStorage';
 import { pruneOrphanedProjectStateSources } from '@/src/lib/projectStateSources';
 import { stripSyncConflictBlocks } from '@/src/lib/syncConflictReview';
 import type {
@@ -142,7 +141,6 @@ const DEFAULT_SYNC_CONFIG: SyncConfig = {
   connected: false,
 };
 const PENDING_CONNECTION_DELETION_KEY = 'jottathingPendingConnectionDeletion';
-const LEGACY_PENDING_CONNECTION_DELETION_KEY = 'inkwellPendingConnectionDeletion';
 const LEGACY_SYNC_CREDENTIALS_SCRUBBED_KEY = '__legacy_sync_credentials_scrubbed__';
 
 type PendingConnectionDeletion = {
@@ -152,6 +150,11 @@ type PendingConnectionDeletion = {
   userEmail?: string;
   workspaceId?: string;
 };
+
+async function pendingConnectionDeletion(): Promise<PendingConnectionDeletion | undefined> {
+  const stored = await browser.storage.local.get(PENDING_CONNECTION_DELETION_KEY);
+  return stored[PENDING_CONNECTION_DELETION_KEY] as PendingConnectionDeletion | undefined;
+}
 
 const defaultProjects: Project[] = [
   {
@@ -436,10 +439,7 @@ async function scrubLegacyExtensionSyncCredentials(): Promise<void> {
 async function recoverIdbWriteFence(): Promise<void> {
   if (!idbWriteRecoveryPromise) {
     idbWriteRecoveryPromise = (async () => {
-      const deletionState = await getBrandedStorageValue<PendingConnectionDeletion>(
-        PENDING_CONNECTION_DELETION_KEY,
-        LEGACY_PENDING_CONNECTION_DELETION_KEY,
-      );
+      const deletionState = await pendingConnectionDeletion();
       if (deletionState) {
         isConnectionDeletionPending = true;
         await pauseIdbWrites();
@@ -3261,10 +3261,7 @@ async function flushPendingSyncOps(
 }
 
 async function hasPendingConnectionDeletion(): Promise<boolean> {
-  const pending = Boolean(await getBrandedStorageValue<PendingConnectionDeletion>(
-    PENDING_CONNECTION_DELETION_KEY,
-    LEGACY_PENDING_CONNECTION_DELETION_KEY,
-  ));
+  const pending = Boolean(await pendingConnectionDeletion());
   if (pending) {
     isConnectionDeletionPending = true;
     if (queueDeliveryTimer) {
@@ -4932,10 +4929,7 @@ export const notionClient = {
 
   async refreshSyncSession(allowSignedOut = false): Promise<SyncConfig> {
     const { hasExplicitlyLoggedOut, syncConfig } = await readStorage();
-    const pendingDeletionState = await getBrandedStorageValue<PendingConnectionDeletion>(
-      PENDING_CONNECTION_DELETION_KEY,
-      LEGACY_PENDING_CONNECTION_DELETION_KEY,
-    );
+    const pendingDeletionState = await pendingConnectionDeletion();
     if (pendingDeletionState) {
       try {
         await notionClient.deleteConnection();
@@ -5546,10 +5540,7 @@ export const notionClient = {
 
   async deleteConnection(): Promise<{ notionTokenRevoked: boolean }> {
     const { syncConfig: storedSyncConfig } = await readStorage();
-    let pendingDeletion = await getBrandedStorageValue<PendingConnectionDeletion>(
-      PENDING_CONNECTION_DELETION_KEY,
-      LEGACY_PENDING_CONNECTION_DELETION_KEY,
-    );
+    let pendingDeletion = await pendingConnectionDeletion();
     if (pendingDeletion) {
       const isDifferentAuthenticatedConnection = storedSyncConfig.authenticated && (
         cleanSyncServerUrl(storedSyncConfig.serverUrl) !== pendingDeletion.serverUrl ||
