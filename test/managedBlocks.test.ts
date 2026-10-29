@@ -236,6 +236,28 @@ describe('managed block snapshot replacement', () => {
     expect(store.blockMappings['local-page']).toHaveLength(1);
     expect(replaceManagedBlocks).not.toHaveBeenCalled();
   });
+
+  test('rejects a retired full-page operation instead of falling back to document replacement', async () => {
+    const replaceManagedBlocks = vi.fn(async () => ({ createdBlocks: [] }));
+
+    await expect(applyManagedBlockOps({
+      store: { blockMappings: { 'local-page': [] } },
+      localPageId: 'local-page',
+      notionPageId: 'notion-page',
+      ops: [{ type: 'block_reorder', payload: {} }] as never,
+      content: { type: 'doc', content: [] },
+      appendManagedBlocks: vi.fn(),
+      deleteManagedBlock: vi.fn(),
+      updateManagedBlock: vi.fn(),
+      replaceManagedBlocks,
+      listAllBlockChildren: vi.fn(async () => []),
+      tiptapDocumentToNotionBlocks: vi.fn(() => []),
+      kindFromNotionBlock: vi.fn(() => 'paragraph'),
+      hash: vi.fn(() => 'hash'),
+    })).rejects.toThrow('unsupported block operation');
+
+    expect(replaceManagedBlocks).not.toHaveBeenCalled();
+  });
 });
 
 describe('managed block replacement safety', () => {

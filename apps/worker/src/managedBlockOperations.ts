@@ -1,4 +1,4 @@
-/** @file Applies granular create, update, delete, reset, and reorder block operations. */
+/** @file Applies reset snapshots and granular managed-block operations. */
 import type { DocumentContent } from '../../../src/types/capture.js';
 import type {
   BlockMapping,
@@ -11,13 +11,10 @@ import type {
   WorkerStore,
 } from './types.js';
 import {
-  desiredManagedBlocks,
   isUpdateCompatible,
   mappingFromDesired,
   mappingKey,
-  mappingsByJottathingId,
   positionAfter,
-  previousMappedBlockId,
 } from './managedBlockIdentity.js';
 import type { BlockPosition, DesiredManagedBlock } from './managedBlockIdentity.js';
 import { managedBlockSignature } from './managedBlockSignatures.js';
@@ -39,6 +36,13 @@ type UpdateManagedBlock = (
 ) => Promise<unknown>;
 type ConvertDocument = (content: DocumentContent) => NotionBlockPayload[];
 type ClassifyBlock = (block: Pick<NotionBlockPayload, 'type'>) => string;
+const CURRENT_OPERATION_TYPES = new Set<ManagedBlockOperation['type']>([
+  'page_upsert',
+  'blocks_reset',
+  'block_create',
+  'block_update',
+  'block_delete',
+]);
 
 type CreateManagedBlockOptions = Pick<ApplyManagedBlockOpsOptions,
   'appendManagedBlocks' | 'listAllBlockChildren' | 'localPageId' | 'notionPageId' | 'store'
@@ -73,7 +77,7 @@ interface ApplyManagedBlockOpsOptions {
   updateManagedBlock: UpdateManagedBlock;
 }
 
-/** Applies queued operations directly when possible, with full-document fallback. */
+/** Applies current reset and granular block operations. */
 export async function applyManagedBlockOps({
   store,
   localPageId,
@@ -90,6 +94,10 @@ export async function applyManagedBlockOps({
   listAllBlockChildren,
   hash,
 }: ApplyManagedBlockOpsOptions) {
+  if (ops.some((op) => !op || !CURRENT_OPERATION_TYPES.has(op.type))) {
+    throw new Error('Sync queue contains an unsupported block operation.');
+  }
+
   restoreLocalBlockBaseline(
     store.blockMappings[localPageId] ?? [],
     baselineContent,
@@ -98,137 +106,53 @@ export async function applyManagedBlockOps({
     localPageId,
     tiptapDocumentToNotionBlocks,
   );
-  const isGranularBatch = ops.every((op) =>
-    ['page_upsert', 'blocks_reset', 'block_create', 'block_update', 'block_delete'].includes(
-      op.type,
-    ),
-  );
-  if (isGranularBatch) {
-    const createdBlocks: Array<NotionBlock | undefined> = [];
-    if (ops.some((op) => op.type === 'blocks_reset')) {
-      const snapshotBlocks = ops
-        .filter((op) => op.type === 'block_create' && op.payload?.block)
-        .sort((first, second) => (first.payload.index ?? 0) - (second.payload.index ?? 0));
-      const snapshot = content.content?.length
-        ? content
-        : { type: 'doc', content: snapshotBlocks.map((op) => op.payload.block!) };
-      const knownMappings = store.blockMappings[localPageId] ?? [];
-      const snapshotIds = new Set(
-        (snapshot.content ?? [])
-          .map((node) => node.attrs?.jottathingBlockId)
-          .filter((id): id is string => typeof id === 'string' && Boolean(id)),
-      );
+  const createdBlocks: Array<NotionBlock | undefined> = [];
+  if (ops.some((op) => op.type === 'blocks_reset')) {
+    const snapshotBlocks = ops
+      .filter((op) => op.type === 'block_create' && op.payload?.block)
+      .sort((first, second) => (first.payload.index ?? 0) - (second.payload.index ?? 0));
+    const snapshot = content.content?.length
+      ? content
+      : { type: 'doc', content: snapshotBlocks.map((op) => op.payload.block!) };
+    const knownMappings = store.blockMappings[localPageId] ?? [];
+    const snapshotIds = new Set(
+      (snapshot.content ?? [])
+        .map((node) => node.attrs?.jottathingBlockId)
+        .filter((id): id is string => typeof id === 'string' && Boolean(id)),
+    );
 
-      // Queue payloads can split a full snapshot across messages. Only treat
-      // this chunk as a complete replacement when it covers every known block.
-      // Otherwise the per-block path below applies its creates without erasing
-      // blocks carried by a later message.
-      if (
-        snapshot.content?.length &&
-        knownMappings.every((mapping) => snapshotIds.has(mappingKey(mapping)))
-      ) {
-        return replaceManagedBlocks(store, localPageId, notionPageId, snapshot, baselineContent);
-      }
+    // Queue payloads can split a full snapshot across messages. Only treat
+    // this chunk as complete when it covers every known block; partial chunks
+    // apply their creates individually so later blocks remain intact.
+    if (
+      snapshot.content?.length &&
+      knownMappings.every((mapping) => snapshotIds.has(mappingKey(mapping)))
+    ) {
+      return replaceManagedBlocks(store, localPageId, notionPageId, snapshot, baselineContent);
     }
-    for (const op of ops) {
-      if (!['block_create', 'block_update', 'block_delete'].includes(op.type)) continue;
-      const result = await applySingleManagedBlockOp({
-        store,
-        localPageId,
-        notionPageId,
-        op,
-        content,
-        appendManagedBlocks,
-        deleteManagedBlock,
-        updateManagedBlock,
-        tiptapDocumentToNotionBlocks,
-        kindFromNotionBlock,
-        listAllBlockChildren,
-        hash,
-      });
-      createdBlocks.push(...(result?.createdBlocks ?? []));
-    }
-    return {
-      createdBlocks,
-      baselineContent: advanceLocalBaseline(baselineContent, content, ops),
-    };
   }
-
-  const notionBlocks = tiptapDocumentToNotionBlocks(content);
-  const desiredBlocks = desiredManagedBlocks({
-    content,
-    hash,
-    kindFromNotionBlock,
-    localPageId,
-    notionBlocks,
-  });
-  const desiredById = new Map(desiredBlocks.map((entry) => [entry.jottathingBlockId, entry]));
-  const existingMappings = store.blockMappings[localPageId] ?? [];
-  const existingById = mappingsByJottathingId(existingMappings);
-  const nextById = new Map(existingMappings.map((mapping) => [mappingKey(mapping), mapping]));
-  const createdByOrder: Array<NotionBlock | undefined> = [];
-
   for (const op of ops) {
-    const jottathingBlockId = op.jottathingBlockId;
-    if (!jottathingBlockId) continue;
-
-    if (op.type === 'block_delete') {
-      const existing = nextById.get(jottathingBlockId);
-      if (existing?.notionBlockId) await deleteManagedBlock(store, existing.notionBlockId);
-      nextById.delete(jottathingBlockId);
-      continue;
-    }
-
-    if (op.type !== 'block_create' && op.type !== 'block_update') continue;
-    const desired = desiredById.get(jottathingBlockId);
-    if (!desired) continue;
-
-    const existing = nextById.get(jottathingBlockId) ?? existingById.get(jottathingBlockId);
-    if (!existing?.notionBlockId) {
-      const createdBlock = await appendAndTrackBlock(
-        appendManagedBlocks,
-        store,
-        notionPageId,
-        desired.notionBlock,
-        positionAfter(previousMappedBlockId(desiredBlocks, nextById, desired.order)),
-        createdByOrder,
-        desired.order,
-      );
-      nextById.set(jottathingBlockId, mappingFromDesired(desired, createdBlock?.id, {}, createdBlock));
-      continue;
-    }
-
-    if (existing.lastSyncedHash === desired.lastSyncedHash) {
-      nextById.set(jottathingBlockId, mappingFromDesired(desired, existing.notionBlockId, existing));
-      continue;
-    }
-
-    if (isUpdateCompatible(existing, desired)) {
-      await updateManagedBlock(store, existing.notionBlockId, desired.notionBlock);
-      nextById.set(jottathingBlockId, mappingFromDesired(desired, existing.notionBlockId, existing));
-      continue;
-    }
-
-    await deleteManagedBlock(store, existing.notionBlockId);
-    const createdBlock = await appendAndTrackBlock(
-      appendManagedBlocks,
+    if (!['block_create', 'block_update', 'block_delete'].includes(op.type)) continue;
+    const result = await applySingleManagedBlockOp({
       store,
+      localPageId,
       notionPageId,
-      desired.notionBlock,
-      positionAfter(previousMappedBlockId(desiredBlocks, nextById, desired.order)),
-      createdByOrder,
-      desired.order,
-    );
-    nextById.set(jottathingBlockId, mappingFromDesired(desired, createdBlock?.id, existing, createdBlock));
+      op,
+      content,
+      appendManagedBlocks,
+      deleteManagedBlock,
+      updateManagedBlock,
+      tiptapDocumentToNotionBlocks,
+      kindFromNotionBlock,
+      listAllBlockChildren,
+      hash,
+    });
+    createdBlocks.push(...(result?.createdBlocks ?? []));
   }
-
-  store.blockMappings[localPageId] = desiredBlocks
-    .map((entry) => nextById.get(entry.jottathingBlockId))
-    .filter((mapping: BlockMapping | undefined): mapping is BlockMapping =>
-      Boolean(mapping?.notionBlockId),
-    );
-
-  return { createdBlocks: createdByOrder, notionBlocks, baselineContent: content };
+  return {
+    createdBlocks,
+    baselineContent: advanceLocalBaseline(baselineContent, content, ops),
+  };
 }
 
 /** Applies only acknowledged granular operations to the local three-way baseline. */
