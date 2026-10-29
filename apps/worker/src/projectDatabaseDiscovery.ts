@@ -601,12 +601,9 @@ export function createProjectDatabaseDiscoveryHelpers({
     } while (cursor);
   }
 
-  /** Adds missing managed views. @param store - Worker state. @param database - Database summary. @returns Completion promise. */
+  /** Creates and updates managed views. @param store - Worker state. @param database - Database summary. @returns Completion promise. */
   async function ensureProjectViews(store: WorkerStore, database: JottathingDatabase): Promise<void> {
     const existing = await listViews(store, database.databaseId);
-    const existingNames = new Set(
-      existing.map((view) => stringProperty(view, 'name')).filter(isString),
-    );
     const dataSource = await notionRequest(store, `/data_sources/${database.dataSourceId}`).catch(
       () => undefined,
     );
@@ -619,7 +616,18 @@ export function createProjectDatabaseDiscoveryHelpers({
 
     for (const view of views) {
       const viewName = stringProperty(view, 'name') ?? 'Unnamed view';
-      if (existingNames.has(viewName)) {
+      const existingView = existing.find((candidate) => stringProperty(candidate, 'name') === viewName);
+      if (existingView) {
+        const viewId = stringProperty(existingView, 'id');
+        if (viewId && needsPageFirstViewUpdate(existingView, view, propertyIds[PROJECT_PROPERTIES.title])) {
+          await notionRequest(store, `/views/${viewId}`, {
+            method: 'PATCH',
+            body: { configuration: view.configuration },
+          }).catch((error) => {
+            appendLog(store, 'project_view_update_error', `${viewName}: ${errorMessage(error)}`);
+            return undefined;
+          });
+        }
         continue;
       }
 
@@ -670,6 +678,26 @@ export function createProjectDatabaseDiscoveryHelpers({
   return { ensureProjectDatabase };
 }
 
+/** Checks whether a managed view keeps the project page visible in the first column. */
+function needsPageFirstViewUpdate(
+  existingView: NotionObject,
+  desiredView: JsonObject,
+  titlePropertyId: string | undefined,
+): boolean {
+  if (!titlePropertyId) return false;
+  const currentConfiguration = objectProperty(existingView, 'configuration');
+  const desiredConfiguration = objectProperty(desiredView, 'configuration');
+  const currentProperties = Array.isArray(currentConfiguration?.properties)
+    ? currentConfiguration.properties.filter(isJsonObject)
+    : [];
+  const firstVisibleProperty = currentProperties.find((property) => property.visible !== false);
+  const pageIsFirst = firstVisibleProperty?.property_id === titlePropertyId;
+  const needsFrozenTitle =
+    desiredConfiguration?.type === 'table' && currentConfiguration?.frozen_column_index !== 1;
+
+  return !pageIsFirst || needsFrozenTitle;
+}
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -688,6 +716,12 @@ function checkboxValue(property: JsonObject | undefined): boolean {
   return property?.checkbox === true;
 }
 
-function isString(value: string | undefined): value is string {
-  return typeof value === 'string';
+function objectProperty(value: unknown, key: string): JsonObject | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const property: unknown = (value as JsonObject)[key];
+  return isJsonObject(property) ? property : undefined;
+}
+
+function isJsonObject(value: unknown): value is JsonObject {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value));
 }

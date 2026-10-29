@@ -136,7 +136,12 @@ export function tableConfiguration(
   propertyIds: Record<string, string>,
   { visible }: { visible: string[] },
 ): JsonObject {
-  return { type: 'table', properties: propertyVisibility(propertyIds, visible), wrap_cells: false };
+  return {
+    type: 'table',
+    properties: propertyVisibility(propertyIds, visible),
+    wrap_cells: false,
+    frozen_column_index: 1,
+  };
 }
 
 /**
@@ -150,8 +155,12 @@ export function propertyVisibility(
   visibleNames: string[],
 ): Array<{ property_id: string; visible: boolean }> {
   const visible = new Set(visibleNames);
-  return Object.entries(propertyIds).map(([name, propertyId]) => ({
-    property_id: propertyId,
+  const orderedNames = [
+    ...visibleNames.filter((name, index) => visibleNames.indexOf(name) === index && propertyIds[name]),
+    ...Object.keys(propertyIds).filter((name) => !visible.has(name)),
+  ];
+  return orderedNames.map((name) => ({
+    property_id: propertyIds[name],
     visible: visible.has(name),
   }));
 }
