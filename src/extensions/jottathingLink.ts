@@ -2,7 +2,6 @@ import Link from '@tiptap/extension-link';
 import type { SourceOpenPayload } from '@/src/types/messages';
 
 export const JOTTATHING_SOURCE_ATTR = 'jottathingSource';
-const LEGACY_SOURCE_DATA_ATTR = 'data-inkwell-source';
 
 /**
  * Source data is persisted once on a captured block. Short keys and a relative
@@ -188,8 +187,7 @@ export const JottathingLink = Link.extend({
       [JOTTATHING_SOURCE_ATTR]: {
         default: null,
         parseHTML: (element) =>
-          element.getAttribute('data-jottathing-source') ??
-          element.getAttribute(LEGACY_SOURCE_DATA_ATTR),
+          element.getAttribute('data-jottathing-source'),
         renderHTML: (attributes) => {
           const value = attributes[JOTTATHING_SOURCE_ATTR];
 

@@ -9,7 +9,6 @@ import {
 } from '@/src/extensions/jottathingLink';
 
 const JOTTATHING_BLOCK_ID_ATTR = 'jottathingBlockId';
-const LEGACY_SOURCE_DATA_ATTR = 'data-inkwell-source';
 
 const TOP_LEVEL_BLOCK_TYPES = [
   'paragraph',
@@ -48,8 +47,7 @@ export const JottathingBlockIds = Extension.create({
             default: null,
             parseHTML: (element) => {
               const payload = decodeJottathingSource(
-                element.getAttribute('data-jottathing-source') ??
-                element.getAttribute(LEGACY_SOURCE_DATA_ATTR),
+                element.getAttribute('data-jottathing-source'),
               );
               return payload ? storeJottathingSource(payload) : null;
             },
@@ -109,18 +107,6 @@ export function normalizeJottathingBlockIds(content: DocumentContent): DocumentC
   const normalizedChildren = children.map((originalNode, index) => {
     let node = stripEmptySourceAttributes(originalNode);
     changed ||= node !== originalNode;
-    const sourceAttrs = node.attrs ?? {};
-    if ('inkwellSource' in sourceAttrs) {
-      const { inkwellSource, ...attrs } = sourceAttrs;
-      node = {
-        ...node,
-        attrs: {
-          ...attrs,
-          ...(attrs[JOTTATHING_SOURCE_ATTR] == null ? { [JOTTATHING_SOURCE_ATTR]: inkwellSource } : {}),
-        },
-      };
-      changed = true;
-    }
     const canOwnSource =
       node.type === 'blockquote' ||
       node.type === 'codeBlock' ||

@@ -9,6 +9,7 @@ import {
 import {
   addSourceToProjectState,
   capturedBlockId,
+  isProjectStateMetadataNode,
   mergeVisibleProjectState,
   migratePageSourcesToProjectState,
   sourceFromProjectState,
@@ -119,6 +120,28 @@ describe('captured source provenance', () => {
     };
 
     expect(sourceFromProjectState(state, 'forged')).toBeNull();
+  });
+
+  it('ignores retired Inkwell source metadata formats', () => {
+    const legacyEntry = {
+      type: 'codeBlock',
+      content: [{
+        type: 'text',
+        text: `inkwell_source_v1:${JSON.stringify({ blockId: 'block-1', source })}`,
+      }],
+    };
+    const legacyRegistry = {
+      type: 'codeBlock',
+      content: [{
+        type: 'text',
+        text: `inkwell_sources_v1:${JSON.stringify({ 'block-1': storeJottathingSource(source) })}`,
+      }],
+    };
+
+    expect(sourceFromProjectState({ type: 'doc', content: [legacyEntry] }, 'block-1')).toBeNull();
+    expect(isProjectStateMetadataNode(legacyEntry)).toBe(false);
+    expect(sourceFromProjectState({ type: 'doc', content: [legacyRegistry] }, 'block-1')).toBeNull();
+    expect(isProjectStateMetadataNode(legacyRegistry)).toBe(false);
   });
 
   it('stores each origin as its own stable state block and replaces retries', () => {

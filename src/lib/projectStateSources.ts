@@ -1,14 +1,10 @@
 import type { DocumentContent } from '../types/capture.js';
 
 export const SOURCE_REGISTRY_PREFIX = 'jottathing_sources_v1:';
-export const LEGACY_SOURCE_REGISTRY_PREFIX = 'inkwell_sources_v1:';
 export const SOURCE_ENTRY_PREFIX = 'jottathing_source_v1:';
-export const LEGACY_SOURCE_ENTRY_PREFIX = 'inkwell_source_v1:';
 export const SOURCE_BLOCK_ID_PREFIX = 'source:';
 export const SOURCE_V2_PREFIX = 'jottathing_source_v2:';
-export const LEGACY_SOURCE_V2_PREFIX = 'inkwell_source_v2:';
 export const LINKS_V1_PREFIX = 'jottathing_links_v1:';
-export const LEGACY_LINKS_V1_PREFIX = 'inkwell_links_v1:';
 
 /** Removes source entries that point to Jottathing blocks which no longer exist. */
 export function pruneOrphanedProjectStateSources(
@@ -20,7 +16,7 @@ export function pruneOrphanedProjectStateSources(
   const sourceV2Nodes: Array<{ node: DocumentContent; source: SourceV2 }> = [];
   const content = (stateContent.content ?? []).flatMap((node) => {
     const text = codeBlockText(node);
-    const sourceV2Payload = text ? prefixedPayload(text, SOURCE_V2_PREFIX, LEGACY_SOURCE_V2_PREFIX) : undefined;
+    const sourceV2Payload = text ? prefixedPayload(text, SOURCE_V2_PREFIX) : undefined;
     if (sourceV2Payload !== undefined) {
       const source = parseSourceV2(sourceV2Payload);
       if (source?.jottathingBlockId && !existingJottathingBlockIds.has(source.jottathingBlockId)) {
@@ -32,7 +28,7 @@ export function pruneOrphanedProjectStateSources(
       return [node];
     }
 
-    const sourceEntryPayload = text ? prefixedPayload(text, SOURCE_ENTRY_PREFIX, LEGACY_SOURCE_ENTRY_PREFIX) : undefined;
+    const sourceEntryPayload = text ? prefixedPayload(text, SOURCE_ENTRY_PREFIX) : undefined;
     if (sourceEntryPayload !== undefined) {
       const blockId = sourceEntryBlockId(sourceEntryPayload);
       if (blockId && !existingJottathingBlockIds.has(blockId)) {
@@ -42,7 +38,7 @@ export function pruneOrphanedProjectStateSources(
       return [node];
     }
 
-    const registryPayload = text ? prefixedPayload(text, SOURCE_REGISTRY_PREFIX, LEGACY_SOURCE_REGISTRY_PREFIX) : undefined;
+    const registryPayload = text ? prefixedPayload(text, SOURCE_REGISTRY_PREFIX) : undefined;
     if (registryPayload === undefined) return [node];
     const registry = parseRegistry(registryPayload);
     if (!registry) return [node];
@@ -73,7 +69,7 @@ export function pruneOrphanedProjectStateSources(
   const sourceV2Replacements = new Map<DocumentContent, DocumentContent>();
   const contentWithLinks = content.flatMap((node) => {
     const text = codeBlockText(node);
-    const linksPayload = text ? prefixedPayload(text, LINKS_V1_PREFIX, LEGACY_LINKS_V1_PREFIX) : undefined;
+    const linksPayload = text ? prefixedPayload(text, LINKS_V1_PREFIX) : undefined;
     if (linksPayload === undefined) return [node];
 
     const links = parseLinks(linksPayload);
@@ -126,19 +122,19 @@ export function pruneOrphanedProjectStateSources(
 /** Reads captured Jottathing block IDs referenced by one project-state source node. */
 export function projectStateSourceBlockIds(node: DocumentContent): string[] {
   const text = codeBlockText(node);
-  const sourceEntryPayload = text ? prefixedPayload(text, SOURCE_ENTRY_PREFIX, LEGACY_SOURCE_ENTRY_PREFIX) : undefined;
+  const sourceEntryPayload = text ? prefixedPayload(text, SOURCE_ENTRY_PREFIX) : undefined;
   if (sourceEntryPayload !== undefined) {
     const blockId = sourceEntryBlockId(sourceEntryPayload);
     return blockId ? [blockId] : [];
   }
 
-  const sourceV2Payload = text ? prefixedPayload(text, SOURCE_V2_PREFIX, LEGACY_SOURCE_V2_PREFIX) : undefined;
+  const sourceV2Payload = text ? prefixedPayload(text, SOURCE_V2_PREFIX) : undefined;
   if (sourceV2Payload !== undefined) {
     const source = parseSourceV2(sourceV2Payload);
     return source?.jottathingBlockId ? [source.jottathingBlockId] : [];
   }
 
-  const registryPayload = text ? prefixedPayload(text, SOURCE_REGISTRY_PREFIX, LEGACY_SOURCE_REGISTRY_PREFIX) : undefined;
+  const registryPayload = text ? prefixedPayload(text, SOURCE_REGISTRY_PREFIX) : undefined;
   if (registryPayload !== undefined) {
     const registry = parseRegistry(registryPayload);
     return registry ? Object.keys(registry) : [];
@@ -152,10 +148,8 @@ type SourceV2 = {
   source: Record<string, unknown> & { u?: unknown };
 };
 
-function prefixedPayload(text: string, prefix: string, legacyPrefix: string): string | undefined {
-  if (text.startsWith(prefix)) return text.slice(prefix.length);
-  if (text.startsWith(legacyPrefix)) return text.slice(legacyPrefix.length);
-  return undefined;
+function prefixedPayload(text: string, prefix: string): string | undefined {
+  return text.startsWith(prefix) ? text.slice(prefix.length) : undefined;
 }
 
 function parseSourceV2(value: string): SourceV2 | undefined {

@@ -9,13 +9,9 @@ import {
 import {
   SOURCE_BLOCK_ID_PREFIX,
   SOURCE_ENTRY_PREFIX,
-  LEGACY_SOURCE_ENTRY_PREFIX,
   SOURCE_V2_PREFIX,
-  LEGACY_SOURCE_V2_PREFIX,
   LINKS_V1_PREFIX,
-  LEGACY_LINKS_V1_PREFIX,
   SOURCE_REGISTRY_PREFIX,
-  LEGACY_SOURCE_REGISTRY_PREFIX,
 } from '@/src/lib/projectStateSources';
 
 type SourceRegistry = Record<string, StoredJottathingSource>;
@@ -234,8 +230,7 @@ function stateNodesForStorage(content: DocumentContent) {
 export function isProjectStateMetadataNode(node: DocumentContent) {
   const text = codeBlockText(node);
   return sourceRegistryText(node) !== null || sourceEntryText(node) !== null ||
-    Boolean(text?.startsWith(SOURCE_V2_PREFIX) || text?.startsWith(LEGACY_SOURCE_V2_PREFIX) ||
-      text?.startsWith(LINKS_V1_PREFIX) || text?.startsWith(LEGACY_LINKS_V1_PREFIX));
+    Boolean(text?.startsWith(SOURCE_V2_PREFIX) || text?.startsWith(LINKS_V1_PREFIX));
 }
 
 function sourceEntry(node: DocumentContent): {
@@ -259,18 +254,12 @@ function sourceEntry(node: DocumentContent): {
 
 function sourceEntryText(node: DocumentContent) {
   const text = codeBlockText(node);
-  if (text?.startsWith(SOURCE_ENTRY_PREFIX)) return text.slice(SOURCE_ENTRY_PREFIX.length);
-  return text?.startsWith(LEGACY_SOURCE_ENTRY_PREFIX)
-    ? text.slice(LEGACY_SOURCE_ENTRY_PREFIX.length)
-    : null;
+  return text?.startsWith(SOURCE_ENTRY_PREFIX) ? text.slice(SOURCE_ENTRY_PREFIX.length) : null;
 }
 
 function sourceRegistryText(node: DocumentContent) {
   const text = codeBlockText(node);
-  if (text?.startsWith(SOURCE_REGISTRY_PREFIX)) return text.slice(SOURCE_REGISTRY_PREFIX.length);
-  return text?.startsWith(LEGACY_SOURCE_REGISTRY_PREFIX)
-    ? text.slice(LEGACY_SOURCE_REGISTRY_PREFIX.length)
-    : null;
+  return text?.startsWith(SOURCE_REGISTRY_PREFIX) ? text.slice(SOURCE_REGISTRY_PREFIX.length) : null;
 }
 
 function codeBlockText(node: DocumentContent) {
