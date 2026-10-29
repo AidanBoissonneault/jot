@@ -312,16 +312,23 @@ describe('managed block replacement safety', () => {
     ]);
   });
 
-  test('stops safely when unmapped remote content does not match the local snapshot', async () => {
+  test('preserves unmapped remote content alongside the local snapshot', async () => {
     const existingBlocks = [{
       id: 'unmapped-user-content',
       type: 'paragraph',
-      paragraph: { rich_text: [{ type: 'text', text: { content: 'Keep this note' } }] },
+      paragraph: {
+        rich_text: [{
+          type: 'text',
+          text: { content: 'Keep this note', link: null },
+          plain_text: 'Keep this note',
+          href: null,
+        }],
+      },
     }] as never[];
     const deleteManagedBlock = vi.fn();
-    const appendManagedBlocks = vi.fn();
+    const appendManagedBlocks = vi.fn(async () => [{ id: 'created-local-block' }]);
 
-    await expect(replaceManagedBlocks({
+    const result = await replaceManagedBlocks({
       store: { blockMappings: {} },
       localPageId: 'local-page',
       notionPageId: 'notion-page',
@@ -333,17 +340,25 @@ describe('managed block replacement safety', () => {
       deleteManagedBlock,
       appendManagedBlocks,
       updateManagedBlock: vi.fn(),
-      tiptapDocumentToNotionBlocks: vi.fn(() => [{
-        object: 'block',
-        type: 'paragraph',
-        paragraph: { rich_text: [{ type: 'text', text: { content: 'Different local note' } }] },
-      }]),
+      tiptapDocumentToNotionBlocks: vi.fn((document) => (document.content ?? []).map((node) => {
+        const text = (node.content ?? []).map((child) => child.text ?? '').join('');
+        return {
+          object: 'block',
+          type: 'paragraph',
+          paragraph: { rich_text: [{ type: 'text', text: { content: text } }] },
+        };
+      })),
       kindFromNotionBlock: vi.fn(() => 'paragraph'),
       hash: vi.fn(() => 'hash'),
-    })).rejects.toThrow('Review the sync diff and merge the blocks');
+    });
 
     expect(deleteManagedBlock).not.toHaveBeenCalled();
-    expect(appendManagedBlocks).not.toHaveBeenCalled();
+    expect(appendManagedBlocks).toHaveBeenCalledOnce();
+    expect(result.content.content?.map((node) => node.content?.[0]?.text)).toEqual([
+      'Different local note',
+      'Keep this note',
+    ]);
+    expect(result.notionBlocks).toHaveLength(2);
   });
 
   test('stages reordered blocks before deleting the old range', async () => {
