@@ -40,6 +40,15 @@ type UpdateManagedBlock = (
 type ConvertDocument = (content: DocumentContent) => NotionBlockPayload[];
 type ClassifyBlock = (block: Pick<NotionBlockPayload, 'type'>) => string;
 
+type CreateManagedBlockOptions = Pick<ApplyManagedBlockOpsOptions,
+  'appendManagedBlocks' | 'listAllBlockChildren' | 'localPageId' | 'notionPageId' | 'store'
+> & {
+  afterJottathingBlockId: string | undefined;
+  failureMessage: string;
+  mappings: BlockMapping[];
+  notionBlock: NotionBlockPayload;
+};
+
 /** Operation state and mutation dependencies used by granular queue updates. */
 interface ApplyManagedBlockOpsOptions {
   appendManagedBlocks: AppendManagedBlocks;
@@ -323,6 +332,17 @@ async function applySingleManagedBlockOp({
         ? op.payload.index
         : mappings.length,
   };
+  const createBlock = (kind: 'new' | 'replacement') => createOrRecoverManagedBlock({
+    appendManagedBlocks,
+    failureMessage: `Notion did not confirm the ${kind} block; existing content was preserved.`,
+    listAllBlockChildren,
+    localPageId,
+    notionBlock,
+    notionPageId,
+    afterJottathingBlockId: op.payload.afterJottathingBlockId,
+    mappings,
+    store,
+  });
   let nextMapping: BlockMapping;
   let createdBlock: NotionBlock | undefined;
 
@@ -350,7 +370,7 @@ async function applySingleManagedBlockOp({
       );
       if (replacement) {
         existing.notionBlockId = replacement.id;
-      } else if (current || existing.newState) {
+      } else {
         throw createBlockOperationConflict({
           blockId: desired.jottathingBlockId,
           baseState: existing.newState,
@@ -360,74 +380,24 @@ async function applySingleManagedBlockOp({
           localBlock: op.payload.block,
           remoteBlocks,
         });
-      } else {
-        existing.notionBlockId = undefined;
       }
     }
   }
 
   if (!existing?.notionBlockId) {
-    const previous = mappings.find(
-      (mapping) => mappingKey(mapping) === op.payload.afterJottathingBlockId && mapping.notionBlockId,
-    );
-    createdBlock = await findRetryCreatedBlock({
-      listAllBlockChildren,
-      localPageId,
-      notionBlock,
-      notionPageId,
-      previousBlockId: previous?.notionBlockId,
-      store,
-    });
-    if (!createdBlock) {
-      createdBlock = await appendAndTrackBlock(
-        appendManagedBlocks,
-        store,
-        notionPageId,
-        notionBlock,
-        positionAfter(previous?.notionBlockId),
-        [],
-        0,
-      );
-    }
-    if (!createdBlock?.id) {
-      throw new Error('Notion did not confirm the new block; existing content was preserved.');
-    }
-    nextMapping = mappingFromDesired(desired, createdBlock?.id, {}, createdBlock);
+    createdBlock = await createBlock('new');
+    nextMapping = mappingFromDesired(desired, createdBlock.id, {}, createdBlock);
   } else if (existing.lastSyncedHash === desired.lastSyncedHash) {
     nextMapping = mappingFromDesired(desired, existing.notionBlockId, existing);
   } else if (isUpdateCompatible(existing, desired)) {
     await updateManagedBlock(store, existing.notionBlockId, notionBlock);
     nextMapping = mappingFromDesired(desired, existing.notionBlockId, existing);
   } else {
-    const previous = mappings.find(
-      (mapping) => mappingKey(mapping) === op.payload.afterJottathingBlockId && mapping.notionBlockId,
-    );
-    createdBlock = await findRetryCreatedBlock({
-      listAllBlockChildren,
-      localPageId,
-      notionBlock,
-      notionPageId,
-      previousBlockId: previous?.notionBlockId,
-      store,
-    });
-    if (!createdBlock) {
-      createdBlock = await appendAndTrackBlock(
-        appendManagedBlocks,
-        store,
-        notionPageId,
-        notionBlock,
-        positionAfter(previous?.notionBlockId),
-        [],
-        0,
-      );
-    }
-    if (createdBlock?.id && createdBlock.id !== existing.notionBlockId) {
+    createdBlock = await createBlock('replacement');
+    if (createdBlock.id !== existing.notionBlockId) {
       await deleteManagedBlock(store, existing.notionBlockId);
     }
-    if (!createdBlock?.id) {
-      throw new Error('Notion did not confirm the replacement block; existing content was preserved.');
-    }
-    nextMapping = mappingFromDesired(desired, createdBlock?.id, existing, createdBlock);
+    nextMapping = mappingFromDesired(desired, createdBlock.id, existing, createdBlock);
   }
 
   if (existingIndex >= 0) mappings.splice(existingIndex, 1);
@@ -443,6 +413,42 @@ async function applySingleManagedBlockOp({
   mappings.splice(insertionIndex, 0, nextMapping);
   store.blockMappings[localPageId] = normalizeMappingOrder(mappings);
   return { createdBlocks: createdBlock ? [createdBlock] : [], notionBlocks: [notionBlock] };
+}
+
+/** Recovers an earlier queue write or appends the block after its mapped anchor. */
+async function createOrRecoverManagedBlock(options: CreateManagedBlockOptions): Promise<NotionBlock> {
+  const {
+    appendManagedBlocks,
+    failureMessage,
+    listAllBlockChildren,
+    localPageId,
+    notionBlock,
+    notionPageId,
+    afterJottathingBlockId,
+    mappings,
+    store,
+  } = options;
+  const previousBlockId = mappings.find((mapping) =>
+    mappingKey(mapping) === afterJottathingBlockId && mapping.notionBlockId,
+  )?.notionBlockId;
+  const created = await findRetryCreatedBlock({
+    listAllBlockChildren,
+    localPageId,
+    notionBlock,
+    notionPageId,
+    previousBlockId,
+    store,
+  }) ?? await appendAndTrackBlock(
+    appendManagedBlocks,
+    store,
+    notionPageId,
+    notionBlock,
+    positionAfter(previousBlockId),
+    [],
+    0,
+  );
+  if (!created?.id) throw new Error(failureMessage);
+  return created;
 }
 
 function createBlockOperationConflict({

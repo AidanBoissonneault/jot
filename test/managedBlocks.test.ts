@@ -156,6 +156,52 @@ describe('managed block snapshot replacement', () => {
     );
   });
 
+  test('confirms a replacement before deleting the mapped block', async () => {
+    const operations: string[] = [];
+    const store = {
+      blockMappings: {
+        'local-page': [{
+          jottathingBlockId: 'block-one',
+          localNodeId: 'block-one',
+          localPageId: 'local-page',
+          notionBlockId: 'old-remote',
+          kind: 'heading_1',
+          order: 0,
+          lastSyncedHash: 'old-hash',
+          oldState: { type: 'heading_1' },
+          newState: null,
+        }],
+      },
+    };
+    const oldRemoteBlock = { id: 'old-remote', type: 'heading_1', heading_1: {} } as never;
+
+    await applyManagedBlockOps({
+      store,
+      localPageId: 'local-page',
+      notionPageId: 'notion-page',
+      ops: [{
+        type: 'block_update',
+        jottathingBlockId: 'block-one',
+        payload: { block: { type: 'paragraph', attrs: { jottathingBlockId: 'block-one' } } },
+      }],
+      content: { type: 'doc', content: [] },
+      appendManagedBlocks: vi.fn(async () => {
+        operations.push('append');
+        return [{ id: 'new-remote' }];
+      }),
+      deleteManagedBlock: vi.fn(async () => { operations.push('delete-old'); }),
+      updateManagedBlock: vi.fn(),
+      replaceManagedBlocks: vi.fn(),
+      listAllBlockChildren: vi.fn(async () => [oldRemoteBlock]),
+      tiptapDocumentToNotionBlocks: vi.fn(() => [{ type: 'paragraph', paragraph: {} }]),
+      kindFromNotionBlock: vi.fn(() => 'paragraph'),
+      hash: vi.fn(() => 'new-hash'),
+    });
+
+    expect(operations).toEqual(['append', 'delete-old']);
+    expect(store.blockMappings['local-page'][0].notionBlockId).toBe('new-remote');
+  });
+
   test('ignores an empty replacement snapshot and preserves known mappings', async () => {
     const store = {
       blockMappings: {
