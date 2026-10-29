@@ -471,6 +471,162 @@ function createUntitledLocalWorkspaceContents(workspace: Workspace) {
   return { project, page };
 }
 
+/** Reuses the matching workspace or adds it while reporting whether storage changed. */
+function getOrCreateWorkspace(
+  workspaces: Workspace[],
+  kind: Workspace['kind'],
+  accountId: string | undefined,
+  notionWorkspaceId: string | undefined,
+  name: string | undefined,
+  now: string,
+): { workspace: Workspace; changed: boolean } {
+  const existingIndex = workspaces.findIndex((workspace) =>
+    workspace.kind === kind && workspace.accountId === accountId &&
+    (kind === 'local' || workspace.notionWorkspaceId === notionWorkspaceId),
+  );
+  if (existingIndex >= 0) {
+    const existing = workspaces[existingIndex];
+    if (name && existing.name !== name) {
+      const updated = { ...existing, name, updatedAt: now };
+      workspaces[existingIndex] = updated;
+      return { workspace: updated, changed: true };
+    }
+    return { workspace: existing, changed: false };
+  }
+
+  const workspace: Workspace = {
+    id: kind === 'local'
+      ? `workspace-local-${encodeURIComponent(accountId ?? 'device')}`
+      : `workspace-notion-${encodeURIComponent(accountId ?? 'unknown')}-${encodeURIComponent(notionWorkspaceId ?? 'unknown')}`,
+    name: name || (kind === 'local' ? 'Local workspace' : 'Notion workspace'),
+    kind,
+    ...(accountId ? { accountId } : {}),
+    ...(kind === 'notion' && notionWorkspaceId ? { notionWorkspaceId } : {}),
+    createdAt: now,
+    updatedAt: now,
+  };
+  workspaces.push(workspace);
+  return { workspace, changed: true };
+}
+
+type NormalizedWorkspaceRecords = {
+  projects: Project[];
+  pages: ProjectPage[];
+  workspaces: Workspace[];
+  localWorkspace: Workspace;
+  workspaceMigrationChanged: boolean;
+  sourceMigrationChanged: boolean;
+};
+
+/** Assigns workspace ownership, creates the local starter workspace, and moves page sources into project state. */
+function normalizeStoredWorkspaceRecords(
+  projects: Project[],
+  pages: ProjectPage[],
+  storedWorkspaces: Workspace[] | undefined,
+  syncConfig: SyncConfig,
+  legacyAccountId: string | undefined,
+  legacyWorkspaceId: string | undefined,
+): NormalizedWorkspaceRecords {
+  let allProjects = projects;
+  let allPages = pages;
+  let allWorkspaces = [...(storedWorkspaces ?? [])];
+  let workspaceMigrationChanged = !storedWorkspaces;
+  const workspaceAccountId = syncConfig.userId ?? syncConfig.syncQueueOwnerUserId ?? undefined;
+  const now = new Date().toISOString();
+  const ensureWorkspace = (
+    kind: Workspace['kind'],
+    accountId?: string,
+    notionWorkspaceId?: string,
+    name?: string,
+  ): Workspace => {
+    const result = getOrCreateWorkspace(allWorkspaces, kind, accountId, notionWorkspaceId, name, now);
+    workspaceMigrationChanged ||= result.changed;
+    return result.workspace;
+  };
+
+  if (syncConfig.authenticated && syncConfig.userId) {
+    if (allWorkspaces.some((workspace) => workspace.kind === 'local' && !workspace.accountId)) {
+      workspaceMigrationChanged = true;
+    }
+    allWorkspaces = allWorkspaces.map((workspace) => workspace.kind === 'local' && !workspace.accountId
+      ? { ...workspace, accountId: syncConfig.userId, updatedAt: now }
+      : workspace);
+  }
+  if (syncConfig.authenticated && syncConfig.userId && syncConfig.workspaceId) {
+    ensureWorkspace('notion', syncConfig.userId, syncConfig.workspaceId, syncConfig.workspaceName);
+  }
+  const localWorkspace = ensureWorkspace('local', workspaceAccountId);
+  const projectWorkspaceIds = new Map<string, string>();
+  for (const project of allProjects) {
+    const projectPages = allPages.filter((page) => page.projectId === project.id);
+    const assignedWorkspace = allWorkspaces.find((workspace) => workspace.id === project.workspaceId);
+    const notionPage = projectPages.find((page) => page.syncMode === 'notion');
+    const scopedLocalPage = projectPages.find((page) => page.syncAccountId);
+    const workspace = assignedWorkspace ?? (notionPage
+      ? ensureWorkspace(
+          'notion',
+          notionPage.syncAccountId ?? legacyAccountId,
+          notionPage.syncWorkspaceId ?? legacyWorkspaceId,
+          syncConfig.workspaceName,
+        )
+      : scopedLocalPage
+        ? ensureWorkspace('local', scopedLocalPage.syncAccountId)
+        : localWorkspace);
+    projectWorkspaceIds.set(project.id, workspace.id);
+    if (project.workspaceId !== workspace.id || project.syncMode !== workspace.kind) {
+      workspaceMigrationChanged = true;
+    }
+  }
+  allProjects = allProjects.map((project) => {
+    const workspaceId = projectWorkspaceIds.get(project.id) ?? project.workspaceId ?? localWorkspace.id;
+    const workspace = allWorkspaces.find((entry) => entry.id === workspaceId) ?? localWorkspace;
+    return { ...project, workspaceId, syncMode: workspace.kind };
+  });
+  const workspaceIdByProject = new Map(allProjects.map((project) => [project.id, project.workspaceId]));
+  allPages = allPages.map((page) => {
+    const workspaceId = workspaceIdByProject.get(page.projectId) ?? page.workspaceId ?? localWorkspace.id;
+    const workspace = allWorkspaces.find((entry) => entry.id === workspaceId) ?? localWorkspace;
+    const syncAccountId = workspace.accountId;
+    const syncWorkspaceId = workspace.kind === 'notion' ? workspace.notionWorkspaceId : undefined;
+    if (
+      page.workspaceId !== workspaceId || page.syncMode !== workspace.kind ||
+      page.syncAccountId !== syncAccountId || page.syncWorkspaceId !== syncWorkspaceId
+    ) workspaceMigrationChanged = true;
+    return { ...page, workspaceId, syncMode: workspace.kind, syncAccountId, syncWorkspaceId };
+  });
+  if (!allProjects.some((project) => project.workspaceId === localWorkspace.id)) {
+    const { project, page } = createUntitledLocalWorkspaceContents(localWorkspace);
+    allProjects = [project, ...allProjects];
+    allPages = [...allPages, page];
+    workspaceMigrationChanged = true;
+  }
+
+  const stateByProjectId = new Map(allProjects.map((project) => [project.id, project.stateContent]));
+  let sourceMigrationChanged = false;
+  allPages = allPages.map((page) => {
+    const migration = migratePageSourcesToProjectState(page.content, stateByProjectId.get(page.projectId));
+    if (!migration.changed) return page;
+    sourceMigrationChanged = true;
+    stateByProjectId.set(page.projectId, migration.stateContent);
+    return { ...page, content: migration.content };
+  });
+  if (sourceMigrationChanged) {
+    allProjects = allProjects.map((project) => ({
+      ...project,
+      stateContent: stateByProjectId.get(project.id) ?? project.stateContent,
+    }));
+  }
+
+  return {
+    projects: allProjects,
+    pages: allPages,
+    workspaces: allWorkspaces,
+    localWorkspace,
+    workspaceMigrationChanged,
+    sourceMigrationChanged,
+  };
+}
+
 async function readStorage(): Promise<Required<JottathingStorage>> {
   await recoverIdbWriteFence();
   await migrateStorageToIdb();
@@ -509,124 +665,20 @@ async function readStorage(): Promise<Required<JottathingStorage>> {
     legacyAccountId,
     legacyWorkspaceId,
   ));
-  let allWorkspaces = [...(stored.workspaces ?? [])];
-  let workspaceMigrationChanged = !stored.workspaces;
-  const workspaceAccountId = syncConfig.userId ?? syncConfig.syncQueueOwnerUserId ?? undefined;
-  const now = new Date().toISOString();
-  const ensureWorkspace = (
-    kind: Workspace['kind'],
-    accountId?: string,
-    notionWorkspaceId?: string,
-    name?: string,
-  ): Workspace => {
-    const existingIndex = allWorkspaces.findIndex((workspace) =>
-      workspace.kind === kind && workspace.accountId === accountId &&
-      (kind === 'local' || workspace.notionWorkspaceId === notionWorkspaceId),
-    );
-    if (existingIndex >= 0) {
-      const existing = allWorkspaces[existingIndex];
-      if (name && existing.name !== name) {
-        const updated = { ...existing, name, updatedAt: now };
-        allWorkspaces[existingIndex] = updated;
-        workspaceMigrationChanged = true;
-        return updated;
-      }
-      return existing;
-    }
-    const created: Workspace = {
-      id: kind === 'local'
-        ? `workspace-local-${encodeURIComponent(accountId ?? 'device')}`
-        : `workspace-notion-${encodeURIComponent(accountId ?? 'unknown')}-${encodeURIComponent(notionWorkspaceId ?? 'unknown')}`,
-      name: name || (kind === 'local' ? 'Local workspace' : 'Notion workspace'),
-      kind,
-      ...(accountId ? { accountId } : {}),
-      ...(kind === 'notion' && notionWorkspaceId ? { notionWorkspaceId } : {}),
-      createdAt: now,
-      updatedAt: now,
-    };
-    allWorkspaces.push(created);
-    workspaceMigrationChanged = true;
-    return created;
-  };
-  if (syncConfig.authenticated && syncConfig.userId) {
-    if (allWorkspaces.some((workspace) => workspace.kind === 'local' && !workspace.accountId)) {
-      workspaceMigrationChanged = true;
-    }
-    allWorkspaces = allWorkspaces.map((workspace) => workspace.kind === 'local' && !workspace.accountId
-      ? { ...workspace, accountId: syncConfig.userId, updatedAt: now }
-      : workspace);
-  }
-  if (syncConfig.authenticated && syncConfig.userId && syncConfig.workspaceId) {
-    ensureWorkspace('notion', syncConfig.userId, syncConfig.workspaceId, syncConfig.workspaceName);
-  }
-  const localWorkspace = ensureWorkspace('local', workspaceAccountId);
-  const projectWorkspaceIds = new Map<string, string>();
-  for (const project of allProjects) {
-    const projectPages = allPages.filter((page) => page.projectId === project.id);
-    const assignedWorkspace = allWorkspaces.find((workspace) => workspace.id === project.workspaceId);
-    const notionPage = projectPages.find((page) => page.syncMode === 'notion');
-    const workspace = assignedWorkspace ?? (notionPage
-      ? ensureWorkspace(
-          'notion',
-          notionPage.syncAccountId ?? legacyAccountId,
-          notionPage.syncWorkspaceId ?? legacyWorkspaceId,
-          syncConfig.workspaceName,
-        )
-      : projectPages.find((page) => page.syncAccountId)
-        ? ensureWorkspace('local', projectPages.find((page) => page.syncAccountId)?.syncAccountId)
-        : localWorkspace);
-    projectWorkspaceIds.set(project.id, workspace.id);
-    if (project.workspaceId !== workspace.id || project.syncMode !== workspace.kind) {
-      workspaceMigrationChanged = true;
-    }
-  }
-  allProjects = allProjects.map((project) => {
-    const workspaceId = projectWorkspaceIds.get(project.id) ?? project.workspaceId ?? localWorkspace.id;
-    const workspace = allWorkspaces.find((entry) => entry.id === workspaceId) ?? localWorkspace;
-    return { ...project, workspaceId, syncMode: workspace.kind };
-  });
-  const workspaceIdByProject = new Map(allProjects.map((project) => [project.id, project.workspaceId]));
-  allPages = allPages.map((page) => {
-    const workspaceId = workspaceIdByProject.get(page.projectId) ?? page.workspaceId ?? localWorkspace.id;
-    const workspace = allWorkspaces.find((entry) => entry.id === workspaceId) ?? localWorkspace;
-    const syncAccountId = workspace.accountId;
-    const syncWorkspaceId = workspace.kind === 'notion' ? workspace.notionWorkspaceId : undefined;
-    if (
-      page.workspaceId !== workspaceId || page.syncMode !== workspace.kind ||
-      page.syncAccountId !== syncAccountId || page.syncWorkspaceId !== syncWorkspaceId
-    ) workspaceMigrationChanged = true;
-    return { ...page, workspaceId, syncMode: workspace.kind, syncAccountId, syncWorkspaceId };
-  });
-  if (!allProjects.some((project) => project.workspaceId === localWorkspace.id)) {
-    const { project, page } = createUntitledLocalWorkspaceContents(localWorkspace);
-    allProjects = [project, ...allProjects];
-    allPages = [...allPages, page];
-    workspaceMigrationChanged = true;
-  }
-  const stateByProjectId = new Map(
-    allProjects.map((project) => [project.id, project.stateContent]),
+  const workspaceRecords = normalizeStoredWorkspaceRecords(
+    allProjects,
+    allPages,
+    stored.workspaces,
+    syncConfig,
+    legacyAccountId,
+    legacyWorkspaceId,
   );
-  let sourceMigrationChanged = false;
-  allPages = allPages.map((page) => {
-    const migration = migratePageSourcesToProjectState(
-      page.content,
-      stateByProjectId.get(page.projectId),
-    );
-    if (!migration.changed) {
-      return page;
-    }
-
-    sourceMigrationChanged = true;
-    stateByProjectId.set(page.projectId, migration.stateContent);
-    return { ...page, content: migration.content };
-  });
-
-  if (sourceMigrationChanged) {
-    allProjects = allProjects.map((project) => ({
-      ...project,
-      stateContent: stateByProjectId.get(project.id) ?? project.stateContent,
-    }));
-  }
+  allProjects = workspaceRecords.projects;
+  allPages = workspaceRecords.pages;
+  let allWorkspaces = workspaceRecords.workspaces;
+  const localWorkspace = workspaceRecords.localWorkspace;
+  let workspaceMigrationChanged = workspaceRecords.workspaceMigrationChanged;
+  const sourceMigrationChanged = workspaceRecords.sourceMigrationChanged;
   const allActivePageIdsByProject = createCompatibleActivePageIds(
     allProjects,
     allPages,
