@@ -27,148 +27,139 @@ export function isNotionFileUploadBlock(block: NotionBlockPayload): boolean {
   );
 }
 
+type TiptapNodeConverter = (node: DocumentContent) => NotionBlockPayload;
+
+// Nodes without a specialized writer become ordinary paragraphs.
+const tiptapNodeConverters: Partial<Record<string, TiptapNodeConverter>> = {
+  heading: headingBlock,
+  blockquote: quoteBlock,
+  codeBlock: codeBlock,
+  bulletList: listBlock,
+  orderedList: listBlock,
+  taskList: taskListBlock,
+  horizontalRule: () => ({ object: 'block', type: 'divider', divider: {} }),
+  image: imageBlock,
+  youtube: youtubeBlock,
+  audio: audioBlock,
+};
+
 /**
  * Converts one supported Tiptap node to its closest Notion block representation.
  * @param node - Tiptap node to convert.
  * @returns A Notion child-block payload.
  */
 function tiptapNodeToNotionBlock(node: DocumentContent): NotionBlockPayload {
-  const richText = inlineContentToRichText(node.content);
+  const converter = node.type ? tiptapNodeConverters[node.type] : undefined;
+  return converter?.(node) ?? fallbackBlock(node);
+}
 
-  if (node.type === 'heading') {
-    // Notion's current block API supports headings 1 through 4.
-    const level = Math.min(4, Math.max(1, Number(node.attrs?.level ?? 2)));
-    return {
-      object: 'block',
-      type: `heading_${level}`,
-      [`heading_${level}`]: {
-        rich_text: richText,
-        color: 'default',
-        is_toggleable: false,
-      },
-    };
-  }
+function headingBlock(node: DocumentContent): NotionBlockPayload {
+  // Notion's current block API supports headings 1 through 4.
+  const level = Math.min(4, Math.max(1, Number(node.attrs?.level ?? 2)));
+  return {
+    object: 'block',
+    type: `heading_${level}`,
+    [`heading_${level}`]: {
+      rich_text: inlineContentToRichText(node.content),
+      color: 'default',
+      is_toggleable: false,
+    },
+  };
+}
 
-  if (node.type === 'blockquote') {
-    return {
-      object: 'block',
-      type: 'quote',
-      quote: {
-        rich_text: richText,
-        color: 'default',
-      },
-    };
-  }
+function quoteBlock(node: DocumentContent): NotionBlockPayload {
+  return {
+    object: 'block',
+    type: 'quote',
+    quote: { rich_text: inlineContentToRichText(node.content), color: 'default' },
+  };
+}
 
-  if (node.type === 'codeBlock') {
-    return {
-      object: 'block',
-      type: 'code',
-      code: {
-        rich_text: plainRichText(textFromNode(node)),
-        language: normalizeCodeLanguage(node.attrs?.language),
-      },
-    };
-  }
+function codeBlock(node: DocumentContent): NotionBlockPayload {
+  return {
+    object: 'block',
+    type: 'code',
+    code: {
+      rich_text: plainRichText(textFromNode(node)),
+      language: normalizeCodeLanguage(node.attrs?.language),
+    },
+  };
+}
 
-  if (node.type === 'bulletList' || node.type === 'orderedList') {
-    const listItems = node.content ?? [];
-    return {
-      object: 'block',
-      type: 'paragraph',
-      paragraph: {
-        rich_text: plainRichText(listItems.map((item) => `- ${textFromNode(item)}`).join('\n')),
-        color: 'default',
-      },
-    };
-  }
+function listBlock(node: DocumentContent): NotionBlockPayload {
+  const items = node.content ?? [];
+  return paragraphFallback(plainRichText(items.map((item) => `- ${textFromNode(item)}`).join('\n')));
+}
 
-  if (node.type === 'taskList') {
-    return {
-      object: 'block',
-      type: 'paragraph',
-      paragraph: {
-        rich_text: plainRichText(
-          (node.content ?? [])
-            .map((item) => `${item.attrs?.checked ? '[x]' : '[ ]'} ${textFromNode(item)}`)
-            .join('\n'),
-        ),
-        color: 'default',
-      },
-    };
-  }
+function taskListBlock(node: DocumentContent): NotionBlockPayload {
+  const items = (node.content ?? [])
+    .map((item) => `${item.attrs?.checked ? '[x]' : '[ ]'} ${textFromNode(item)}`)
+    .join('\n');
+  return paragraphFallback(plainRichText(items));
+}
 
-  if (node.type === 'horizontalRule') {
-    return {
-      object: 'block',
-      type: 'divider',
-      divider: {},
-    };
-  }
+function imageBlock(node: DocumentContent): NotionBlockPayload {
+  const src = stringProperty(node.attrs, 'src');
+  const fileUploadId = stringProperty(node.attrs, 'notionFileUploadId');
+  const rawCaption = node.attrs?.caption;
+  const caption = Array.isArray(rawCaption)
+    ? inlineContentToRichText(rawCaption as DocumentContent[])
+    : typeof rawCaption === 'string' && rawCaption.trim()
+      ? plainRichText(rawCaption.trim())
+      : [];
+  const captionPayload = caption.length ? { caption } : {};
 
-  if (node.type === 'image') {
-    const src = stringProperty(node.attrs, 'src');
-    const fileUploadId = stringProperty(node.attrs, 'notionFileUploadId');
-    const rawCaption = node.attrs?.caption;
-    const caption = Array.isArray(rawCaption)
-      ? inlineContentToRichText(rawCaption as DocumentContent[])
-      : typeof rawCaption === 'string' && rawCaption.trim()
-        ? plainRichText(rawCaption.trim())
-        : [];
-    const captionPayload = caption.length ? { caption } : {};
-
-    if (fileUploadId) {
-      return {
-        object: 'block',
-        type: 'image',
-        image: { type: 'file_upload', file_upload: { id: fileUploadId }, ...captionPayload },
-      };
-    }
-
-    if (!src || !/^https?:\/\//i.test(src)) {
-      return paragraphFallback('');
-    }
-
+  if (fileUploadId) {
     return {
       object: 'block',
       type: 'image',
-      image: { type: 'external', external: { url: src }, ...captionPayload },
+      image: { type: 'file_upload', file_upload: { id: fileUploadId }, ...captionPayload },
     };
   }
 
-  if (node.type === 'youtube') {
-    const src = stringProperty(node.attrs, 'src');
-    if (!src) return paragraphFallback('');
-    const videoUrl = normalizeYoutubeVideoUrl(src);
-    if (!videoUrl) return paragraphFallback('');
+  if (!src || !/^https?:\/\//i.test(src)) return paragraphFallback('');
+  return {
+    object: 'block',
+    type: 'image',
+    image: { type: 'external', external: { url: src }, ...captionPayload },
+  };
+}
 
-    // Keep playback as an Jottathing concern. A regular linked paragraph remains
-    // usable in Notion clients and exports that do not support video embeds.
-    return paragraphFallback([
-      textNodeToRichText({
-        type: 'text',
-        text: videoUrl,
-        marks: [{ type: 'link', attrs: { href: videoUrl } }],
-      }),
-    ]);
+function youtubeBlock(node: DocumentContent): NotionBlockPayload {
+  const src = stringProperty(node.attrs, 'src');
+  const videoUrl = src ? normalizeYoutubeVideoUrl(src) : '';
+  if (!videoUrl) return paragraphFallback('');
+
+  // Keep playback as a link so it works in Notion clients without video support.
+  return paragraphFallback([textNodeToRichText({
+    type: 'text',
+    text: videoUrl,
+    marks: [{ type: 'link', attrs: { href: videoUrl } }],
+  })]);
+}
+
+function audioBlock(node: DocumentContent): NotionBlockPayload {
+  const src = stringProperty(node.attrs, 'src');
+  const fileUploadId = stringProperty(node.attrs, 'notionFileUploadId');
+
+  if (fileUploadId) {
+    return {
+      object: 'block',
+      type: 'audio',
+      audio: { type: 'file_upload', file_upload: { id: fileUploadId } },
+    };
   }
 
-  if (node.type === 'audio') {
-    const src = stringProperty(node.attrs, 'src');
-    const fileUploadId = stringProperty(node.attrs, 'notionFileUploadId');
+  if (!src || !/^https?:\/\//i.test(src)) return paragraphFallback('');
+  return {
+    object: 'block',
+    type: 'audio',
+    audio: { type: 'external', external: { url: src } },
+  };
+}
 
-    if (fileUploadId) {
-      return {
-        object: 'block',
-        type: 'audio',
-        audio: { type: 'file_upload', file_upload: { id: fileUploadId } },
-      };
-    }
-
-    if (!src || !/^https?:\/\//i.test(src)) return paragraphFallback('');
-    return { object: 'block', type: 'audio', audio: { type: 'external', external: { url: src } } };
-  }
-
+function fallbackBlock(node: DocumentContent): NotionBlockPayload {
+  const richText = inlineContentToRichText(node.content);
   return paragraphFallback(richText.length ? richText : plainRichText(''));
 }
 
@@ -218,7 +209,6 @@ function inlineContentToRichText(content: DocumentContent[] = []): NotionRichTex
 function textNodeToRichText(node: DocumentContent): NotionRichTextPayload {
   const marks = node.marks ?? [];
   const link = stringProperty(marks.find((mark) => mark.type === 'link')?.attrs, 'href');
-  const textStyle = marks.find((mark) => mark.type === 'textStyle')?.attrs ?? {};
 
   return {
     type: 'text',
@@ -232,7 +222,7 @@ function textNodeToRichText(node: DocumentContent): NotionRichTextPayload {
       strikethrough: marks.some((mark) => mark.type === 'strike'),
       underline: marks.some((mark) => mark.type === 'underline'),
       code: marks.some((mark) => mark.type === 'code'),
-      color: notionColor(textStyle.color),
+      color: 'default',
     },
   };
 }
@@ -278,9 +268,4 @@ function textFromNode(node: DocumentContent): string {
   }
 
   return (node.content ?? []).map(textFromNode).join('');
-}
-
-/** Maps an editor color to Notion's supported annotation color. */
-function notionColor(color: unknown): 'default' {
-  return typeof color === 'string' && color ? 'default' : 'default';
 }

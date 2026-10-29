@@ -290,3 +290,144 @@ describe('richTextToTiptapInline', () => {
     expect(doc.content[0].content).toBeUndefined();
   });
 });
+
+describe('tiptapNodeToNotionBlock edge cases', () => {
+  const listItem = (text: string) => ({
+    type: 'listItem',
+    content: [{ type: 'paragraph', content: [{ type: 'text', text }] }],
+  });
+  const taskItem = (text: string, checked: boolean) => ({
+    type: 'taskItem',
+    attrs: { checked },
+    content: [{ type: 'paragraph', content: [{ type: 'text', text }] }],
+  });
+
+  it('clamps heading levels and serializes lists and dividers', () => {
+    const blocks = tiptapDocumentToNotionBlocks({
+      type: 'doc',
+      content: [
+        { type: 'heading', attrs: { level: 0 } },
+        { type: 'heading', attrs: { level: 8 } },
+        { type: 'bulletList', content: [listItem('One')] },
+        { type: 'orderedList', content: [listItem('Two')] },
+        {
+          type: 'taskList',
+          content: [taskItem('Done', true), taskItem('Later', false)],
+        },
+        { type: 'horizontalRule' },
+      ],
+    });
+
+    expect(blocks.map((block) => block.type)).toEqual([
+      'heading_1',
+      'heading_4',
+      'paragraph',
+      'paragraph',
+      'paragraph',
+      'divider',
+    ]);
+    expect(blocks[2].paragraph.rich_text[0].text.content).toBe('- One');
+    expect(blocks[3].paragraph.rich_text[0].text.content).toBe('- Two');
+    expect(blocks[4].paragraph.rich_text[0].text.content).toBe('[x] Done\n[ ] Later');
+  });
+
+  it('keeps upload IDs ahead of URLs and falls back for invalid media URLs', () => {
+    const [image, invalidImage, audio, uploadedAudio, invalidAudio] = tiptapDocumentToNotionBlocks({
+      type: 'doc',
+      content: [
+        {
+          type: 'image',
+          attrs: {
+            src: 'https://example.com/image.png',
+            notionFileUploadId: 'image-upload',
+            caption: ' Caption ',
+          },
+        },
+        { type: 'image', attrs: { src: 'data:image/png;base64,abc' } },
+        { type: 'audio', attrs: { src: 'https://example.com/audio.mp3' } },
+        {
+          type: 'audio',
+          attrs: { src: 'https://example.com/ignored.mp3', notionFileUploadId: 'audio-upload' },
+        },
+        { type: 'audio', attrs: { src: 'javascript:alert(1)' } },
+      ],
+    });
+
+    expect(image.image).toMatchObject({
+      type: 'file_upload',
+      file_upload: { id: 'image-upload' },
+      caption: [{ text: { content: 'Caption' } }],
+    });
+    expect(invalidImage).toMatchObject({
+      type: 'paragraph',
+      paragraph: { rich_text: [{ text: { content: '' } }] },
+    });
+    expect(audio).toMatchObject({
+      type: 'audio',
+      audio: { type: 'external', external: { url: 'https://example.com/audio.mp3' } },
+    });
+    expect(uploadedAudio).toMatchObject({
+      type: 'audio',
+      audio: { type: 'file_upload', file_upload: { id: 'audio-upload' } },
+    });
+    expect(invalidAudio).toMatchObject({
+      type: 'paragraph',
+      paragraph: { rich_text: [{ text: { content: '' } }] },
+    });
+  });
+
+  it('preserves links and formatting while using Notion default text color', () => {
+    const [block] = tiptapDocumentToNotionBlocks({
+      type: 'doc',
+      content: [{
+        type: 'paragraph',
+        content: [{
+          type: 'text',
+          text: 'styled',
+          marks: [
+            { type: 'bold' },
+            { type: 'italic' },
+            { type: 'strike' },
+            { type: 'underline' },
+            { type: 'code' },
+            { type: 'link', attrs: { href: 'https://example.com' } },
+            { type: 'textStyle', attrs: { color: '#ff0000' } },
+          ],
+        }],
+      }],
+    });
+
+    expect(block.paragraph.rich_text[0]).toMatchObject({
+      text: { content: 'styled', link: { url: 'https://example.com' } },
+      annotations: {
+        bold: true,
+        italic: true,
+        strikethrough: true,
+        underline: true,
+        code: true,
+        color: 'default',
+      },
+    });
+  });
+
+  it('keeps unsupported node text and splits long code into Notion-safe chunks', () => {
+    const longCode = 'x'.repeat(4_001);
+    const [fallback, code] = tiptapDocumentToNotionBlocks({
+      type: 'doc',
+      content: [
+        {
+          type: 'customWidget',
+          content: [
+            { type: 'text', text: 'Keep me' },
+            { type: 'hardBreak' },
+            { type: 'text', text: 'too' },
+          ],
+        },
+        { type: 'codeBlock', content: [{ type: 'text', text: longCode }] },
+      ],
+    });
+
+    expect(fallback.paragraph.rich_text.map((item) => item.text.content)).toEqual(['Keep me', '\n', 'too']);
+    expect(code.code.rich_text.map((item) => item.text.content.length)).toEqual([2_000, 2_000, 1]);
+  });
+});
