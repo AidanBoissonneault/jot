@@ -1023,9 +1023,21 @@ function createCompatibleActivePageIds(
   }, {});
 }
 
+function projectUsesNotionSync(
+  project: Project,
+  pages: ProjectPage[],
+  workspaces: Workspace[],
+): boolean {
+  return project.syncMode === 'notion' ||
+    workspaces.some((workspace) =>
+      workspace.id === project.workspaceId && workspace.kind === 'notion',
+    ) ||
+    pages.some((page) => page.projectId === project.id && page.syncMode === 'notion');
+}
+
 async function syncProject(project: Project): Promise<Project | undefined> {
-  const { syncConfig, pages } = await readStorage();
-  if (!pages.some((page) => page.projectId === project.id && page.syncMode === 'notion')) {
+  const { syncConfig, pages, workspaces } = await readStorage();
+  if (!projectUsesNotionSync(project, pages, workspaces)) {
     return withProjectSyncStatus(project, 'saved');
   }
   const notionProject = { ...project, syncMode: 'notion' as const };
@@ -1096,8 +1108,8 @@ async function syncProjectSource(
   blockId: string,
   source: SourceOpenPayload,
 ): Promise<Project> {
-  const { syncConfig, pages } = await readStorage();
-  if (!pages.some((page) => page.projectId === project.id && page.syncMode === 'notion')) {
+  const { syncConfig, pages, workspaces } = await readStorage();
+  if (!projectUsesNotionSync(project, pages, workspaces)) {
     return withProjectSyncStatus(project, 'saved');
   }
   const notionProject = { ...project, syncMode: 'notion' as const };
