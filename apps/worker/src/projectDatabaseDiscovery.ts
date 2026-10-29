@@ -78,20 +78,8 @@ export function createProjectDatabaseDiscoveryHelpers({
     store.threadBlocks ??= {};
     store.blockMappings ??= {};
     const ignoredDatabaseIds = store.ignoredJottathingDatabaseIds ?? new Set();
-    const stored = store.jottathingDatabase;
-
-    if (
-      stored?.databaseId &&
-      stored?.dataSourceId &&
-      !ignoredDatabaseIds.has(stored.databaseId) &&
-      (!selectedParentPageId || stored.parentPageId === selectedParentPageId)
-    ) {
-      const existing = await refreshDatabase(store, stored, readOnly);
-
-      if (existing && (!selectedParentPageId || existing.parentPageId === selectedParentPageId)) {
-        return existing;
-      }
-    }
+    const cached = await refreshStoredDatabase(store, selectedParentPageId, readOnly, ignoredDatabaseIds);
+    if (cached) return cached;
 
     // An explicit parent selection is authoritative while it resolves. Do not
     // query a cached database under a different valid parent, because that can
@@ -104,33 +92,13 @@ export function createProjectDatabaseDiscoveryHelpers({
       ? await ensureDatabaseParentPage(store, selectedParentPageId)
       : undefined;
 
-    // A stale or invalid explicit page ID must not hide an already-created
-    // Jottathing database and cause another database (and project rows) to be
-    // created. Search globally only when no parent was selected or it could
-    // not be resolved; a valid selected parent remains authoritative.
-    if (!selectedParentPageId || !parentPage) {
-      const foundAccessible = await findExistingDatabase(store, { ignoredDatabaseIds });
-
-      if (foundAccessible) {
-        store.jottathingDatabase = foundAccessible;
-        await ensureProjectSchema(store, foundAccessible.dataSourceId);
-        await ensureProjectViews(store, foundAccessible);
-        appendLog(store, 'project_database_adopted', foundAccessible.title);
-        return foundAccessible;
-      }
-    }
-
-    const found = parentPage
-      ? await findExistingDatabase(store, { parentPageId: parentPage.id, ignoredDatabaseIds })
-      : undefined;
-
-    if (found) {
-      store.jottathingDatabase = found;
-      await ensureProjectSchema(store, found.dataSourceId);
-      await ensureProjectViews(store, found);
-      appendLog(store, 'project_database_adopted', found.title);
-      return found;
-    }
+    const found = await findDatabaseForParentSelection(
+      store,
+      selectedParentPageId,
+      parentPage,
+      ignoredDatabaseIds,
+    );
+    if (found) return adoptDatabase(store, found);
 
     const created = await createProjectDatabaseWithFallback(store, parentPage?.id, {
       ignoredDatabaseIds,
@@ -139,6 +107,57 @@ export function createProjectDatabaseDiscoveryHelpers({
     await ensureProjectViews(store, created);
     appendLog(store, 'project_database_created', created.title);
     return created;
+  }
+
+  /** Refreshes a stored database when it still matches the selected parent. */
+  async function refreshStoredDatabase(
+    store: WorkerStore,
+    selectedParentPageId: string | undefined,
+    readOnly: boolean,
+    ignoredDatabaseIds: Set<string>,
+  ): Promise<JottathingDatabase | undefined> {
+    const stored = store.jottathingDatabase;
+    if (
+      !stored?.databaseId ||
+      !stored.dataSourceId ||
+      ignoredDatabaseIds.has(stored.databaseId) ||
+      (selectedParentPageId && stored.parentPageId !== selectedParentPageId)
+    ) return undefined;
+
+    const refreshed = await refreshDatabase(store, stored, readOnly);
+    return refreshed && (!selectedParentPageId || refreshed.parentPageId === selectedParentPageId)
+      ? refreshed
+      : undefined;
+  }
+
+  /** Finds an existing database without letting a valid parent selection drift. */
+  async function findDatabaseForParentSelection(
+    store: WorkerStore,
+    selectedParentPageId: string | undefined,
+    parentPage: { id: string } | undefined,
+    ignoredDatabaseIds: Set<string>,
+  ): Promise<JottathingDatabase | undefined> {
+    // A stale selection must not hide an accessible database and create a duplicate.
+    if (!selectedParentPageId || !parentPage) {
+      const accessible = await findExistingDatabase(store, { ignoredDatabaseIds });
+      if (accessible) return accessible;
+    }
+
+    return parentPage
+      ? findExistingDatabase(store, { parentPageId: parentPage.id, ignoredDatabaseIds })
+      : undefined;
+  }
+
+  /** Stores an adopted database and ensures its current schema and views. */
+  async function adoptDatabase(
+    store: WorkerStore,
+    database: JottathingDatabase,
+  ): Promise<JottathingDatabase> {
+    store.jottathingDatabase = database;
+    await ensureProjectSchema(store, database.dataSourceId);
+    await ensureProjectViews(store, database);
+    appendLog(store, 'project_database_adopted', database.title);
+    return database;
   }
 
   /** Resolves or creates the database parent. @param store - Worker state. @param selectedParentPageId - Selected parent. @returns Parent summary. */
