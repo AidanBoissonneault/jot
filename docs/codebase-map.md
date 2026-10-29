@@ -99,6 +99,8 @@ Project database discovery now searches only the current `Projects` data source 
 
 The browser sync queue no longer upgrades old full-page `block_reorder` snapshots or legacy first-sync batches. Producers emit `blocks_reset` plus block creates, and queue context types exclude page/project document bodies. Four focused queue and Worker suites pass (26 tests), and root plus Worker typechecks pass. The force-flush and first-sync optimistic-store tests still fail on the baseline commit with the same missing request and hydration-owner expectation, respectively.
 
+`enqueuePageSync` now selects the effective Notion workspace once, shares the account/workspace fallback chain, and returns early for offline and unowned queues. Fallow reports 27 cyclomatic / 20 cognitive / 71 lines, down from 32 / 26 / 72. Four focused save/queue cases pass; four timer and save-status assertions fail identically on the last committed code, and root plus Worker typechecks pass.
+
 Local preferences, category colors, and legal consent now read only current Jottathing keys. Removed the old preference-key copy, old category palette translation, and Inkwell-domain legal acceptance rewrite. Preferences, legal, and category-color tests pass (9 tests), and root typecheck passes.
 
 Pending connection deletion now resumes only from `jottathingPendingConnectionDeletion`; old-key copying and the now-unused branded storage helper are removed. The startup deletion-resume test passes, and root typecheck passes.

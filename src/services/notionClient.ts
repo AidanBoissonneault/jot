@@ -1925,6 +1925,7 @@ async function uploadPendingLocalMedia(
   return hadFailures;
 }
 
+/** Normalizes page sync identity, queues block edits, and reports delivery state. */
 async function enqueuePageSync(
   page: ProjectPage,
   project: Project,
@@ -1933,21 +1934,20 @@ async function enqueuePageSync(
   const { syncConfig, workspaces } = await readStorage();
   const workspace = workspaces.find((entry) => entry.id === page.workspaceId)
     ?? workspaces.find((entry) => entry.id === project.workspaceId);
+  const notionWorkspace = workspace?.kind === 'notion' ? workspace : undefined;
   const shouldSyncToNotion = page.syncMode === 'notion' ||
     project.syncMode === 'notion' ||
-    workspace?.kind === 'notion';
+    Boolean(notionWorkspace);
   const syncMode: 'notion' | 'local' = shouldSyncToNotion ? 'notion' : 'local';
   const normalizedPage = {
     ...page,
     syncMode,
     ...(shouldSyncToNotion
       ? {
-          syncAccountId: workspace?.kind === 'notion'
-            ? workspace.accountId ?? page.syncAccountId ?? syncConfig.userId ?? syncConfig.syncQueueOwnerUserId ?? undefined
-            : page.syncAccountId ?? syncConfig.userId ?? syncConfig.syncQueueOwnerUserId ?? undefined,
-          syncWorkspaceId: workspace?.kind === 'notion'
-            ? workspace.notionWorkspaceId ?? page.syncWorkspaceId ?? syncConfig.workspaceId
-            : page.syncWorkspaceId ?? syncConfig.workspaceId,
+          syncAccountId: notionWorkspace?.accountId ?? page.syncAccountId ??
+            syncConfig.userId ?? syncConfig.syncQueueOwnerUserId ?? undefined,
+          syncWorkspaceId: notionWorkspace?.notionWorkspaceId ?? page.syncWorkspaceId ??
+            syncConfig.workspaceId,
         }
       : { syncWorkspaceId: undefined }),
     content: normalizeJottathingBlockIds(page.content),
@@ -1986,16 +1986,16 @@ async function enqueuePageSync(
     );
   }
 
-  return syncConfig.connected && !isBrowserOffline()
-    ? withSyncStatus(normalizedPage, pendingOps.length ? 'saving' : 'saved')
-    : withSyncStatus(
-        normalizedPage,
-        'stale',
-        syncConfig.connected
-          ? 'Saved locally. Will sync when a connection is available.'
-          : 'Connect Notion to sync this page.',
-      );
-
+  if (!syncConfig.connected || isBrowserOffline()) {
+    return withSyncStatus(
+      normalizedPage,
+      'stale',
+      syncConfig.connected
+        ? 'Saved locally. Will sync when a connection is available.'
+        : 'Connect Notion to sync this page.',
+    );
+  }
+  return withSyncStatus(normalizedPage, pendingOps.length ? 'saving' : 'saved');
 }
 
 function triggerQueueDelivery(): void {
