@@ -25,6 +25,14 @@ describe('user preferences', () => {
     });
   });
 
+  it('does not import preferences from the old branded key', async () => {
+    resetBrowserStorage({ inkwellUserPreferences: { interfaceScale: 130 } });
+
+    await expect(loadUserPreferences()).resolves.toEqual({
+      interfaceScale: DEFAULT_INTERFACE_SCALE,
+    });
+  });
+
   it('persists the interface scale in extension storage', async () => {
     resetBrowserStorage();
 

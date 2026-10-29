@@ -1,10 +1,8 @@
 /** @file Project category labels and persisted category color choices. */
 import { computed, ref, watch, type Ref } from 'vue';
 import { useJottathingStore } from '@/src/stores/jottathing';
-import { getBrandedStorageValue } from '@/src/services/brandedStorage';
 
 const CATEGORY_COLORS_KEY = 'jottathingCategoryColors';
-const LEGACY_CATEGORY_COLORS_KEY = 'inkwellCategoryColors';
 
 export const categoryColorOptions = [
   '#405a78',
@@ -16,17 +14,6 @@ export const categoryColorOptions = [
   '#525b65',
   '#315c76',
 ] as const;
-
-const legacyCategoryColorMap: Record<string, (typeof categoryColorOptions)[number]> = {
-  '#2563eb': '#315c76',
-  '#7c3aed': '#5a4d78',
-  '#c026d3': '#824e5d',
-  '#dc2626': '#824e5d',
-  '#d97706': '#806039',
-  '#16835f': '#3f6549',
-  '#0f766e': '#3c6668',
-  '#4b5563': '#525b65',
-};
 
 /** Owns category labels, deterministic colors, and persisted user color choices. */
 export function useProjectCategories(
@@ -94,14 +81,14 @@ export function useProjectCategories(
   }));
 
   async function loadCategoryColors() {
-    const value = await getBrandedStorageValue<unknown>(CATEGORY_COLORS_KEY, LEGACY_CATEGORY_COLORS_KEY);
+    const stored = await browser.storage.local.get(CATEGORY_COLORS_KEY);
+    const value = stored[CATEGORY_COLORS_KEY];
     if (value && typeof value === 'object' && !Array.isArray(value)) {
       categoryColors.value = Object.fromEntries(
         Object.entries(value as Record<string, unknown>).flatMap(([key, color]) => {
           if (typeof color !== 'string') return [];
-          const migratedColor = legacyCategoryColorMap[color] ?? color;
-          return categoryColorOptions.includes(migratedColor as (typeof categoryColorOptions)[number])
-            ? [[key, migratedColor] as [string, string]]
+          return categoryColorOptions.includes(color as (typeof categoryColorOptions)[number])
+            ? [[key, color] as [string, string]]
             : [];
         }),
       );

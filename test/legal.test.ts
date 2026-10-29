@@ -46,6 +46,17 @@ describe('legal acceptance', () => {
     });
     await expect(hasAcceptedCurrentLegalTerms()).resolves.toBe(true);
   });
+
+  it('requires a fresh acceptance instead of rewriting an old branded record', async () => {
+    const oldAcceptance = {
+      ...currentLegalAcceptance(new Date('2026-05-13T12:00:00.000Z')),
+      privacyUrl: 'https://sync.inkwell.byaidan.com/privacy',
+      termsUrl: 'https://sync.inkwell.byaidan.com/terms',
+    };
+    resetBrowserStorage({ inkwellLegalAcceptance: oldAcceptance });
+
+    await expect(hasAcceptedCurrentLegalTerms()).resolves.toBe(false);
+  });
 });
 
 describe('legal pages', () => {

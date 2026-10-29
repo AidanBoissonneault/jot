@@ -4,7 +4,6 @@ export const LEGAL_TERMS_VERSION = '2026-10-13';
 export const LEGAL_PRIVACY_VERSION = '2026-09-30';
 
 const LEGAL_ACCEPTANCE_KEY = 'jottathingLegalAcceptance';
-const LEGACY_LEGAL_ACCEPTANCE_KEY = 'inkwellLegalAcceptance';
 
 export type LegalAcceptance = {
   acceptedAt: string;
@@ -40,29 +39,8 @@ export function isCurrentLegalAcceptance(value: unknown): value is LegalAcceptan
 }
 
 export async function hasAcceptedCurrentLegalTerms(): Promise<boolean> {
-  const stored = await browser.storage.local.get([LEGAL_ACCEPTANCE_KEY, LEGACY_LEGAL_ACCEPTANCE_KEY]);
-  const current = stored[LEGAL_ACCEPTANCE_KEY];
-  if (isCurrentLegalAcceptance(current)) return true;
-
-  const legacy = stored[LEGACY_LEGAL_ACCEPTANCE_KEY];
-  if (!isLegalAcceptanceShape(legacy)) return false;
-  const migrated = {
-    ...legacy,
-    privacyUrl: legacy.privacyUrl.replace('sync.inkwell.byaidan.com', 'sync.jottathing.byaidan.com'),
-    termsUrl: legacy.termsUrl.replace('sync.inkwell.byaidan.com', 'sync.jottathing.byaidan.com'),
-  };
-  await browser.storage.local.set({ [LEGAL_ACCEPTANCE_KEY]: migrated });
-  return isCurrentLegalAcceptance(migrated);
-}
-
-function isLegalAcceptanceShape(value: unknown): value is LegalAcceptance {
-  if (!value || typeof value !== 'object') return false;
-  const acceptance = value as Partial<LegalAcceptance>;
-  return typeof acceptance.acceptedAt === 'string' &&
-    typeof acceptance.privacyUrl === 'string' &&
-    typeof acceptance.termsUrl === 'string' &&
-    typeof acceptance.privacyVersion === 'string' &&
-    typeof acceptance.termsVersion === 'string';
+  const stored = await browser.storage.local.get(LEGAL_ACCEPTANCE_KEY);
+  return isCurrentLegalAcceptance(stored[LEGAL_ACCEPTANCE_KEY]);
 }
 
 export async function storeCurrentLegalAcceptance(): Promise<LegalAcceptance> {

@@ -1,12 +1,9 @@
-import { getBrandedStorageValue } from '@/src/services/brandedStorage';
-
 export const DEFAULT_INTERFACE_SCALE = 100;
 export const MIN_INTERFACE_SCALE = 80;
 export const MAX_INTERFACE_SCALE = 150;
 export const INTERFACE_SCALE_STEP = 5;
 
 const USER_PREFERENCES_KEY = 'jottathingUserPreferences';
-const LEGACY_USER_PREFERENCES_KEY = 'inkwellUserPreferences';
 const THEME_PREFERENCE_KEY = 'jottathingThemePreference';
 
 export type ThemePreference = 'system' | 'light' | 'dark';
@@ -52,8 +49,8 @@ export function normalizeUserPreferences(value: unknown): UserPreferences {
 }
 
 export async function loadUserPreferences(): Promise<UserPreferences> {
-  const stored = await getBrandedStorageValue<unknown>(USER_PREFERENCES_KEY, LEGACY_USER_PREFERENCES_KEY);
-  return normalizeUserPreferences(stored);
+  const stored = await browser.storage.local.get(USER_PREFERENCES_KEY);
+  return normalizeUserPreferences(stored[USER_PREFERENCES_KEY]);
 }
 
 export async function saveUserPreferences(
