@@ -188,28 +188,7 @@ export function createProjectDatabaseHelpers({
     }: Partial<EnsureProjectPageOptions> = {},
   ): Promise<ProjectPageResult> {
     const database = await ensureProjectDatabase(store, { selectedParentPageId });
-    const stored = store.projectPages?.[project.id];
-    const existingPageId = stored?.notionPageId;
-    let page = existingPageId
-      ? await notionRequest(store, `/pages/${existingPageId}`).catch((error) => {
-          if (
-            isNotionObjectNotFound(error) ||
-            (!isForcedMerge && isNotionObjectForbidden(error)) ||
-            isNotionPageIdValidationError(error)
-          ) {
-            if (isNotionPageIdValidationError(error)) {
-              delete store.projectPages[project.id];
-              appendLog(store, 'project_page_mapping_repaired', 'Re-discovering the project row by Jottathing ID.');
-            }
-            return undefined;
-          }
-          throw error;
-        })
-      : undefined;
-
-    if (!page) {
-      page = await findProjectPageByJottathingId(store, database.dataSourceId, project.id);
-    }
+    const page = await findExistingProjectPage(store, database, project, isForcedMerge);
 
     try {
       if (page && isArchivedObject(page)) {
@@ -222,54 +201,17 @@ export function createProjectDatabaseHelpers({
             project: { ...project },
           };
         }
-
-        const restoreBody: JsonObject = {};
-        if (page.archived === true || page.in_trash === true) {
-          restoreBody.in_trash = false;
-        }
-        if (page.is_archived === true) restoreBody.is_archived = false;
-        if (Object.keys(restoreBody).length) {
-          try {
-            page = await notionRequest(store, `/pages/${page.id}`, {
-              method: 'PATCH',
-              body: restoreBody,
-            });
-          } catch (error) {
-            if (!isArchivedBlockEditError(error)) throw error;
-            page = await recreateArchivedProjectRow(store, database, project, page);
-          }
-        }
       }
 
-      if (!page) {
-        page = await createProjectDatabasePage(store, database.dataSourceId, project);
-        appendLog(store, 'project_database_page_created', project.name || 'Untitled Project');
-      } else {
-        try {
-          page = await updateProjectDatabasePage(store, page.id, database.dataSourceId, project);
-        } catch (error) {
-          if (!isArchivedBlockEditError(error) || project.status === 'archived') throw error;
-          page = await recreateArchivedProjectRow(store, database, project, page);
-        }
-      }
+      const writablePage = await prepareProjectPage(store, database, project, page);
 
       const stateSync = syncState && project.status !== 'archived'
-        ? await syncProjectState(store, page.id, project, isForcedMerge)
+        ? await syncProjectState(store, writablePage.id, project, isForcedMerge)
         : undefined;
-      storeProjectPage(store, database, project, page);
+      storeProjectPage(store, database, project, writablePage);
       return {
-        ...pageSummaryFromNotionPage(page, database),
-        project: stateSync?.content
-          ? {
-              ...project,
-              stateContent: stateSync.content,
-              stateSyncBaselineContent: stateSync.baselineContent ?? stateSync.content,
-              stateRemoteRevision: stateSync.lastEditedTime,
-            }
-          : {
-              ...project,
-              stateRemoteRevision: stateSync?.lastEditedTime ?? project.stateRemoteRevision,
-            },
+        ...pageSummaryFromNotionPage(writablePage, database),
+        project: projectWithSyncedState(project, stateSync),
       };
     } catch (error) {
       if (!retryOnArchivedAncestor || !isArchivedAncestorError(error)) {
@@ -285,6 +227,109 @@ export function createProjectDatabaseHelpers({
         isForcedMerge,
       });
     }
+  }
+
+  /** Uses the stored row ID first, then rediscovers a stale mapping by project ID. */
+  async function findExistingProjectPage(
+    store: WorkerStore,
+    database: JottathingDatabase,
+    project: Project,
+    isForcedMerge: boolean,
+  ): Promise<NotionObject | undefined> {
+    const existingPageId = store.projectPages?.[project.id]?.notionPageId;
+    let page: NotionObject | undefined;
+    if (existingPageId) {
+      try {
+        page = await notionRequest(store, `/pages/${existingPageId}`);
+      } catch (error) {
+        const canRediscover = isNotionObjectNotFound(error) ||
+          (!isForcedMerge && isNotionObjectForbidden(error)) ||
+          isNotionPageIdValidationError(error);
+        if (!canRediscover) throw error;
+        if (isNotionPageIdValidationError(error)) {
+          delete store.projectPages[project.id];
+          appendLog(store, 'project_page_mapping_repaired', 'Re-discovering the project row by Jottathing ID.');
+        }
+      }
+    }
+    return page ?? findProjectPageByJottathingId(store, database.dataSourceId, project.id);
+  }
+
+  /** Restores an archived row before ensuring it reflects current project metadata. */
+  async function prepareProjectPage(
+    store: WorkerStore,
+    database: JottathingDatabase,
+    project: Project,
+    existingPage: NotionObject | undefined,
+  ): Promise<NotionObject> {
+    let page = existingPage;
+    if (page && isArchivedObject(page)) {
+      page = await restoreArchivedProjectPage(store, database, project, page);
+    }
+    return createOrUpdateProjectPage(store, database, project, page);
+  }
+
+  /** Restores the current Notion archive field, or recreates a row Notion will not restore. */
+  async function restoreArchivedProjectPage(
+    store: WorkerStore,
+    database: JottathingDatabase,
+    project: Project,
+    page: NotionObject,
+  ): Promise<NotionObject> {
+    const restoreBody: JsonObject = {};
+    if (page.archived === true || page.in_trash === true) restoreBody.in_trash = false;
+    if (page.is_archived === true) restoreBody.is_archived = false;
+    if (!Object.keys(restoreBody).length) return page;
+
+    try {
+      return await notionRequest(store, `/pages/${page.id}`, {
+        method: 'PATCH',
+        body: restoreBody,
+      });
+    } catch (error) {
+      if (!isArchivedBlockEditError(error)) throw error;
+      return recreateArchivedProjectRow(store, database, project, page);
+    }
+  }
+
+  /** Creates a missing row or updates the existing project row. */
+  async function createOrUpdateProjectPage(
+    store: WorkerStore,
+    database: JottathingDatabase,
+    project: Project,
+    page: NotionObject | undefined,
+  ): Promise<NotionObject> {
+    if (!page) {
+      const createdPage = await createProjectDatabasePage(store, database.dataSourceId, project);
+      appendLog(store, 'project_database_page_created', project.name || 'Untitled Project');
+      return createdPage;
+    }
+
+    try {
+      return await updateProjectDatabasePage(store, page.id, database.dataSourceId, project);
+    } catch (error) {
+      if (!isArchivedBlockEditError(error) || project.status === 'archived') throw error;
+      return recreateArchivedProjectRow(store, database, project, page);
+    }
+  }
+
+  /** Adds synchronized state and revision fields to the returned project. */
+  function projectWithSyncedState(
+    project: Project,
+    stateSync: Awaited<ReturnType<typeof syncProjectState>> | undefined,
+  ): Project {
+    if (stateSync?.content) {
+      return {
+        ...project,
+        stateContent: stateSync.content,
+        stateSyncBaselineContent: stateSync.baselineContent ?? stateSync.content,
+        stateRemoteRevision: stateSync.lastEditedTime,
+      };
+    }
+    return {
+      ...project,
+      stateRemoteRevision: stateSync?.lastEditedTime ?? project.stateRemoteRevision,
+    };
   }
 
   /** Creates an active replacement when a mapped Notion project row cannot be edited. */
