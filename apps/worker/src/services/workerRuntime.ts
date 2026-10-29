@@ -25,7 +25,6 @@ import type { BlockPosition } from '../workerUtils.js';
 import type { AuthService, AuthSessionResult } from '../auth.js';
 import type {
   ConnectedWorkerStore,
-  BlockQueuePayload,
   Identifier,
   ManagedBlockOperation,
   NotionBlock,
@@ -207,10 +206,6 @@ function syncProjectToNotionForInstallation(installationId: Identifier, input: P
   return workerQueueOperations.syncProjectToNotionForInstallation(installationId, input);
 }
 
-/** Reads the single-operation property from legacy Queue messages. */
-function legacyQueueOperation(payload: BlockQueuePayload): ManagedBlockOperation | undefined {
-  return workerQueueOperations.legacyQueueOperation(payload);
-}
 /** Creates an empty normalized worker store. @returns Empty normalized state. */
 function readStore(): WorkerStore {
   return workerStorePersistence.readStore();
@@ -437,7 +432,6 @@ export {
   importManagedBlocks,
   initSingletons,
   enqueueSync,
-  legacyQueueOperation,
   listAllBlockChildren,
   notionObjectExists,
   notionRequest,

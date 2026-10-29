@@ -9,7 +9,6 @@ import type {
 import type {
   BlockQueuePayload,
   Identifier,
-  JsonObject,
   ManagedBlockOperation,
   NotionObject,
   SyncQueueMessage,
@@ -434,7 +433,6 @@ export function createWorkerQueueOperations(dependencies: WorkerQueueDependencie
     freshConnectedStoreForInstallation,
     pushPageToNotionForInstallation,
     syncProjectToNotionForInstallation,
-    legacyQueueOperation,
   };
 }
 /** Uses the most recent replacement document in a job or falls back to stored content. */
@@ -483,19 +481,4 @@ function knownArchivedWriteTarget(
   if (failedBlockId === store.projectPages?.[projectId]?.notionPageId) return 'project_row';
   if (failedBlockId === store.threadBlocks?.[threadKey(pageId)]?.blockId) return 'thread_toggle';
   return 'other_block';
-}
-
-/** Reads the single-operation property from legacy Queue messages. */
-function legacyQueueOperation(payload: BlockQueuePayload): ManagedBlockOperation | undefined {
-  const operation: unknown = (payload as unknown as JsonObject).op;
-  if (!operation || typeof operation !== 'object' || Array.isArray(operation)) return undefined;
-  const candidate = operation as JsonObject;
-  if (
-    typeof candidate.type !== 'string' ||
-    !candidate.payload ||
-    typeof candidate.payload !== 'object'
-  ) {
-    return undefined;
-  }
-  return operation as ManagedBlockOperation;
 }

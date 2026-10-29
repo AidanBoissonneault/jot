@@ -7,6 +7,7 @@ import {
 function createQueueHarness() {
   const payloadRows: Array<Record<string, unknown>> = [];
   const deletions: string[] = [];
+  const updates: Array<Record<string, unknown>> = [];
   const query: Record<string, ReturnType<typeof vi.fn>> = {};
   query.select = vi.fn(() => query);
   query.eq = vi.fn(() => query);
@@ -16,6 +17,10 @@ function createQueueHarness() {
     payloadRows.push(row);
     return { error: null };
   });
+  query.update = vi.fn((values: Record<string, unknown>) => {
+    updates.push(values);
+    return query;
+  });
   query.delete = vi.fn(() => query);
 
   const supabase = {
@@ -23,6 +28,7 @@ function createQueueHarness() {
       if (table === 'jottathing_sync_queue_payloads') {
         return {
           insert: query.insert,
+          update: query.update,
           delete: vi.fn(() => ({
             eq: vi.fn(async (_key: string, id: string) => {
               deletions.push(id);
@@ -50,7 +56,7 @@ function createQueueHarness() {
     },
   } as EnqueueJob;
 
-  return { deletions, enqueue, env, job, payloadRows, send };
+  return { deletions, enqueue, env, job, payloadRows, send, updates };
 }
 
 describe('Cloudflare sync queue payload privacy', () => {
@@ -71,14 +77,17 @@ describe('Cloudflare sync queue payload privacy', () => {
     });
   });
 
-  it('removes the stored document payload if publishing its reference fails', async () => {
-    const { deletions, enqueue, env, job, payloadRows, send } = createQueueHarness();
+  it('retains the payload for redelivery if publishing its reference fails', async () => {
+    const { deletions, enqueue, env, job, payloadRows, send, updates } = createQueueHarness();
     send.mockRejectedValueOnce(new Error('queue unavailable'));
 
     await expect(enqueue(env, job, 7)).rejects.toThrow('Unable to publish the pending sync job.');
 
     expect(payloadRows).toHaveLength(1);
-    expect(deletions).toEqual([payloadRows[0].id as string]);
+    expect(deletions).toEqual([]);
+    expect(updates).toEqual([expect.objectContaining({
+      payload: expect.objectContaining({ deliveryPendingAt: expect.any(String) }),
+    })]);
   });
 
   it('rechecks installation activity under its mutation lock before using a queued token', async () => {
