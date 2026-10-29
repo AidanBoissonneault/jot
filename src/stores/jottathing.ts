@@ -7,7 +7,6 @@ import {
 } from '@/src/extensions/sourceRegistry';
 import {
   notionClient,
-  stripStoredSyncCredentials,
   connectSyncEvents,
   applySyncResult,
   clearStalePages,

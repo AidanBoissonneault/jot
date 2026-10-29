@@ -4,7 +4,7 @@ import type { DocumentContent } from '../types/capture.js';
 import type { SyncContentConflict } from '../types/sync.js';
 import SyncConflictNodeView from '@/entrypoints/sidepanel/components/editor/SyncConflictNodeView.vue';
 
-export type SyncConflictBlockOptions = {
+type SyncConflictBlockOptions = {
   onResolve: (
     conflict: SyncContentConflict,
     content: DocumentContent,

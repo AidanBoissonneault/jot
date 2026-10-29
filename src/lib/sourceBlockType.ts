@@ -1,6 +1,3 @@
-/** Semantic block types that can be preserved when capturing webpage text. */
-export type CaptureSourceBlockType = 'heading' | 'paragraph' | 'blockquote' | 'codeBlock';
-
 export type CaptureSourceBlock =
   | { type: 'heading'; level: 1 | 2 | 3 | 4 | 5 | 6 }
   | { type: 'paragraph' | 'blockquote' | 'codeBlock' };

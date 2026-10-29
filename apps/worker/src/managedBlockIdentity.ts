@@ -185,16 +185,3 @@ export function isUpdateCompatible(existing: BlockMapping, entry: DesiredManaged
 export function positionAfter(blockId: string | undefined): BlockPosition {
   return blockId ? { type: 'after_block', after_block: { id: blockId } } : { type: 'start' };
 }
-
-/** Finds the nearest preceding desired block with a remote mapping. */
-export function previousMappedBlockId(
-  desiredBlocks: DesiredManagedBlock[],
-  mappingsById: Map<string, BlockMapping>,
-  order: number,
-): string | undefined {
-  for (let index = order - 1; index >= 0; index -= 1) {
-    const mapping = mappingsById.get(desiredBlocks[index]?.jottathingBlockId);
-    if (mapping?.notionBlockId) return mapping.notionBlockId;
-  }
-  return undefined;
-}

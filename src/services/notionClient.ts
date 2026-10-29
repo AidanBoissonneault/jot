@@ -4103,7 +4103,7 @@ async function updateStoredSyncConfig(
 }
 
 /** Removes legacy or injected credential fields when local auth state is rewritten. */
-export function stripStoredSyncCredentials(syncConfig: SyncConfig): SyncConfig {
+function stripStoredSyncCredentials(syncConfig: SyncConfig): SyncConfig {
   return stripCredentialFields(syncConfig, new WeakMap<object, unknown>()) as SyncConfig;
 }
 

@@ -59,7 +59,7 @@ interface ToggleOptions {
 }
 
 /** Options for excluding a Notion container rejected by a previous write. */
-export interface ThreadToggleOptions {
+interface ThreadToggleOptions {
   excludedBlockIds?: ReadonlySet<string>;
 }
 

@@ -5,7 +5,7 @@ import type { useJottathingStore } from '@/src/stores/jottathing';
 
 type JottathingStore = ReturnType<typeof useJottathingStore>;
 
-export interface ArchiveTarget {
+interface ArchiveTarget {
   kind: 'project' | 'page';
   id: string;
   title: string;

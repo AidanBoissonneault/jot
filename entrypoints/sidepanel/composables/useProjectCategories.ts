@@ -4,7 +4,7 @@ import { useJottathingStore } from '@/src/stores/jottathing';
 
 const CATEGORY_COLORS_KEY = 'jottathingCategoryColors';
 
-export const categoryColorOptions = [
+const categoryColorOptions = [
   '#405a78',
   '#5a4d78',
   '#824e5d',
