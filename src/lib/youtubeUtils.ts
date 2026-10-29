@@ -31,7 +31,7 @@ export function youtubeEmbedUrl(value: string): string {
  * @param value - Candidate YouTube URL.
  * @returns Parsed video details or null when invalid.
  */
-export function youtubeVideoInfo(value: string): { id: string; start: number } | null {
+function youtubeVideoInfo(value: string): { id: string; start: number } | null {
   try {
     const url = new URL(value);
     const host = url.hostname.toLowerCase();
@@ -69,7 +69,7 @@ export function youtubeVideoInfo(value: string): { id: string; start: number } |
  * @param value - Numeric seconds or an h/m/s expression.
  * @returns Non-negative playback offset in seconds.
  */
-export function youtubeStartSeconds(value: string): number {
+function youtubeStartSeconds(value: string): number {
   if (!value) {
     return 0;
   }

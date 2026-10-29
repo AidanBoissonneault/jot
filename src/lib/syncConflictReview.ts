@@ -2,7 +2,7 @@ import type { DocumentContent } from '../types/capture.js';
 import type { SyncContentConflict } from '../types/sync.js';
 import { normalizeJottathingBlockIds } from '../extensions/jottathingBlockIds.js';
 
-export const SYNC_CONFLICT_BLOCK_TYPE = 'jottathingSyncConflict';
+const SYNC_CONFLICT_BLOCK_TYPE = 'jottathingSyncConflict';
 
 export type SyncConflictChoice = 'local' | 'notion' | 'both' | '';
 
@@ -60,10 +60,6 @@ export function stripSyncConflictBlocks(content: DocumentContent): DocumentConte
           .map(stripSyncConflictBlocks) }
       : {}),
   };
-}
-
-export function isSyncConflictBlock(node: DocumentContent): boolean {
-  return node.type === SYNC_CONFLICT_BLOCK_TYPE;
 }
 
 export function createSyncConflictRows(conflict: SyncContentConflict): SyncConflictRow[] {
