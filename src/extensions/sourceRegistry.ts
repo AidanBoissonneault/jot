@@ -99,51 +99,6 @@ export function capturedBlockId(content: DocumentContent[]) {
   return typeof value === 'string' && value ? value : null;
 }
 
-export function migratePageSourcesToProjectState(
-  pageContent: DocumentContent,
-  stateContent: DocumentContent | undefined,
-) {
-  let nextState = stateContent ?? { type: 'doc', content: [{ type: 'paragraph' }] };
-  let changed = false;
-  let migratedPreviousBlock = false;
-  const content: DocumentContent[] = [];
-
-  for (const node of pageContent.content ?? []) {
-    const source = decodeJottathingSource(node.attrs?.[JOTTATHING_SOURCE_ATTR]);
-    const blockId = node.attrs?.jottathingBlockId;
-
-    if (source && typeof blockId === 'string' && blockId) {
-      const storedSource = sourceFromProjectState(nextState, blockId);
-      if (
-        !storedSource ||
-        JSON.stringify(storeJottathingSource(storedSource)) !==
-          JSON.stringify(storeJottathingSource(source))
-      ) {
-        nextState = addSourceToProjectState(nextState, blockId, source);
-        changed = true;
-      }
-      content.push(node);
-      migratedPreviousBlock = true;
-      continue;
-    }
-
-    if (migratedPreviousBlock && isGeneratedSourceParagraph(node)) {
-      migratedPreviousBlock = false;
-      changed = true;
-      continue;
-    }
-
-    migratedPreviousBlock = false;
-    content.push(node);
-  }
-
-  return {
-    changed,
-    content: changed ? { ...pageContent, content } : pageContent,
-    stateContent: nextState,
-  };
-}
-
 function readSourceRegistry(
   stateContent: DocumentContent | undefined,
 ): SourceRegistry {
@@ -180,24 +135,6 @@ function sourceEntryNode(
       text: `${SOURCE_ENTRY_PREFIX}${JSON.stringify({ blockId, source })}`,
     }],
   };
-}
-
-function isGeneratedSourceParagraph(node: DocumentContent) {
-  if (node.type !== 'paragraph') {
-    return false;
-  }
-
-  const text = (node.content ?? []).map(textFromNode).join('');
-  return /^Source:\s.+\s-\shttps?:\/\//i.test(text) && hasLink(node);
-}
-
-function hasLink(node: DocumentContent): boolean {
-  return (node.marks ?? []).some((mark) => mark.type === 'link') ||
-    (node.content ?? []).some(hasLink);
-}
-
-function textFromNode(node: DocumentContent): string {
-  return node.text ?? (node.content ?? []).map(textFromNode).join('');
 }
 
 function stateNodesForStorage(content: DocumentContent) {

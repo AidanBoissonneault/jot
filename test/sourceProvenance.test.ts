@@ -11,7 +11,6 @@ import {
   capturedBlockId,
   isProjectStateMetadataNode,
   mergeVisibleProjectState,
-  migratePageSourcesToProjectState,
   sourceFromProjectState,
   visibleProjectStateContent,
 } from '@/src/extensions/sourceRegistry';
@@ -198,39 +197,6 @@ describe('captured source provenance', () => {
       sourceUrl: source.sourceUrl,
       highlightMeta: { text: source.highlightMeta.text },
     });
-  });
-
-  it('migrates legacy source-link metadata to its preceding capture block', () => {
-    const legacySource = JSON.stringify(source);
-    const normalized = normalizeJottathingBlockIds({
-      type: 'doc',
-      content: [
-        {
-          type: 'blockquote',
-          attrs: { jottathingBlockId: 'quote-1', jottathingSource: null },
-          content: [{ type: 'paragraph', content: [{ type: 'text', text: 'selected text' }] }],
-        },
-        {
-          type: 'paragraph',
-          attrs: { jottathingBlockId: 'source-1', jottathingSource: null },
-          content: [{
-            type: 'text',
-            text: `Source: Example documentation - ${source.sourceUrl}`,
-            marks: [{ type: 'link', attrs: { href: source.sourceUrl, jottathingSource: legacySource } }],
-          }],
-        },
-      ],
-    });
-
-    expect(normalized.content?.[0].attrs?.jottathingSource).toEqual(storeJottathingSource(source));
-    expect(normalized.content?.[1].attrs).toEqual({ jottathingBlockId: 'source-1' });
-
-    const migrated = migratePageSourcesToProjectState(normalized, undefined);
-    expect(migrated.content.content).toHaveLength(1);
-    expect(migrated.content.content?.[0].attrs?.jottathingSource).toEqual(
-      storeJottathingSource(source),
-    );
-    expect(sourceFromProjectState(migrated.stateContent, 'quote-1')).not.toBeNull();
   });
 
   it('recovers source navigation from a Notion-preserved source link', () => {

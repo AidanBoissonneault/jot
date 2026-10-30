@@ -21,7 +21,6 @@ import { JOTTATHING_SOURCE_ATTR, storeJottathingSource } from '@/src/extensions/
 import {
   addSourceToProjectState,
   capturedBlockId,
-  migratePageSourcesToProjectState,
   sourceEntryForProjectState,
 } from '@/src/extensions/sourceRegistry';
 import type {
@@ -501,7 +500,6 @@ type NormalizedWorkspaceRecords = {
   workspaces: Workspace[];
   localWorkspace: Workspace;
   workspaceMigrationChanged: boolean;
-  sourceMigrationChanged: boolean;
 };
 
 /** Assigns workspace ownership, creates the local starter workspace, and moves page sources into project state. */
@@ -587,29 +585,12 @@ function normalizeStoredWorkspaceRecords(
     workspaceMigrationChanged = true;
   }
 
-  const stateByProjectId = new Map(allProjects.map((project) => [project.id, project.stateContent]));
-  let sourceMigrationChanged = false;
-  allPages = allPages.map((page) => {
-    const migration = migratePageSourcesToProjectState(page.content, stateByProjectId.get(page.projectId));
-    if (!migration.changed) return page;
-    sourceMigrationChanged = true;
-    stateByProjectId.set(page.projectId, migration.stateContent);
-    return { ...page, content: migration.content };
-  });
-  if (sourceMigrationChanged) {
-    allProjects = allProjects.map((project) => ({
-      ...project,
-      stateContent: stateByProjectId.get(project.id) ?? project.stateContent,
-    }));
-  }
-
   return {
     projects: allProjects,
     pages: allPages,
     workspaces: allWorkspaces,
     localWorkspace,
     workspaceMigrationChanged,
-    sourceMigrationChanged,
   };
 }
 
@@ -639,7 +620,6 @@ type StorageNormalizationCheck = {
   hasExplicitlyLoggedOut: boolean;
   shouldCreatePages: boolean;
   workspaceMigrationChanged: boolean;
-  sourceMigrationChanged: boolean;
   legacyAccountId: string | undefined;
   legacyWorkspaceId: string | undefined;
 };
@@ -671,7 +651,6 @@ function shouldPersistStorageNormalization(check: StorageNormalizationCheck): bo
       JSON.stringify(check.currentProjectIdByWorkspace),
     stored.hasExplicitlyLoggedOut === undefined && check.hasExplicitlyLoggedOut,
     check.shouldCreatePages,
-    check.sourceMigrationChanged,
     hasPageScopeMigration,
     hasQueueScopeMigration,
   ].some(Boolean);
@@ -846,7 +825,6 @@ async function readStorage(): Promise<Required<JottathingStorage>> {
   let allWorkspaces = workspaceRecords.workspaces;
   const localWorkspace = workspaceRecords.localWorkspace;
   let workspaceMigrationChanged = workspaceRecords.workspaceMigrationChanged;
-  const sourceMigrationChanged = workspaceRecords.sourceMigrationChanged;
   const allActivePageIdsByProject = createCompatibleActivePageIds(
     allProjects,
     allPages,
@@ -892,7 +870,6 @@ async function readStorage(): Promise<Required<JottathingStorage>> {
     hasExplicitlyLoggedOut,
     shouldCreatePages,
     workspaceMigrationChanged,
-    sourceMigrationChanged,
     legacyAccountId,
     legacyWorkspaceId,
   }, {
