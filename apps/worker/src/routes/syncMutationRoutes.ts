@@ -4,7 +4,7 @@
  * @lastModified September 2026
  */
 
-import type { Hono } from 'hono';
+import type { Context, Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import type { Project } from '../../../../src/types/capture.js';
 import type {
@@ -307,26 +307,7 @@ export function registerSyncMutationRoutes(app: Hono<{ Bindings: WorkerEnv }>): 
         } : {}),
       });
     } catch (error) {
-      if (error instanceof HTTPException) {
-        const response = error.getResponse();
-        return c.newResponse(response.body, response);
-      }
-      const notionResponse = notionApiErrorResponse(c, error);
-      if (notionResponse) return notionResponse;
-      const message = error instanceof Error ? error.message : String(error);
-      console.error('[sync/page/resync] failed:', safeErrorMetadata(error));
-      if (isUnmappedNotionContentError(error)) {
-        // A mergeable sync conflict is a normal application result. Sending it
-        // as HTTP 409 makes the browser log a failed request before the client
-        // can present the diff to the user.
-        return c.json({
-          status: 'error',
-          code: UNMAPPED_NOTION_CONTENT_CODE,
-          message,
-          diff: error.diff,
-        });
-      }
-      return c.json({ status: 'error', message }, 500);
+      return syncMutationErrorResponse(c, error, 'sync/page/resync');
     }
   });
 
@@ -344,23 +325,7 @@ export function registerSyncMutationRoutes(app: Hono<{ Bindings: WorkerEnv }>): 
     try {
       return c.json(await syncProjectToNotion({ c, project, selectedParentPageId }));
     } catch (error) {
-      if (error instanceof HTTPException) {
-        const response = error.getResponse();
-        return c.newResponse(response.body, response);
-      }
-      const notionResponse = notionApiErrorResponse(c, error);
-      if (notionResponse) return notionResponse;
-      const message = error instanceof Error ? error.message : String(error);
-      console.error('[sync/project] failed:', safeErrorMetadata(error));
-      if (isUnmappedNotionContentError(error)) {
-        return c.json({
-          status: 'error',
-          code: UNMAPPED_NOTION_CONTENT_CODE,
-          message,
-          diff: error.diff,
-        });
-      }
-      return c.json({ status: 'error', message }, 500);
+      return syncMutationErrorResponse(c, error, 'sync/project');
     }
   });
   
@@ -420,25 +385,37 @@ export function registerSyncMutationRoutes(app: Hono<{ Bindings: WorkerEnv }>): 
         };
       }));
     } catch (error) {
-      if (error instanceof HTTPException) {
-        const response = error.getResponse();
-        return c.newResponse(response.body, response);
-      }
-      const notionResponse = notionApiErrorResponse(c, error);
-      if (notionResponse) return notionResponse;
-      const message = error instanceof Error ? error.message : String(error);
-      console.error('[sync/project/source] failed:', safeErrorMetadata(error));
-      if (isUnmappedNotionContentError(error)) {
-        return c.json({
-          status: 'error',
-          code: UNMAPPED_NOTION_CONTENT_CODE,
-          message,
-          diff: error.diff,
-        });
-      }
-      return c.json({ status: 'error', message }, 500);
+      return syncMutationErrorResponse(c, error, 'sync/project/source');
     }
   });
+}
+
+/** Maps sync transport, Notion API, merge, and unexpected failures to route responses. */
+function syncMutationErrorResponse(
+  context: Context<{ Bindings: WorkerEnv }>,
+  error: unknown,
+  route: string,
+) {
+  if (error instanceof HTTPException) {
+    const response = error.getResponse();
+    return context.newResponse(response.body, response);
+  }
+
+  const notionResponse = notionApiErrorResponse(context, error);
+  if (notionResponse) return notionResponse;
+
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(`[${route}] failed:`, safeErrorMetadata(error));
+  if (isUnmappedNotionContentError(error)) {
+    // The client presents this conflict body as a normal sync result at HTTP 200.
+    return context.json({
+      status: 'error',
+      code: UNMAPPED_NOTION_CONTENT_CODE,
+      message,
+      diff: error.diff,
+    });
+  }
+  return context.json({ status: 'error', message }, 500);
 }
 
 function isRetryableQueueMessage(
