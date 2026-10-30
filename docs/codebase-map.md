@@ -222,3 +222,5 @@ Signed Notion file URL comparisons now use `stableNotionFileUrl` across Worker b
 Editor data-URL creation and Worker upload preparation now share the documented `bytesToBase64` helper, preserving bounded 8,192-byte conversion chunks. The base64 boundary tests and five media suites pass (31 tests); root typecheck and extension production build pass. Fallow's duplicate-line count falls from 113 to 101.
 
 Sync push, page-resync, and pull routes now destructure the body directly after normalizing missing JSON to `{}`; their second nullish fallback was redundant. Worker security and request utility suites pass (38 tests), with Worker typecheck clean.
+
+Normal and dead-letter queue failures now publish through one documented Worker notifier. Each path keeps its message and failure-specific fields; queue-consumer tests assert both event shapes, and the suite passes (10 tests) with Worker typecheck clean. Fallow's duplicate-line count falls from 80 to 68.
