@@ -336,16 +336,23 @@ async function notifyQueueJobFailed(job: SyncQueueMessage, error: unknown, env: 
   const statusCode = typeof errorRecord?.status === 'number' ? errorRecord.status : undefined;
   const errorMessage = error instanceof Error ? error.message : String(error);
   const userMessage = notionApiHttpFailure(error)?.body.message ?? errorMessage;
+  await notifyQueueFailure(job, env, {
+    message: userMessage,
+    ...(typeof errorRecord?.code === 'string' ? { code: errorRecord.code } : {}),
+    ...(statusCode !== undefined ? { statusCode } : {}),
+  });
+}
+
+/** Sends both retryable and dead-letter failures through the installation event channel. */
+async function notifyQueueFailure(
+  job: SyncQueueMessage,
+  env: WorkerEnv,
+  details: { message: string; code?: string; statusCode?: number; deadLettered?: true },
+): Promise<void> {
   const doStub = env.SYNC_EVENTS.get(env.SYNC_EVENTS.idFromName(String(job.installationId)));
   await doStub.fetch(new Request('http://do/notify', {
     method: 'POST',
-    body: JSON.stringify({
-      status: 'failed',
-      pageId: job.localId,
-      message: userMessage,
-      ...(typeof errorRecord?.code === 'string' ? { code: errorRecord.code } : {}),
-      ...(statusCode !== undefined ? { statusCode } : {}),
-    }),
+    body: JSON.stringify({ status: 'failed', pageId: job.localId, ...details }),
   })).catch(() => undefined);
 }
 
@@ -457,16 +464,10 @@ export async function processSyncDeadLetterQueue(
       const { error: syncStateError } = await markSyncRowFailed(job);
       if (syncStateError) throw new Error('Unable to mark the dead-letter sync as failed.');
 
-      const doStub = env.SYNC_EVENTS.get(env.SYNC_EVENTS.idFromName(String(job.installationId)));
-      await doStub.fetch(new Request('http://do/notify', {
-        method: 'POST',
-        body: JSON.stringify({
-          status: 'failed',
-          pageId: job.localId,
-          deadLettered: true,
-          message: 'Sync paused after repeated failures. Your local note is saved; use Sync to retry.',
-        }),
-      })).catch(() => undefined);
+      await notifyQueueFailure(job, env, {
+        deadLettered: true,
+        message: 'Sync paused after repeated failures. Your local note is saved; use Sync to retry.',
+      });
       message.ack();
     } catch (error) {
       console.error('[queue] dead-letter payload retention failed', safeErrorMetadata(error));

@@ -10,7 +10,10 @@ const runtime = vi.hoisted(() => ({
 
 vi.mock('../apps/worker/src/services/workerRuntime.js', () => runtime);
 
-import { processSyncQueue } from '../apps/worker/src/queues/syncQueueConsumer';
+import {
+  processSyncDeadLetterQueue,
+  processSyncQueue,
+} from '../apps/worker/src/queues/syncQueueConsumer';
 
 function makeQuery(data: unknown) {
   const query: Record<string, ReturnType<typeof vi.fn>> = {};
@@ -307,5 +310,43 @@ describe('content-free sync queue references', () => {
     expect(retainPayload.delete).not.toHaveBeenCalled();
     expect(message.ack).toHaveBeenCalledOnce();
     expect(message.retry).not.toHaveBeenCalled();
+    const event = await notify.mock.calls[0]?.[0]?.clone().json();
+    expect(event).toEqual({
+      status: 'failed',
+      pageId: 'page-one',
+      message: 'Invalid Notion page ID.',
+      code: 'validation_error',
+      statusCode: 400,
+    });
+  });
+
+  it('retains and announces a dead-lettered sync job', async () => {
+    const message = makeMessage();
+    const payloadRead = makeQuery({ installation_id: 42, payload: makeBlockJob(), status: 'pending' });
+    const retainPayload = makeQuery(null);
+    const markFailed = makeQuery(null);
+    runtime.supabase.from
+      .mockReturnValueOnce(payloadRead)
+      .mockReturnValueOnce(retainPayload)
+      .mockReturnValueOnce(markFailed);
+    const notify = vi.fn(async (_request: Request) => new Response('ok'));
+
+    await processSyncDeadLetterQueue({ messages: [message] } as never, {
+      SYNC_EVENTS: makeSyncEventsBinding(notify),
+    } as never);
+
+    expect(retainPayload.update).toHaveBeenCalledWith(expect.objectContaining({
+      payload: expect.objectContaining({ deadLetteredAt: expect.any(String) }),
+    }));
+    expect(markFailed.update).toHaveBeenCalledWith(expect.objectContaining({ status: 'failed' }));
+    expect(message.ack).toHaveBeenCalledOnce();
+    expect(message.retry).not.toHaveBeenCalled();
+    const event = await notify.mock.calls[0]?.[0]?.clone().json();
+    expect(event).toEqual({
+      status: 'failed',
+      pageId: 'page-one',
+      deadLettered: true,
+      message: 'Sync paused after repeated failures. Your local note is saved; use Sync to retry.',
+    });
   });
 });
