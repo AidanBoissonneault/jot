@@ -1,7 +1,7 @@
 export const LEGAL_TERMS_URL = 'https://sync.jottathing.byaidan.com/terms';
 export const LEGAL_PRIVACY_URL = 'https://sync.jottathing.byaidan.com/privacy';
-export const LEGAL_TERMS_VERSION = '2026-10-13';
-export const LEGAL_PRIVACY_VERSION = '2026-09-30';
+const LEGAL_TERMS_VERSION = '2026-10-13';
+const LEGAL_PRIVACY_VERSION = '2026-09-30';
 
 const LEGAL_ACCEPTANCE_KEY = 'jottathingLegalAcceptance';
 
@@ -13,7 +13,7 @@ export type LegalAcceptance = {
   termsVersion: string;
 };
 
-export function currentLegalAcceptance(now = new Date()): LegalAcceptance {
+function currentLegalAcceptance(now = new Date()): LegalAcceptance {
   return {
     acceptedAt: now.toISOString(),
     privacyUrl: LEGAL_PRIVACY_URL,
@@ -23,7 +23,7 @@ export function currentLegalAcceptance(now = new Date()): LegalAcceptance {
   };
 }
 
-export function isCurrentLegalAcceptance(value: unknown): value is LegalAcceptance {
+function isCurrentLegalAcceptance(value: unknown): value is LegalAcceptance {
   if (!value || typeof value !== 'object') {
     return false;
   }

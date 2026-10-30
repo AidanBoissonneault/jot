@@ -1,34 +1,27 @@
 import { describe, expect, it } from 'vitest';
 import {
-  currentLegalAcceptance,
   hasAcceptedCurrentLegalTerms,
-  isCurrentLegalAcceptance,
   LEGAL_PRIVACY_URL,
-  LEGAL_PRIVACY_VERSION,
   LEGAL_TERMS_URL,
-  LEGAL_TERMS_VERSION,
   storeCurrentLegalAcceptance,
 } from '@/src/services/legal';
 import { resetBrowserStorage } from './setup';
 import { app } from '@/apps/worker/src/worker';
 
 describe('legal acceptance', () => {
-  it('requires the current terms and privacy versions', () => {
-    const acceptance = currentLegalAcceptance(new Date('2026-05-13T12:00:00.000Z'));
+  it('rejects an acceptance record with an outdated version or changed URL', async () => {
+    resetBrowserStorage();
+    const acceptance = await storeCurrentLegalAcceptance();
 
-    expect(isCurrentLegalAcceptance(acceptance)).toBe(true);
-    expect(
-      isCurrentLegalAcceptance({
-        ...acceptance,
-        privacyVersion: '2026-05-12',
-      }),
-    ).toBe(false);
-    expect(
-      isCurrentLegalAcceptance({
-        ...acceptance,
-        termsUrl: 'https://example.com/terms',
-      }),
-    ).toBe(false);
+    resetBrowserStorage({
+      jottathingLegalAcceptance: { ...acceptance, privacyVersion: 'outdated' },
+    });
+    await expect(hasAcceptedCurrentLegalTerms()).resolves.toBe(false);
+
+    resetBrowserStorage({
+      jottathingLegalAcceptance: { ...acceptance, termsUrl: 'https://example.com/terms' },
+    });
+    await expect(hasAcceptedCurrentLegalTerms()).resolves.toBe(false);
   });
 
   it('persists and reads the current acceptance record', async () => {
@@ -40,18 +33,18 @@ describe('legal acceptance', () => {
 
     expect(acceptance).toMatchObject({
       privacyUrl: LEGAL_PRIVACY_URL,
-      privacyVersion: LEGAL_PRIVACY_VERSION,
       termsUrl: LEGAL_TERMS_URL,
-      termsVersion: LEGAL_TERMS_VERSION,
     });
     await expect(hasAcceptedCurrentLegalTerms()).resolves.toBe(true);
   });
 
   it('requires a fresh acceptance instead of rewriting an old branded record', async () => {
     const oldAcceptance = {
-      ...currentLegalAcceptance(new Date('2026-05-13T12:00:00.000Z')),
+      acceptedAt: '2026-05-13T12:00:00.000Z',
       privacyUrl: 'https://sync.inkwell.byaidan.com/privacy',
+      privacyVersion: '2026-05-12',
       termsUrl: 'https://sync.inkwell.byaidan.com/terms',
+      termsVersion: '2026-05-12',
     };
     resetBrowserStorage({ inkwellLegalAcceptance: oldAcceptance });
 
