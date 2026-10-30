@@ -2,9 +2,9 @@
 import { computed, ref, watch } from 'vue';
 import type { DocumentContent } from '@/src/types/capture';
 import type { SyncContentConflict } from '@/src/types/sync';
-import { normalizeJottathingBlockIds } from '@/src/extensions/jottathingBlockIds';
 import { isProjectStateMetadataNode } from '@/src/extensions/sourceRegistry';
 import {
+  buildSyncConflictMerge,
   syncConflictBlockId as stableBlockId,
   syncConflictBlockSignature as signature,
   syncConflictBlockText,
@@ -155,84 +155,8 @@ function displayBlock(block?: DocumentContent): string {
 }
 
 function resolve() {
-  const chosen: DocumentContent[] = [];
-  const deleteNotionBlockIds: string[] = [];
-  for (const row of rows.value) {
-    if (row.duplicate && row.local && row.notion) {
-      if (row.choice === 'local') {
-        chosen.push(markBlock(row.local, remoteBlockId(row.notion)));
-      } else if (row.choice === 'both') {
-        chosen.push(markBlock(row.local));
-      }
-      if (row.choice === 'notion' || row.choice === 'both') {
-        chosen.push(markBlock(row.notion, remoteBlockId(row.notion)));
-      }
-      continue;
-    }
-    if (row.localDeleted) {
-      if (row.choice === 'notion' && row.notion) {
-        chosen.push(markBlock(row.notion, remoteBlockId(row.notion)));
-      } else if (row.choice === 'local' && row.notion) {
-        const notionId = remoteBlockId(row.notion);
-        if (notionId) deleteNotionBlockIds.push(notionId);
-      }
-      continue;
-    }
-    if (row.notionDeleted) {
-      if (row.choice === 'local' && row.local) chosen.push(markBlock(row.local));
-      continue;
-    }
-    if (row.local && row.notion && row.changed) {
-      const choice = row.bothEdited
-        ? row.choice
-        : row.notionChanged && !row.localChanged
-          ? 'notion'
-          : 'local';
-      if (choice === 'local') {
-        chosen.push(markBlock(row.local, remoteBlockId(row.notion)));
-      } else if (choice === 'notion') {
-        chosen.push(markBlock(row.notion, remoteBlockId(row.notion)));
-      }
-      continue;
-    }
-    if (row.local) chosen.push(row.local);
-    else if (row.notion) chosen.push(row.notion);
-  }
-
-  const merged = normalizeJottathingBlockIds({
-    type: props.conflict.localContent.type ?? 'doc',
-    attrs: {
-      jottathingConflictResolution: true,
-      jottathingPreserveRemoteBlocks: Boolean(props.conflict.remoteContent),
-      ...(deleteNotionBlockIds.length ? { jottathingDeleteNotionBlockIds: deleteNotionBlockIds } : {}),
-    },
-    // Applying the merge confirms every block in the reviewed snapshot,
-    // including Notion-only blocks that the modal preserves automatically.
-    content: chosen.map((block) => ({
-      ...block,
-      attrs: {
-        ...block.attrs,
-        jottathingConflictResolution: true,
-      },
-    })),
-  });
-  emit('resolve', merged);
-}
-
-function remoteBlockId(block: DocumentContent): string | undefined {
-  const id = block.attrs?.notionBlockId;
-  return typeof id === 'string' && id ? id : undefined;
-}
-
-function markBlock(block: DocumentContent, notionBlockId?: string): DocumentContent {
-  return {
-    ...block,
-    attrs: {
-      ...block.attrs,
-      ...(notionBlockId ? { notionBlockId } : {}),
-      jottathingConflictResolution: true,
-    },
-  };
+  const choices = Object.fromEntries(rows.value.map((row) => [row.id, row.choice]));
+  emit('resolve', buildSyncConflictMerge(props.conflict, rows.value, choices));
 }
 </script>
 
