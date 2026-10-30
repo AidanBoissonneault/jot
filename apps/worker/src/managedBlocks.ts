@@ -1169,35 +1169,29 @@ function createContentConflict(
     }
   }
   if (remoteContent) {
-    const mappedIdByNotionId = new Map(
-      mappings
-        .filter((mapping) => mapping.notionBlockId)
-        .map((mapping) => [mapping.notionBlockId!, mapping.jottathingBlockId]),
-    );
     remoteContent.content = remoteContent.content?.map((node, index) => {
       const notionId = remoteBlocks[index]?.id;
       const mapping = notionId ? mappingByRemoteId.get(notionId) : undefined;
-      const blockId = notionId ? mappedIdByNotionId.get(notionId) : undefined;
+      const blockId = mapping?.jottathingBlockId;
       const fallbackState = mapping?.newState;
       // Equal content is not identity. Keeping unmatched Notion blocks
       // unpaired lets the conflict pool classify exact new duplicates as a
       // separate duplicate choice instead of hiding them as shared blocks.
-      const nextId = blockId;
-      const desired = nextId ? desiredByLocalId.get(nextId) : undefined;
+      const desired = blockId ? desiredByLocalId.get(blockId) : undefined;
       const remoteBlock = remoteBlocks[index];
       const baselineUploadId = mapping && remoteBlock &&
         remoteMediaMatchesBaseline(mapping, desired, remoteBlock) === true
         ? fileUploadIdFromState(fallbackState)
         : undefined;
       const fileUploadId = fileUploadIdFromBlock(remoteBlock) ?? baselineUploadId;
-      const localNode = nextId ? localById.get(nextId) : undefined;
+      const localNode = blockId ? localById.get(blockId) : undefined;
       const isMedia = node.type === 'image' || node.type === 'audio';
       return {
         ...node,
         attrs: {
           ...(isMedia ? localNode?.attrs : {}),
           ...node.attrs,
-          ...(nextId ? { jottathingBlockId: nextId } : {}),
+          ...(blockId ? { jottathingBlockId: blockId } : {}),
           ...(notionId ? { notionBlockId: notionId } : {}),
           ...(fileUploadId ? { notionFileUploadId: fileUploadId, uploadState: 'done' } : {}),
         },
