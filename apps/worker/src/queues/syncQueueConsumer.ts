@@ -301,6 +301,11 @@ async function handleQueuedSyncFailure(
     return;
   }
 
+  if (!isUnmappedNotionContentError(error) && !isPermanentSyncFailure(error)) {
+    retryQueueMessage(message, error);
+    return;
+  }
+
   const { error: failureStateError } = await markSyncRowFailed(job);
   if (failureStateError) {
     console.error('[queue] failed sync state could not be persisted', safeErrorMetadata(failureStateError));
@@ -310,11 +315,6 @@ async function handleQueuedSyncFailure(
 
   if (!syncRow || syncRow.local_version <= job.queuedVersion) {
     await notifyQueueJobFailed(job, error, env);
-  }
-
-  if (!isUnmappedNotionContentError(error) && !isPermanentNotionFailure(error)) {
-    message.retry();
-    return;
   }
 
   try {
@@ -524,12 +524,23 @@ function isSyncQueueMessage(value: unknown): value is SyncQueueMessage {
 }
 
 /** Avoids retrying Notion requests that require a user or permission change. */
-function isPermanentNotionFailure(error: unknown): boolean {
+function isPermanentSyncFailure(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false;
-  const detail = error as { isNotionApiError?: unknown; status?: unknown };
-  return detail.isNotionApiError === true &&
-    typeof detail.status === 'number' &&
-    [400, 401, 403, 404].includes(detail.status);
+  const status = (error as { status?: unknown }).status;
+  return typeof status === 'number' && [400, 401, 403, 404].includes(status);
+}
+
+/** Retries transient failures without publishing a user-facing error. */
+function retryQueueMessage(message: Message<SyncQueueReference>, error: unknown): void {
+  const failure = error && typeof error === 'object'
+    ? error as { status?: unknown; retryAfter?: unknown }
+    : undefined;
+  const retryAfter = failure?.status === 429 ? failure.retryAfter : undefined;
+  if (typeof retryAfter === 'number' && Number.isFinite(retryAfter) && retryAfter > 0) {
+    message.retry({ delaySeconds: Math.ceil(retryAfter) });
+    return;
+  }
+  message.retry();
 }
 
 /** Discards queue work whose installation was removed during account deletion. */

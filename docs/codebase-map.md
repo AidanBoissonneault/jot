@@ -57,6 +57,8 @@ Page moves have two paths. Moving within a project only changes page order. Movi
 
 Direct page archiving requires another active page in the same project. It rejects the last page before changing local storage and selects an existing sibling after an archive instead of creating a replacement.
 
+The Worker checks its active page mappings before both full-page and queued archive mutations. Permanent request errors are retained and sent to the affected page; transient queue errors remain pending, and Notion's `Retry-After` delay is applied to 429 retries without marking the page failed.
+
 Manual resync checks the active account, unblocks and redrives durable queue work, sends unbaselined project snapshots, reconciles dirty or failed pages, then flushes again. It reloads the Notion workspace only after local queues settle with no conflicts or failed uploads; otherwise it leaves remote reload pending.
 
 When a manual resync finds exactly one identical empty paragraph added on each side, it keeps Notion's block identity and removes the duplicate automatically. Multiple matching empty paragraphs remain in review because their spacing may be intentional.

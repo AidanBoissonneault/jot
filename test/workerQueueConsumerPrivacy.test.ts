@@ -320,6 +320,77 @@ describe('content-free sync queue references', () => {
     });
   });
 
+  it('waits for Notion rate limits without marking the page failed or notifying the user', async () => {
+    const message = makeMessage();
+    const payloadRead = makeQuery({
+      installation_id: 42,
+      payload: makeBlockJob(),
+      status: 'pending',
+    });
+    const syncRead = makeQuery({ local_version: 1 });
+    const markSyncing = makeQuery(null);
+    runtime.supabase.from
+      .mockReturnValueOnce(payloadRead)
+      .mockReturnValueOnce(syncRead)
+      .mockReturnValueOnce(markSyncing);
+    runtime.applyBlockOpsToNotionForInstallation.mockRejectedValueOnce(
+      Object.assign(new Error('Notion is rate limiting requests.'), {
+        code: 'rate_limited',
+        retryAfter: 4.2,
+        status: 429,
+      }),
+    );
+    const notify = vi.fn(async (_request: Request) => new Response('ok'));
+
+    await processSyncQueue({ messages: [message] } as never, {
+      SYNC_EVENTS: makeSyncEventsBinding(notify),
+    } as never);
+
+    expect(message.retry).toHaveBeenCalledWith({ delaySeconds: 5 });
+    expect(message.ack).not.toHaveBeenCalled();
+    expect(runtime.supabase.from).toHaveBeenCalledTimes(3);
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it('publishes a permanent request validation error instead of retrying it', async () => {
+    const jobId = '1b4f2a8a-4ed5-4d81-baaa-3d3c5d0d2e12';
+    const message = makeMessage(jobId);
+    const payloadRead = makeQuery({ installation_id: 42, payload: makeBlockJob(), status: 'pending' });
+    const syncRead = makeQuery({ local_version: 1 });
+    const markSyncing = makeQuery(null);
+    const markFailed = makeQuery(null);
+    const retainPayload = makeQuery({ id: jobId });
+    runtime.supabase.from
+      .mockReturnValueOnce(payloadRead)
+      .mockReturnValueOnce(syncRead)
+      .mockReturnValueOnce(markSyncing)
+      .mockReturnValueOnce(markFailed)
+      .mockReturnValueOnce(retainPayload);
+    runtime.applyBlockOpsToNotionForInstallation.mockRejectedValueOnce(
+      Object.assign(new Error('A project must keep at least one page.'), {
+        code: 'last_project_page',
+        status: 400,
+      }),
+    );
+    const notify = vi.fn(async (_request: Request) => new Response('ok'));
+
+    await processSyncQueue({ messages: [message] } as never, {
+      SYNC_EVENTS: makeSyncEventsBinding(notify),
+    } as never);
+
+    expect(message.ack).toHaveBeenCalledOnce();
+    expect(message.retry).not.toHaveBeenCalled();
+    expect(markFailed.update).toHaveBeenCalledWith(expect.objectContaining({ status: 'failed' }));
+    const event = await notify.mock.calls[0]?.[0]?.clone().json();
+    expect(event).toEqual({
+      status: 'failed',
+      pageId: 'page-one',
+      message: 'A project must keep at least one page.',
+      code: 'last_project_page',
+      statusCode: 400,
+    });
+  });
+
   it('retains and announces a dead-lettered sync job', async () => {
     const message = makeMessage();
     const payloadRead = makeQuery({ installation_id: 42, payload: makeBlockJob(), status: 'pending' });

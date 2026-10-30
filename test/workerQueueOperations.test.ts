@@ -8,6 +8,78 @@ import type { Project, ProjectPage } from '@/src/types/capture';
 import type { ManagedBlockOperation, NotionObject, WorkerStore } from '@/apps/worker/src/types';
 
 describe('queued Notion block operations', () => {
+  test('rejects a queued archive when the project has no other active page', async () => {
+    const installationId = 15;
+    const project = {
+      id: 'project-1',
+      name: 'Project',
+      status: 'active',
+      stateContent: { type: 'doc', content: [] },
+    } as Project;
+    const page = {
+      id: 'page-1',
+      projectId: project.id,
+      title: 'Page',
+      status: 'active',
+      content: { type: 'doc', content: [] },
+    } as ProjectPage;
+    const store = {
+      installationId,
+      notePages: {
+        [page.id]: { archived: false, parentPageId: 'project-row', title: page.title },
+      },
+      projectPages: {},
+      threadBlocks: {
+        [threadKey(page.id)]: { blockId: 'thread-toggle', parentPageId: 'project-row', title: page.title },
+      },
+      tokens: { access_token: 'token' },
+    } as unknown as WorkerStore;
+    const supabase = {
+      from: vi.fn((table: string) => {
+        const query: Record<string, ReturnType<typeof vi.fn>> = {};
+        query.select = vi.fn(() => query);
+        query.eq = vi.fn(() => query);
+        query.limit = vi.fn(() => query);
+        query.maybeSingle = vi.fn(async () => ({
+          data: table === 'notion_installations'
+            ? { id: installationId, user_id: 'notion:user' }
+            : { accessToken: 'token' },
+          error: null,
+        }));
+        return query;
+      }),
+    };
+    const archiveThreadToggle = vi.fn();
+    const writeStore = vi.fn();
+    const operations = createWorkerQueueOperations({
+      appendLog: vi.fn(),
+      applyManagedBlockOps: vi.fn(),
+      archiveThreadToggle,
+      ensureProjectPage: vi.fn(async () => ({ id: 'project-row', project, title: project.name })),
+      ensureThreadToggle: vi.fn(),
+      notionRequest: vi.fn(),
+      pushPageToNotionCore: vi.fn(),
+      readStore: () => store,
+      replaceManagedBlocks: vi.fn(),
+      supabase,
+      updateThreadToggleTitle: vi.fn(),
+      withFreshInstallationStore: async (_syncStore: WorkerStore, operation: (freshStore: WorkerStore) => Promise<unknown>) => operation(store),
+      writeStore,
+      freshConnectedStore: async (syncStore: WorkerStore) => syncStore,
+      performSyncProjectFolder: vi.fn(),
+    } as never);
+
+    await expect(operations.applyBlockOpsToNotionForInstallation(installationId, {
+      ops: [{ type: 'page_archive' } as ManagedBlockOperation],
+      page,
+      project,
+      selectedParentPageId: undefined,
+    })).rejects.toMatchObject({ status: 400, code: 'last_project_page' });
+
+    expect(archiveThreadToggle).not.toHaveBeenCalled();
+    expect(writeStore).not.toHaveBeenCalled();
+  });
+
   test('restores an archived project when a durable page edit is newer than the archive', async () => {
     const installationId = 15;
     const archivedAt = '2026-10-28T21:07:25.066Z';

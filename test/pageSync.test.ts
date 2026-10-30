@@ -5,6 +5,60 @@ import type { Project, ProjectPage } from '@/src/types/capture';
 import type { NotionObject, NotionRequester, WorkerStore } from '@/apps/worker/src/types';
 
 describe('Notion page sync recovery', () => {
+  test('rejects archiving the last active page before mutating Notion', async () => {
+    const project = {
+      id: 'project-1',
+      name: 'Project',
+      status: 'active',
+      createdAt: '2026-10-27T12:00:00.000Z',
+      updatedAt: '2026-10-28T12:00:00.000Z',
+      stateContent: { type: 'doc', content: [] },
+    } as Project;
+    const page = {
+      id: 'page-1',
+      projectId: project.id,
+      title: 'Page',
+      status: 'archived',
+      createdAt: '2026-10-27T12:00:00.000Z',
+      updatedAt: '2026-10-28T12:00:00.000Z',
+      content: { type: 'doc', content: [] },
+    } as ProjectPage;
+    const store = {
+      blockMappings: {},
+      notePages: {
+        [page.id]: { archived: false, parentPageId: 'project-row', title: page.title },
+      },
+      projectPages: {},
+      threadBlocks: {
+        [threadKey(page.id)]: { blockId: 'thread-toggle', parentPageId: 'project-row', title: page.title },
+      },
+    } as unknown as WorkerStore;
+    const archiveThreadToggle = vi.fn();
+    const writeStore = vi.fn();
+    const dependencies = {
+      appendLog: vi.fn(),
+      archiveThreadToggle,
+      ensureProjectPage: vi.fn(async () => ({ id: 'project-row', project, title: project.name })),
+      ensureThreadToggle: vi.fn(),
+      notionRequest: vi.fn(),
+      replaceManagedBlocks: vi.fn(),
+      requireConnectedStore: vi.fn(async () => store),
+      updateThreadToggleTitle: vi.fn(),
+      writeStore,
+    } as never;
+
+    await expect(pushPageToNotionCore({
+      dependencies,
+      page,
+      project,
+      request: {},
+      selectedParentPageId: undefined,
+    })).rejects.toMatchObject({ status: 400, code: 'last_project_page' });
+
+    expect(archiveThreadToggle).not.toHaveBeenCalled();
+    expect(writeStore).not.toHaveBeenCalled();
+  });
+
   test('reactivates an archived project for a newer full-page edit', async () => {
     const archivedAt = '2026-10-28T21:07:25.066Z';
     const editedAt = '2026-10-28T21:07:30.537Z';

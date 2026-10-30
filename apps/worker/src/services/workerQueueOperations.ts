@@ -17,6 +17,7 @@ import type {
   WorkerStore,
 } from '../types.js';
 import type { DocumentContent } from '../../../../src/types/capture.js';
+import { requireActiveSiblingPage } from '../pageArchiveInvariant.js';
 import {
   isArchivedBlockEditError,
   reactivateProjectForNewerPageEdit,
@@ -255,6 +256,7 @@ export function createWorkerQueueOperations(dependencies: WorkerQueueDependencie
         throw error;
       }
       if (page.status === 'archived' || ops.some((op) => op.type === 'page_archive')) {
+        requireActiveSiblingPage(freshStore, page, projectPage.id);
         await archiveThreadToggle?.(freshStore, page);
         appendLog(freshStore, 'sync_thread_archived', page.title);
         await writeStore(freshStore);

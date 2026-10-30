@@ -5,6 +5,7 @@
  */
 
 import type { DocumentContent, Project, ProjectPage } from '../../../src/types/capture.js';
+import { requireActiveSiblingPage } from './pageArchiveInvariant.js';
 import {
   isArchivedBlockEditError,
   reactivateProjectForNewerPageEdit,
@@ -158,6 +159,7 @@ async function pushPageToProjectDatabase({
   });
 
   if (page.status === 'archived') {
+    requireActiveSiblingPage(store, page, projectPage.id);
     await archiveThreadToggle?.(store, page);
     store.notePages[page.id] = {
       archived: true,
