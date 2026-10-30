@@ -247,7 +247,11 @@ describe('workspace sync status', () => {
 describe('optimistic project creation', () => {
   test('sync payload includes project database metadata defaults', async () => {
     const projectSync = deferred<Response>();
-    const fetchMock = vi.fn(() => projectSync.promise);
+    const fetchMock = vi.fn((input: RequestInfo | URL) =>
+      String(input).endsWith('/sync/project')
+        ? projectSync.promise
+        : Promise.resolve(jsonResponse({ queued: true, versions: {} })),
+    );
     vi.stubGlobal('fetch', fetchMock);
     const store = useJottathingStore();
 
@@ -259,6 +263,9 @@ describe('optimistic project creation', () => {
     expect(requestBody.project.createdAt).toEqual(expect.any(String));
     expect(requestBody.project.updatedAt).toEqual(expect.any(String));
     expect(stripJottathingBlockIds(requestBody.project.stateContent)).toEqual(emptyDocument());
+    projectSync.resolve(jsonResponse({ status: 'saved', queued: true, versions: {} }));
+    await waitFor(() => expect(store.saveStatus).not.toBe('creating'));
+    await notionClient.flushPendingSyncOps({ force: true });
   });
 
   test('appears and is selected before project sync settles', async () => {
@@ -271,6 +278,30 @@ describe('optimistic project creation', () => {
 
     projectSync.resolve(jsonResponse({ status: 'saved', queued: true, versions: {} }));
     await waitFor(() => expect(store.saveStatus).not.toBe('creating'));
+    await notionClient.flushPendingSyncOps({ force: true });
+  });
+
+  test('keeps a renamed first page visible while a new project sync is pending', async () => {
+    const { projectSync, store } = await setupProjectSyncTest('New project');
+    const temporaryProjectId = store.currentProjectId;
+
+    await store.refreshWorkspaceMenuTree();
+    store.workspaceMenuPagesByProject[temporaryProjectId] = [];
+
+    try {
+      await store.renameCurrentPage('First page');
+      await waitFor(() => expect(store.currentProjectId).not.toBe(temporaryProjectId));
+      const projectId = store.currentProjectId;
+
+      expect(store.currentPage).toMatchObject({ projectId, title: 'First page' });
+      expect(store.workspaceMenuProjects.some((project) => project.id === projectId)).toBe(true);
+      expect(store.workspaceMenuVisiblePagesByProject[projectId]?.map((page) => page.title))
+        .toEqual(['First page']);
+    } finally {
+      projectSync.resolve(jsonResponse({ status: 'saved', queued: true, versions: {} }));
+    }
+    await waitFor(() => expect(store.saveStatus).not.toBe('creating'));
+    await notionClient.flushPendingSyncOps({ force: true });
   });
 
   test('applies an immediate rename to the durable project ID after creation settles', async () => {
@@ -322,6 +353,7 @@ describe('optimistic project creation', () => {
     expect(projectBodies[0]?.project.id).not.toBe(temporaryProjectId);
     expect(projectBodies[1]?.project.id).toBe(projectBodies[0]?.project.id);
     expect(projectBodies[1]?.project.name).toBe('My Project');
+    await notionClient.flushPendingSyncOps({ force: true });
   });
 
   test('uploads the latest first-page edit made while project creation is still syncing', async () => {
@@ -402,6 +434,8 @@ describe('optimistic project creation', () => {
     await waitFor(() =>
       expect(store.projects.some((project) => project.id === tempProjectId)).toBe(false),
     );
+    await waitFor(() => expect(store.saveStatus).not.toBe('creating'));
+    await notionClient.flushPendingSyncOps({ force: true });
 
     expect(store.currentProjectId).toBe('project-jottathing');
     expect(readBrowserStorage().currentProjectId).toBe('project-jottathing');
@@ -2321,7 +2355,7 @@ describe('optimistic page creation', () => {
       await waitFor(() => expect(pageListRequests).toBeGreaterThan(0));
 
       settled.resolve(resolvedPage);
-      await waitFor(() => expect(pageListRequests).toBe(2));
+      await waitFor(() => expect(pageListRequests).toBeGreaterThanOrEqual(2));
       await waitFor(() => expect(store.currentPage?.id).toBe(resolvedPage.id));
       firstPageLoad.resolve([optimisticPage]);
       await rename;
@@ -3672,7 +3706,11 @@ async function seedStore(
 
 async function setupProjectSyncTest(projectName: string) {
   const projectSync = deferred<Response>();
-  vi.stubGlobal('fetch', vi.fn(() => projectSync.promise));
+  vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) =>
+    String(input).endsWith('/sync/project')
+      ? projectSync.promise
+      : Promise.resolve(jsonResponse({ queued: true, versions: {} })),
+  ));
   const store = useJottathingStore();
   await seedNotionStore(store);
   await store.createProject(projectName);

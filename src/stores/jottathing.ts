@@ -86,6 +86,25 @@ export const useJottathingStore = defineStore('jottathing', () => {
   const currentWorkspace = computed(() =>
     workspaces.value.find((workspace) => workspace.id === currentWorkspaceId.value),
   );
+  /** Combines the lazy menu cache with live pages for the selected project. */
+  const workspaceMenuVisiblePagesByProject = computed(() => {
+    const projectId = currentProjectId.value;
+    if (!projectId) return workspaceMenuPagesByProject.value;
+
+    const visiblePages = pages.value.filter(
+      (page) => page.projectId === projectId && page.status !== 'archived',
+    );
+    const selectedPage = currentPage.value;
+    if (selectedPage?.projectId === projectId && selectedPage.status !== 'archived') {
+      const selectedPageIndex = visiblePages.findIndex((page) => page.id === selectedPage.id);
+      if (selectedPageIndex === -1) visiblePages.push(selectedPage);
+      else visiblePages[selectedPageIndex] = selectedPage;
+    }
+
+    return visiblePages.length
+      ? { ...workspaceMenuPagesByProject.value, [projectId]: visiblePages }
+      : workspaceMenuPagesByProject.value;
+  });
 
   function getWorkspaceMenuAccountKey() {
     return `${syncConfig.value.userId ?? ''}::${syncConfig.value.workspaceId ?? ''}::${Boolean(syncConfig.value.authenticated)}`;
@@ -520,6 +539,75 @@ export const useJottathingStore = defineStore('jottathing', () => {
     }
   }
 
+  function showCreatedProjectVersion(
+    temporaryProjectId: string,
+    temporaryPageId: string,
+    page: ProjectPage,
+    project: Project,
+  ) {
+    const wasViewingProject = [temporaryProjectId, project.id].includes(currentProjectId.value);
+    const selectedPageId = currentPage.value?.id;
+    const currentPageStillSelected = selectedPageId && currentPage.value?.id === selectedPageId;
+    const currentProjectPages = pages.value
+      .filter((storedPage) => [temporaryProjectId, project.id].includes(storedPage.projectId))
+      .map((storedPage) => storedPage.id === temporaryPageId
+        ? {
+            ...page,
+            ...storedPage,
+            id: page.id,
+            projectId: project.id,
+            syncState: page.syncState,
+            syncMessage: page.syncMessage,
+          }
+        : { ...storedPage, projectId: project.id });
+    const selectedProjectPage = currentPageStillSelected &&
+      currentPage.value && [temporaryProjectId, project.id].includes(currentPage.value.projectId)
+      ? {
+          ...page,
+          ...currentPage.value,
+          id: currentPage.value.id === temporaryPageId ? page.id : currentPage.value.id,
+          projectId: project.id,
+          ...(currentPage.value.id === temporaryPageId
+            ? { syncState: page.syncState, syncMessage: page.syncMessage }
+            : {}),
+        }
+      : undefined;
+    const firstPage = currentProjectPages.find((storedPage) => storedPage.id === page.id) ?? page;
+    const menuPages = [
+      firstPage,
+      ...currentProjectPages.filter((storedPage) => storedPage.id !== firstPage.id),
+    ];
+    if (selectedProjectPage) {
+      const selectedIndex = menuPages.findIndex((storedPage) => storedPage.id === selectedProjectPage.id);
+      if (selectedIndex === -1) menuPages.push(selectedProjectPage);
+      else menuPages[selectedIndex] = selectedProjectPage;
+    }
+    const replaceProject = (items: Project[]) => [
+      ...items.filter((item) => item.id !== temporaryProjectId && item.id !== project.id),
+      project,
+    ].sort(sortProjectsByUpdatedDesc);
+
+    workspaceMenuProjects.value = replaceProject(workspaceMenuProjects.value);
+    if (currentWorkspaceId.value === project.workspaceId) {
+      projects.value = replaceProject(projects.value);
+    } else {
+      projects.value = projects.value.filter((item) => item.id !== temporaryProjectId);
+    }
+    const nextMenuPages = { ...workspaceMenuPagesByProject.value };
+    delete nextMenuPages[temporaryProjectId];
+    nextMenuPages[project.id] = menuPages;
+    workspaceMenuPagesByProject.value = nextMenuPages;
+
+    if (wasViewingProject && [temporaryProjectId, project.id].includes(currentProjectId.value)) {
+      pages.value = menuPages;
+      if (currentPageStillSelected) {
+        currentPage.value = selectedProjectPage ?? page;
+      }
+      currentProjectId.value = project.id;
+      applyProjectOrPageSyncState(project, currentPage.value);
+    }
+  }
+
   async function createProject(
     name: string,
     workspaceId?: string,
@@ -543,36 +631,26 @@ export const useJottathingStore = defineStore('jottathing', () => {
           ? { pageTitle: initialPage.title, pageContent: initialPage.content }
           : {}),
       });
-      void refreshWorkspaceMenuTree().catch(() => undefined);
+      workspaceMenuProjects.value = [...workspaceMenuProjects.value, creation.project]
+        .sort(sortProjectsByUpdatedDesc);
+      workspaceMenuPagesByProject.value = {
+        ...workspaceMenuPagesByProject.value,
+        [creation.project.id]: [creation.page],
+      };
       projects.value = [...projects.value, creation.project];
       pages.value = [creation.page];
       currentProjectId.value = creation.project.id;
       currentPage.value = creation.page;
       applyProjectOrPageSyncState(creation.project, creation.page);
 
-      void creation.settled.then(async ({ page, project }) => {
-        const wasViewingProject = currentProjectId.value === creation.project.id;
-        const wasViewingPage = currentPage.value?.id === creation.page.id;
-        const [nextProjects, nextPages] = await Promise.all([
-          notionClient.listProjects(),
-          wasViewingProject
-            ? notionClient.listProjectPages(project.id)
-            : Promise.resolve(undefined),
-        ]);
-
-        projects.value = nextProjects;
-        void refreshWorkspaceMenuTree().catch(() => undefined);
-        if (wasViewingProject && currentProjectId.value === creation.project.id) {
-          // Keep the selected project and its first durable page linked in the
-          // same reactive turn so the UI cannot enter an unlinked state.
-          pages.value = nextPages ?? [];
-          if (wasViewingPage && currentPage.value?.id === creation.page.id) {
-            currentPage.value = page;
-            applyPageSyncState(page);
-          }
-          currentProjectId.value = project.id;
-        }
-
+      const showCreatedVersion = ({ page, project }: { page: ProjectPage; project: Project }) =>
+        showCreatedProjectVersion(creation.project.id, creation.page.id, page, project);
+      void creation.reconciled.then(showCreatedVersion).catch((error) => {
+        errorMessage.value = error instanceof Error ? error.message : 'Unable to load the new project page.';
+        saveStatus.value = 'error';
+      });
+      void creation.settled.then(({ page, project }) => {
+        showCreatedVersion({ page, project });
         if (project.syncState === 'error') {
           errorMessage.value = project.syncMessage ?? 'The project was created locally but could not be synced.';
           saveStatus.value = 'error';
@@ -581,6 +659,12 @@ export const useJottathingStore = defineStore('jottathing', () => {
         const message =
           error instanceof Error ? error.message : 'Unable to create this project.';
         projects.value = await notionClient.listProjects();
+        workspaceMenuProjects.value = await notionClient.listWorkspaceProjects();
+        const activeMenuProjectIds = new Set(workspaceMenuProjects.value.map((project) => project.id));
+        workspaceMenuPagesByProject.value = Object.fromEntries(
+          Object.entries(workspaceMenuPagesByProject.value)
+            .filter(([projectId]) => activeMenuProjectIds.has(projectId)),
+        );
         const storedProjectId = await notionClient.getCurrentProjectId();
         currentProjectId.value = storedProjectId;
         await loadCurrentPage();
@@ -1609,12 +1693,16 @@ export const useJottathingStore = defineStore('jottathing', () => {
           }
         : workspace);
     }
-    if (cachedProjectPages) {
+    if (page.projectId === currentProjectId.value || cachedProjectPages !== undefined) {
+      const menuPages = page.projectId === currentProjectId.value
+        ? knownProjectPages
+        : cachedProjectPages ?? [];
+      const hasPage = menuPages.some((storedPage) => storedPage.id === page.id);
       workspaceMenuPagesByProject.value = {
         ...workspaceMenuPagesByProject.value,
-        [page.projectId]: cachedProjectPages.map((storedPage) =>
-          storedPage.id === page.id ? page : storedPage,
-        ),
+        [page.projectId]: hasPage
+          ? menuPages.map((storedPage) => storedPage.id === page.id ? page : storedPage)
+          : [...menuPages, page],
       };
     }
 
@@ -1810,6 +1898,7 @@ export const useJottathingStore = defineStore('jottathing', () => {
     currentWorkspaceId,
     workspaceMenuProjects,
     workspaceMenuPagesByProject,
+    workspaceMenuVisiblePagesByProject,
     workspaceMenuPageLoads,
     createNotionParentPage,
     errorMessage,

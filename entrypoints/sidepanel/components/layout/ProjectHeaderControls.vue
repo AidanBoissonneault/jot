@@ -278,7 +278,7 @@ onBeforeUnmount(() => {
           <WorkspaceMenuList
             :workspaces="store.workspaces"
             :projects="store.workspaceMenuProjects"
-            :pages-by-project="store.workspaceMenuPagesByProject"
+            :pages-by-project="store.workspaceMenuVisiblePagesByProject"
             :loading-project-ids="store.workspaceMenuPageLoads"
             :color-for-category="colorForCategory"
             :selected-workspace-id="store.currentWorkspaceId"

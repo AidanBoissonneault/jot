@@ -95,6 +95,7 @@ type JottathingStorage = {
 type OptimisticProjectCreation = {
   page: ProjectPage;
   project: Project;
+  reconciled: Promise<{ page: ProjectPage; project: Project }>;
   settled: Promise<{ page: ProjectPage; project: Project }>;
 };
 
@@ -4892,6 +4893,14 @@ export const notionClient = {
       projects: [...projects, project].sort(sortProjectsByUpdatedDesc),
     });
 
+    let resolveReconciled!: (value: { page: ProjectPage; project: Project }) => void;
+    let rejectReconciled!: (error: unknown) => void;
+    const reconciled = new Promise<{ page: ProjectPage; project: Project }>((resolve, reject) => {
+      resolveReconciled = resolve;
+      rejectReconciled = reject;
+    });
+    void reconciled.catch(() => undefined);
+
     const settled = (async () => {
       const realProject = {
         ...createProjectRecord(project.name),
@@ -4923,6 +4932,7 @@ export const notionClient = {
           realPage,
           realProject,
         });
+        resolveReconciled({ page: realPage, project: realProject });
         const syncedProject = await syncProject(realProject);
         const savedProject = syncedProject ?? realProject;
         const { projects: latestProjects } = await readStorage();
@@ -4942,6 +4952,7 @@ export const notionClient = {
         const savedPage = await replayTempPageSave(page.id, persistedPage);
         return { page: savedPage, project: savedProject };
       } catch (error) {
+        rejectReconciled(error);
         const message =
           error instanceof Error ? error.message : 'Unable to create this project.';
         projectIdAliases.delete(project.id);
@@ -4961,8 +4972,23 @@ export const notionClient = {
     const projectReconciliation = settled.then(({ project }) => project.id);
     projectReconciliation.catch(() => undefined);
     projectReconciliations.set(project.id, projectReconciliation);
+    void reconciled.then(({ project: durableProject }) => {
+      projectReconciliations.set(durableProject.id, projectReconciliation);
+      void projectReconciliation.then(
+        () => {
+          if (projectReconciliations.get(durableProject.id) === projectReconciliation) {
+            projectReconciliations.delete(durableProject.id);
+          }
+        },
+        () => {
+          if (projectReconciliations.get(durableProject.id) === projectReconciliation) {
+            projectReconciliations.delete(durableProject.id);
+          }
+        },
+      );
+    }, () => undefined);
 
-    return { page, project, settled };
+    return { page, project, reconciled, settled };
   },
 
   async renameProject(projectId: string, name: string): Promise<Project> {
