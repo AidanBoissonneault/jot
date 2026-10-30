@@ -1,5 +1,6 @@
 import type { DocumentContent } from '../types/capture.js';
 import type { SyncContentConflict } from '../types/sync.js';
+import { syncConflictContentSignature } from './syncConflictSignature.js';
 
 type BlockIndex = Map<string, DocumentContent>;
 
@@ -113,42 +114,7 @@ function indexById(blocks: DocumentContent[]): BlockIndex {
 }
 
 function signature(block: DocumentContent): string {
-  return JSON.stringify(withoutIdentity(block));
-}
-
-/** Builds stable signatures without synchronization IDs or transient upload state. */
-function withoutIdentity(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(withoutIdentity);
-  if (!value || typeof value !== 'object') return value;
-  const record = value as Record<string, unknown>;
-  const isFileUpload = Boolean(record.notionFileUploadId);
-  const normalized = Object.fromEntries(Object.entries(record)
-    .filter(([key]) => key !== 'jottathingBlockId' && key !== 'notionBlockId' &&
-      key !== 'jottathingConflictResolution' && key !== 'jottathingPreserveRemoteBlocks' &&
-      key !== 'uploadState' && !(isFileUpload && key === 'src'))
-    .sort(([first], [second]) => first.localeCompare(second))
-    .map(([key, nested]) => [key, key === 'src' ? stableMediaUrl(nested) : withoutIdentity(nested)]));
-  if (isEmptyRecord(normalized.attrs)) delete normalized.attrs;
-  return normalized;
-}
-
-function isEmptyRecord(value: unknown): value is Record<string, never> {
-  return value !== null && typeof value === 'object' &&
-    !Array.isArray(value) && Object.keys(value).length === 0;
-}
-
-/** Ignores expiring Notion signatures when comparing uploaded media. */
-function stableMediaUrl(value: unknown): unknown {
-  if (typeof value !== 'string') return withoutIdentity(value);
-  try {
-    const url = new URL(value);
-    if (url.searchParams.has('X-Amz-Signature') || url.hostname.startsWith('prod-files-secure.s3.')) {
-      return `${url.origin}${url.pathname}`;
-    }
-  } catch {
-    // Keep non-URL media values exact.
-  }
-  return value;
+  return syncConflictContentSignature(block, true);
 }
 
 function isPresent(value: string | undefined): value is string {

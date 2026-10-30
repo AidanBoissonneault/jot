@@ -2,6 +2,7 @@ import type { DocumentContent } from '../types/capture.js';
 import type { SyncContentConflict } from '../types/sync.js';
 import { normalizeJottathingBlockIds } from '../extensions/jottathingBlockIds.js';
 import { isProjectStateMetadataNode } from '../extensions/sourceRegistry.js';
+import { syncConflictContentSignature } from './syncConflictSignature.js';
 
 const SYNC_CONFLICT_BLOCK_TYPE = 'jottathingSyncConflict';
 
@@ -408,7 +409,7 @@ export function syncConflictBlockId(block: DocumentContent): string | undefined 
 
 /** Compares block content while ignoring sync identity and volatile upload fields. */
 export function syncConflictBlockSignature(block: DocumentContent): string {
-  return JSON.stringify(withoutIdentity(block));
+  return syncConflictContentSignature(block);
 }
 
 /** Formats block text and media labels for the conflict review interface. */
@@ -438,32 +439,6 @@ function displayBlock(block?: DocumentContent): string {
 
 function textFrom(block: DocumentContent): string {
   return (block.text ?? '') + (block.content ?? []).map(textFrom).join('');
-}
-
-function withoutIdentity(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(withoutIdentity);
-  if (!value || typeof value !== 'object') return value;
-  const record = value as Record<string, unknown>;
-  const isFileUpload = Boolean(record.notionFileUploadId);
-  return Object.fromEntries(Object.entries(record)
-    .filter(([key]) => key !== 'jottathingBlockId' && key !== 'notionBlockId' &&
-      key !== 'jottathingConflictResolution' && key !== 'jottathingPreserveRemoteBlocks' &&
-      key !== 'uploadState' && !(isFileUpload && key === 'src'))
-    .sort(([first], [second]) => first.localeCompare(second))
-    .map(([key, nested]) => [key, key === 'src' ? stableMediaUrl(nested) : withoutIdentity(nested)]));
-}
-
-function stableMediaUrl(value: unknown): unknown {
-  if (typeof value !== 'string') return withoutIdentity(value);
-  try {
-    const url = new URL(value);
-    if (url.searchParams.has('X-Amz-Signature') || url.hostname.startsWith('prod-files-secure.s3.')) {
-      return `${url.origin}${url.pathname}`;
-    }
-  } catch {
-    // Keep non-URL media values exact.
-  }
-  return value;
 }
 
 function remoteBlockId(block: DocumentContent): string | undefined {
