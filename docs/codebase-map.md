@@ -230,3 +230,5 @@ Conflict review now calls the shared content-signature helper directly; its redu
 `UnmappedNotionContentError` no longer duplicates the shared code constant on each error instance; route responses still use the constant and the type guard still recognizes the class. Managed-block and queue-consumer suites pass (28 tests), Worker typecheck passes, and Fallow reports one remaining unused class member instead of two.
 
 Conflict review reconstruction now gets local block IDs from the existing Notion-ID mapping instead of building a second map. It also removes a temporary ID alias; four managed-block suites pass (26 tests), Worker typecheck passes, and Fallow's duplicate-line count falls from 68 to 52.
+
+Project metadata updates and capture-source registration now use `replaceProjectInList` to keep their immediate list update and sort before sync-state projection. The rename, capture-source, and metadata cases pass (3 tests), root typecheck passes, and Fallow's duplicate-line count falls from 52 to 37. This retains the direct update that the earlier attempted removal could not safely eliminate.
