@@ -56,7 +56,7 @@ import { useJottathingStore } from '@/src/stores/jottathing';
 import type { DocumentContent } from '@/src/types/capture';
 import type { SyncContentConflict, SyncProgressUpdate } from '@/src/types/sync';
 import type { CaptureSelectionPayload, JottathingRuntimeMessage } from '@/src/types/messages';
-import { autoMergeUniquePageAdditions } from '@/src/lib/syncConflictAutoMerge';
+import { getSyncResyncFeedback, reviewSyncConflicts } from '@/src/lib/syncResync';
 
 const store = useJottathingStore();
 
@@ -546,69 +546,22 @@ async function resync() {
       resyncProgress.value = progress;
     });
 
-    const conflictsNeedingInlineReview: SyncContentConflict[] = [];
-    const conflictsNeedingModalReview: SyncContentConflict[] = [];
-    let autoMergedAdditions = 0;
-    let autoMergeError = '';
-    for (const conflict of result.conflicts) {
-      const mergedContent = autoMergeUniquePageAdditions(conflict);
-      if (!mergedContent) {
-        (conflict.targetType === 'page'
-          ? conflictsNeedingInlineReview
-          : conflictsNeedingModalReview).push(conflict);
-        continue;
-      }
-
-      try {
-        await notionClient.resolveSyncConflict(conflict.targetType, conflict.targetId, mergedContent);
-        autoMergedAdditions += 1;
-      } catch (error) {
-        (conflict.targetType === 'page'
-          ? conflictsNeedingInlineReview
-          : conflictsNeedingModalReview).push(conflict);
-        autoMergeError ||= error instanceof Error
-          ? error.message
-          : 'Unable to sync the new blocks automatically. Your local changes remain saved.';
-      }
-    }
-
-    syncConflicts.value = conflictsNeedingModalReview;
+    const review = await reviewSyncConflicts(
+      result.conflicts,
+      (targetType, targetId, content) =>
+        notionClient.resolveSyncConflict(targetType, targetId, content),
+    );
+    syncConflicts.value = review.projectConflicts;
     isSyncConflictModalDismissed.value = false;
 
-    if (autoMergedAdditions) {
+    if (review.autoMergedAdditions) {
       resyncProgress.value = { phase: 'updating_view' };
       await store.refreshWorkspaceFromStorage();
     }
 
-    if (conflictsNeedingModalReview.length) {
-      syncConflictError.value = '';
-      if (autoMergeError) syncConflictError.value = autoMergeError;
-      uiMessage.value = autoMergeError ||
-        `${conflictsNeedingInlineReview.length ? 'Page sync reviews are ready inside their documents. ' : ''}Review ${conflictsNeedingModalReview.length} project sync ${conflictsNeedingModalReview.length === 1 ? 'item' : 'items'}.`;
-    } else if (conflictsNeedingInlineReview.length) {
-      syncConflictError.value = '';
-      uiMessage.value = autoMergeError ||
-        `${conflictsNeedingInlineReview.length} page sync ${conflictsNeedingInlineReview.length === 1 ? 'review is' : 'reviews are'} ready inside ${conflictsNeedingInlineReview.length === 1 ? 'the affected document' : 'their affected documents'}.`;
-    } else if (autoMergedAdditions) {
-      syncConflictError.value = '';
-      uiMessage.value = 'New Notion blocks were merged with local content and synced.';
-    } else if (result.blockedProjectCount > 0) {
-      uiMessage.value = result.blockedMessage
-        ? `${result.blockedMessage} Your local snapshot remains saved on this device.`
-        : 'Notion still has content that needs review. Your local snapshot remains saved on this device.';
-    } else if (result.remainingCount > 0) {
-      uiMessage.value = store.errorMessage || 'Some changes remain saved locally and are waiting to sync.';
-    } else if (result.reloadedFromNotion && hadPendingLocalChanges) {
-      uiMessage.value = 'Notion content was merged with your local changes and resynced.';
-    } else if (hadPendingLocalChanges) {
-      uiMessage.value = 'Changes sent to Notion. They may take a moment to appear.';
-    } else {
-      uiMessage.value = 'Up to date with Notion.';
-    }
-    if (result.failedUploadCount > 0) {
-      const uploadWarning = `${result.failedUploadCount} Notion upload${result.failedUploadCount === 1 ? ' needs' : 's need'} attention. Other sync work continued; your local notes remain saved.`;
-      uiMessage.value = [uiMessage.value, uploadWarning].filter(Boolean).join(' ');
-    }
+    const feedback = getSyncResyncFeedback(result, hadPendingLocalChanges, review, store.errorMessage);
+    uiMessage.value = feedback.message;
+    if (feedback.conflictError !== undefined) syncConflictError.value = feedback.conflictError;
   } catch (error) {
     uiMessage.value = error instanceof Error
       ? error.message
