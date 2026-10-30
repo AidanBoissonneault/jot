@@ -145,15 +145,15 @@ export function createWorkerStorePersistence(supabase: WorkerSupabaseClient) {
     });
   }
 
-  /** Serializes worker state into the installation persistence row. */
+  /** Creates or replaces the installation state by its primary key. */
   async function writeJottathingSyncState(
     installationId: Identifier,
     store: WorkerStore,
   ): Promise<void> {
-    await ensureJottathingSyncStateRow(installationId);
     const { error } = await supabase
       .from('jottathing_sync_state')
-      .update({
+      .upsert({
+        installation_id: installationId,
         jottathing_database_id: store.jottathingDatabase?.databaseId ?? store.jottathingRootPage?.id ?? null,
         jottathing_data_source_id: store.jottathingDatabase?.dataSourceId ?? null,
         jottathing_parent_page_id:
@@ -170,8 +170,7 @@ export function createWorkerStorePersistence(supabase: WorkerSupabaseClient) {
         project_blocks_json: safeRecord(store.projectBlocks),
         thread_blocks_json: safeRecord(store.threadBlocks),
         updated_at: new Date().toISOString(),
-      })
-      .eq('installation_id', installationId);
+      }, { onConflict: 'installation_id' });
     if (error) throw persistenceError('Unable to save Jottathing synchronization state.', error);
   }
 

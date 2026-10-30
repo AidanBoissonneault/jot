@@ -2,15 +2,20 @@ import { describe, expect, it } from 'vitest';
 import { createWorkerStorePersistence } from '@/apps/worker/src/services/workerStorePersistence';
 import type { WorkerStore, WorkerSupabaseClient } from '@/apps/worker/src/types';
 
-function fakeSupabase(failOn?: 'upsert' | 'select' | 'update', storedState: Record<string, unknown> = {}) {
+function fakeSupabase(failOn?: 'ensure' | 'select' | 'write', storedState: Record<string, unknown> = {}) {
   const calls: string[] = [];
+  const upserts: Array<{ payload: unknown; options?: unknown }> = [];
   let operation = '';
   const builder: Record<string, unknown> & {
     then: (resolve: (value: unknown) => unknown, reject: (reason: unknown) => unknown) => Promise<unknown>;
   } = {
-    upsert: () => { operation = 'upsert'; calls.push(operation); return builder; },
+    upsert: (payload: unknown, options?: { ignoreDuplicates?: boolean }) => {
+      operation = options?.ignoreDuplicates ? 'ensure' : 'write';
+      calls.push(operation);
+      upserts.push({ payload, options });
+      return builder;
+    },
     select: () => { operation = 'select'; calls.push(operation); return builder; },
-    update: () => { operation = 'update'; calls.push(operation); return builder; },
     eq: () => builder,
     single: async () => result(),
     then: (resolve, reject) => Promise.resolve(result()).then(resolve, reject),
@@ -32,10 +37,7 @@ function fakeSupabase(failOn?: 'upsert' | 'select' | 'update', storedState: Reco
     };
   }
 
-  return {
-    calls,
-    client: { from: () => builder } as unknown as WorkerSupabaseClient,
-  };
+  return { calls, client: { from: () => builder } as unknown as WorkerSupabaseClient, upserts };
 }
 
 const store: WorkerStore = {
@@ -63,7 +65,7 @@ describe('worker sync-state persistence failures', () => {
   });
 
   it('rejects a failed state write instead of acknowledging the sync', async () => {
-    const { client } = fakeSupabase('update');
+    const { client } = fakeSupabase('write');
     const persistence = createWorkerStorePersistence(client);
 
     await expect(persistence.writeStore(store))
@@ -71,7 +73,7 @@ describe('worker sync-state persistence failures', () => {
   });
 
   it('rejects failure to ensure the installation state row', async () => {
-    const { client } = fakeSupabase('upsert');
+    const { client } = fakeSupabase('ensure');
     const persistence = createWorkerStorePersistence(client);
 
     await expect(persistence.ensureJottathingSyncStateRow(42))
@@ -96,5 +98,25 @@ describe('worker sync-state persistence failures', () => {
     expect(Object.keys(state.notePages)).toContain('__proto__');
     expect(JSON.parse(JSON.stringify(state.notePages))['__proto__'].title).toBe('saved safely');
     expect(({} as { title?: string }).title).toBeUndefined();
+  });
+
+  it('writes synchronization state with one installation-keyed upsert', async () => {
+    const { calls, client, upserts } = fakeSupabase();
+    const persistence = createWorkerStorePersistence(client);
+
+    await persistence.writeStore(store);
+
+    expect(calls).toEqual(['write']);
+    expect(upserts).toHaveLength(1);
+    expect(upserts[0]?.options).toEqual({ onConflict: 'installation_id' });
+    expect(upserts[0]?.payload).toMatchObject({
+      installation_id: 42,
+      note_pages_json: {},
+      block_mappings_json: {},
+      parent_pages_json: {},
+      project_pages_json: {},
+      project_blocks_json: {},
+      thread_blocks_json: {},
+    });
   });
 });
