@@ -232,3 +232,5 @@ Conflict review now calls the shared content-signature helper directly; its redu
 Conflict review reconstruction now gets local block IDs from the existing Notion-ID mapping instead of building a second map. It also removes a temporary ID alias; four managed-block suites pass (26 tests), Worker typecheck passes, and Fallow's duplicate-line count falls from 68 to 52.
 
 Project metadata updates and capture-source registration now use `replaceProjectInList` to keep their immediate list update and sort before sync-state projection. The rename, capture-source, and metadata cases pass (3 tests), root typecheck passes, and Fallow's duplicate-line count falls from 52 to 37. This retains the direct update that the earlier attempted removal could not safely eliminate.
+
+Temporary-ID replacement and restart duplicate recovery now share `persistPageReplacement` for removing both IDs, repairing active-page selection, and persisting the result with one workspace-version increment. The overlapping-save and persisted-temp-duplicate tests pass (2), and root typecheck passes. This keeps the two recovery paths aligned; the Fallow duplication count is unchanged.
