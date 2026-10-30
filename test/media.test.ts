@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { JottathingYoutube } from '@/src/extensions/media';
+import { MediaKit } from '@/src/extensions/media';
 import { youtubeEmbedUrl } from '@/src/lib/youtubeUtils';
 
 describe('media extensions', () => {
@@ -20,18 +20,20 @@ describe('media extensions', () => {
   });
 
   it('renders YouTube nodes as privacy-enhanced embedded iframes', () => {
-    const renderHTML = JottathingYoutube.config.renderHTML;
+    const youtube = MediaKit.config.addExtensions?.call(MediaKit)
+      .find((extension) => extension.name === 'youtube');
+    const renderHTML = youtube?.config.renderHTML;
 
-    if (!renderHTML) {
-      throw new Error('JottathingYoutube must render HTML');
+    if (!youtube || !renderHTML) {
+      throw new Error('MediaKit must register a YouTube renderer');
     }
 
     const html = renderHTML.call(
       {
-        name: JottathingYoutube.name,
-        options: JottathingYoutube.options,
-        storage: {},
-        parent: null,
+        name: youtube.name,
+        options: youtube.options,
+        storage: youtube.storage,
+        parent: youtube.parent,
       },
       {
         node: null as unknown as Parameters<typeof renderHTML>[0]['node'],

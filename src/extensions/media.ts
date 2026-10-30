@@ -533,7 +533,7 @@ const JottathingImage = Image.extend({
   },
 });
 
-export const JottathingYoutube = Youtube.configure({
+const JottathingYoutube = Youtube.configure({
   nocookie: true,
   controls: true,
   allowFullscreen: true,
