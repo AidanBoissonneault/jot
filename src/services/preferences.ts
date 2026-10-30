@@ -36,7 +36,7 @@ export function normalizeInterfaceScale(value: unknown): number {
   return Math.min(MAX_INTERFACE_SCALE, Math.max(MIN_INTERFACE_SCALE, rounded));
 }
 
-export function normalizeUserPreferences(value: unknown): UserPreferences {
+function normalizeUserPreferences(value: unknown): UserPreferences {
   if (!value || typeof value !== 'object') {
     return { interfaceScale: DEFAULT_INTERFACE_SCALE };
   }

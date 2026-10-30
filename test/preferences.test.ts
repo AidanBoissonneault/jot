@@ -3,7 +3,6 @@ import {
   DEFAULT_INTERFACE_SCALE,
   loadUserPreferences,
   normalizeInterfaceScale,
-  normalizeUserPreferences,
   saveUserPreferences,
 } from '@/src/services/preferences';
 import { resetBrowserStorage } from './setup';
@@ -16,11 +15,14 @@ describe('user preferences', () => {
     expect(normalizeInterfaceScale('120')).toBe(DEFAULT_INTERFACE_SCALE);
   });
 
-  it('uses defaults for missing or invalid stored settings', () => {
-    expect(normalizeUserPreferences(undefined)).toEqual({
+  it('uses defaults for missing or invalid stored settings', async () => {
+    resetBrowserStorage();
+    await expect(loadUserPreferences()).resolves.toEqual({
       interfaceScale: DEFAULT_INTERFACE_SCALE,
     });
-    expect(normalizeUserPreferences({ interfaceScale: Number.NaN })).toEqual({
+
+    resetBrowserStorage({ jottathingUserPreferences: { interfaceScale: Number.NaN } });
+    await expect(loadUserPreferences()).resolves.toEqual({
       interfaceScale: DEFAULT_INTERFACE_SCALE,
     });
   });
