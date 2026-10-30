@@ -162,3 +162,5 @@ Legal version constants and acceptance-record builders/validators are now privat
 `refreshSyncSession` now delegates account ownership to the documented `resolveSyncQueueOwnership` helper. The helper preserves owners for retained work and requests a queue transfer only when local work is clear; the method then performs that transfer and persists the session. Four focused transition cases pass, root and Worker typechecks pass, and Fallow no longer ranks session refresh among its top twelve production complexity findings.
 
 The YouTube node is private to `MediaKit`, which is the editor's public media extension entry point. Its rendering test now resolves the node through that registration; media and block-conversion suites pass (31 tests), with root and Worker typechecks clean.
+
+The Worker HMAC signer is private to `notionAuth.ts`; security tests now generate fixture signatures independently with Node crypto. All Worker security tests pass (34), as does the Worker typecheck.
