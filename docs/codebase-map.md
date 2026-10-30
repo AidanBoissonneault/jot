@@ -1,6 +1,6 @@
 # Codebase map and simplification plan
 
-Snapshot: 2026-10-29, branch `polish`.
+Snapshot: 2026-10-30, branch `polish`.
 
 ## System map
 
@@ -201,7 +201,7 @@ Block normalization no longer imports a quote or code block's source from a foll
 
 Project-row lookup now requires the managed database's current rich-text `Jottathing ID` property and always uses a filtered query. The scan for rows from adopted databases with a missing or changed ID property is removed; these schemas cannot accept the current write payload, and scanning could lead to duplicate rows. Unsupported schemas now fail before querying rows. The row suite passes (7 tests), root and Worker typechecks pass, and extension and marketing production builds pass.
 
-The full `pnpm test` run after the project-list cleanup was reverted reports 454 passing and 40 failing tests across 494 tests in 63 files. Failures remain confined to `connectionLifecycle.test.ts` (8) and `jottathingStore.optimistic.test.ts` (32). The selected immediate-rename and optimistic project-creation tests pass after the revert; the full suite does not show the project-order regression from that attempted cleanup. Treat the other suite failures as unresolved, not as evidence of full-suite success. Earlier runs are recorded below as historical baselines.
+The latest full `pnpm test` run after these slices reports 459 passing and 40 failing tests across 499 tests in 64 files. Failures remain confined to `connectionLifecycle.test.ts` (8) and `jottathingStore.optimistic.test.ts` (32); an isolated run of the latter reports 33 failures, so one result is order-sensitive. The selected immediate-rename and optimistic project-creation tests pass after the project-list cleanup was reverted. These remaining failures are unresolved and do not demonstrate full-suite success. Earlier runs are recorded below as historical baselines.
 
 Worker block mappings now use only `jottathingBlockId`; the duplicate `localNodeId` field and its fallback lookups are removed from mapping types, constructors, reconciliation, imports, and project-state cleanup. Existing Notion block IDs still restore mapping associations by Notion page/block identity, while mappings that lack the current local identity are no longer treated as valid. This removes 19 net production lines. Seven managed-block, media, project-state, and persistence suites pass (37 tests), as do root and Worker typechecks. The full suite was not rerun for this Worker-only slice; its latest result is recorded above.
 
