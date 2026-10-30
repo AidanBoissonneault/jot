@@ -76,6 +76,25 @@ const connectedConfig: SyncConfig = {
   userId: 'notion:test-user',
   syncQueueOwnerUserId: 'notion:test-user',
 };
+const testNotionWorkspace: Workspace = {
+  id: 'workspace-notion-notion%3Atest-user-unknown',
+  name: 'Notion workspace',
+  kind: 'notion',
+  accountId: 'notion:test-user',
+  createdAt: '2026-01-01T00:00:00.000Z',
+  updatedAt: '2026-01-01T00:00:00.000Z',
+};
+const notionTestProject: Project = {
+  ...baseProject,
+  workspaceId: testNotionWorkspace.id,
+  syncMode: 'notion',
+};
+const notionTestPage: ProjectPage = {
+  ...basePage,
+  workspaceId: testNotionWorkspace.id,
+  syncMode: 'notion',
+  syncAccountId: testNotionWorkspace.accountId,
+};
 
 beforeEach(() => {
   setActivePinia(createPinia());
@@ -224,7 +243,7 @@ describe('optimistic project creation', () => {
     vi.stubGlobal('fetch', fetchMock);
     const store = useJottathingStore();
 
-    await seedStore(store);
+    await seedNotionStore(store);
     await store.createProject('Roadmap');
     const requestBody = await waitForFirstRequest(fetchMock);
 
@@ -241,6 +260,9 @@ describe('optimistic project creation', () => {
     expect(store.currentPage?.id).toMatch(/^temp-page-/);
     expect(store.projects.at(-1)?.name).toBe('Roadmap');
     expect(store.saveStatus).toBe('creating');
+
+    projectSync.resolve(jsonResponse({ status: 'saved', queued: true, versions: {} }));
+    await waitFor(() => expect(store.saveStatus).not.toBe('creating'));
   });
 
   test('applies an immediate rename to the durable project ID after creation settles', async () => {
@@ -260,8 +282,8 @@ describe('optimistic project creation', () => {
       currentProjectId: baseProject.id,
       currentWorkspaceId: workspace.id,
       hasMigratedCapturesToPages: true,
-      pages: [basePage],
-      projects: [baseProject],
+      pages: [notionTestPage],
+      projects: [notionTestProject],
       syncConfig: connectedConfig,
       workspaces: [workspace],
     });
@@ -375,6 +397,9 @@ describe('optimistic project creation', () => {
 
     expect(store.currentProjectId).toBe('project-jottathing');
     expect(readBrowserStorage().currentProjectId).toBe('project-jottathing');
+    expect(readBrowserStorage().currentProjectIdByWorkspace).toMatchObject({
+      [testNotionWorkspace.id]: 'project-jottathing',
+    });
     expect((readBrowserStorage().projects as Project[]).some((project) =>
       project.id.startsWith('temp-project-'),
     )).toBe(false);
@@ -384,7 +409,9 @@ describe('optimistic project creation', () => {
     const { projectSync, store } = await setupProjectSyncTest('Broken');
     const tempProjectId = store.currentProjectId;
 
+    const syncFailure = expect(projectSync.promise).rejects.toThrow('Notion unavailable');
     projectSync.reject(new Error('Notion unavailable'));
+    await syncFailure;
     await waitFor(() => {
       expect(store.currentProjectId).not.toBe(tempProjectId);
       expect(store.saveStatus).not.toBe('creating');
@@ -3386,9 +3413,29 @@ async function setupProjectSyncTest(projectName: string) {
   const projectSync = deferred<Response>();
   vi.stubGlobal('fetch', vi.fn(() => projectSync.promise));
   const store = useJottathingStore();
-  await seedStore(store);
+  await seedNotionStore(store);
   await store.createProject(projectName);
   return { projectSync, store };
+}
+
+async function seedNotionStore(store: ReturnType<typeof useJottathingStore>) {
+  resetBrowserStorage({
+    activePageIdsByProject: { [notionTestProject.id]: notionTestPage.id },
+    currentProjectId: notionTestProject.id,
+    currentProjectIdByWorkspace: { [testNotionWorkspace.id]: notionTestProject.id },
+    currentWorkspaceId: testNotionWorkspace.id,
+    hasMigratedCapturesToPages: true,
+    pages: [notionTestPage],
+    projects: [notionTestProject],
+    syncConfig: connectedConfig,
+    workspaces: [testNotionWorkspace],
+  });
+  await seedStore(store);
+  store.projects = [notionTestProject];
+  store.pages = [notionTestPage];
+  store.workspaces = [testNotionWorkspace];
+  store.currentWorkspaceId = testNotionWorkspace.id;
+  store.currentPage = notionTestPage;
 }
 
 async function setupTimerFetchStoreTest() {

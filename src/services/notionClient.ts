@@ -2796,17 +2796,18 @@ async function requirePageWithProject(pageId: string) {
 }
 
 async function replaceTempProject({
+  selectionRevisionAtStart,
   tempPage,
   tempProject,
   realPage,
   realProject,
 }: {
+  selectionRevisionAtStart: number;
   tempPage: ProjectPage;
   tempProject: Project;
   realPage: ProjectPage;
   realProject: Project;
 }) {
-  const selectionRevisionAtStart = currentProjectSelectionRevision;
   const {
     activePageIdsByProject,
     currentProjectId,
@@ -2826,13 +2827,13 @@ async function replaceTempProject({
   delete nextActivePageIds[tempProject.id];
   nextActivePageIds[realProject.id] =
     tempActivePageId === tempPage.id ? realPage.id : tempActivePageId;
-  const nextCurrentProjectIdByWorkspace = { ...currentProjectIdByWorkspace };
-  if (
-    realProject.workspaceId &&
-    nextCurrentProjectIdByWorkspace[realProject.workspaceId] === tempProject.id
-  ) {
-    nextCurrentProjectIdByWorkspace[realProject.workspaceId] = realProject.id;
-  }
+  const nextCurrentProjectIdByWorkspace = currentProjectSelectionsAfterReconciliation(
+    currentProjectIdByWorkspace,
+    projects,
+    tempProject,
+    realProject.id,
+    selectionRevisionAtStart,
+  );
 
   await writeStorage({
     activePageIdsByProject: nextActivePageIds,
@@ -2865,8 +2866,8 @@ async function rollbackTempProject(
   tempPage: ProjectPage,
   previousProjectId: string,
   message: string,
+  selectionRevisionAtStart: number,
 ) {
-  const selectionRevisionAtStart = currentProjectSelectionRevision;
   const {
     activePageIdsByProject,
     currentProjectId,
@@ -2884,20 +2885,20 @@ async function rollbackTempProject(
   delete nextActivePageIds[tempProject.id];
   pendingTempPageSaves.delete(tempPage.id);
   const remainingProjects = projects.filter((project) => project.id !== tempProject.id);
-  const nextCurrentProjectIdByWorkspace = { ...currentProjectIdByWorkspace };
-  if (
-    tempProject.workspaceId &&
-    nextCurrentProjectIdByWorkspace[tempProject.workspaceId] === tempProject.id
-  ) {
-    nextCurrentProjectIdByWorkspace[tempProject.workspaceId] =
-      remainingProjects.find((project) =>
-        project.workspaceId === tempProject.workspaceId &&
-        project.status !== 'archived' &&
-        project.id === previousProjectId,
-      )?.id ?? remainingProjects.find((project) =>
-        project.workspaceId === tempProject.workspaceId && project.status !== 'archived',
-      )?.id ?? '';
-  }
+  const fallbackProjectId = remainingProjects.find((project) =>
+    project.workspaceId === tempProject.workspaceId &&
+    project.status !== 'archived' &&
+    project.id === previousProjectId,
+  )?.id ?? remainingProjects.find((project) =>
+    project.workspaceId === tempProject.workspaceId && project.status !== 'archived',
+  )?.id ?? '';
+  const nextCurrentProjectIdByWorkspace = currentProjectSelectionsAfterReconciliation(
+    currentProjectIdByWorkspace,
+    projects,
+    tempProject,
+    fallbackProjectId,
+    selectionRevisionAtStart,
+  );
 
   await writeStorage({
     activePageIdsByProject: nextActivePageIds,
@@ -2924,6 +2925,34 @@ function currentProjectIdForTempProject(
     ? storedProjectId
     : requestedCurrentProjectId ?? storedProjectId;
   return selectedProjectId === tempProjectId ? resolvedProjectId : selectedProjectId;
+}
+
+/** Keeps a mid-reconciliation project switch aligned with its workspace selection. */
+function currentProjectSelectionsAfterReconciliation(
+  selectionsByWorkspace: Record<string, string>,
+  projects: Project[],
+  tempProject: Project,
+  resolvedProjectId: string,
+  selectionRevisionAtStart: number,
+): Record<string, string> {
+  const workspaceId = tempProject.workspaceId;
+  if (!workspaceId) return selectionsByWorkspace;
+
+  const selections = { ...selectionsByWorkspace };
+  if (selections[workspaceId] === tempProject.id) {
+    selections[workspaceId] = resolvedProjectId;
+  }
+
+  if (selectionRevisionAtStart !== currentProjectSelectionRevision) {
+    const selectedProject = projects.find((project) => project.id === requestedCurrentProjectId);
+    if (selectedProject?.workspaceId === workspaceId) {
+      selections[workspaceId] = selectedProject.id === tempProject.id
+        ? resolvedProjectId
+        : selectedProject.id;
+    }
+  }
+
+  return selections;
 }
 
 function rememberPageIdAlias(tempPageId: string, realPageId: string) {
@@ -3120,6 +3149,7 @@ async function latestTempPageSnapshot(
 
 /** Repairs a project left with an optimistic ID after the extension stopped mid-create. */
 async function recoverOrphanedTemporaryProject(tempProjectId: string): Promise<ProjectPage> {
+  const selectionRevisionAtStart = currentProjectSelectionRevision;
   const existingReconciliation = projectReconciliations.get(tempProjectId);
   if (existingReconciliation) {
     await existingReconciliation;
@@ -3164,6 +3194,7 @@ async function recoverOrphanedTemporaryProject(tempProjectId: string): Promise<P
     };
 
     await replaceTempProject({
+      selectionRevisionAtStart,
       tempPage: rootTempPage,
       tempProject,
       realPage: realRootPage,
@@ -4699,6 +4730,7 @@ export const notionClient = {
     name = 'Untitled Project',
     options: ProjectCreationOptions = {},
   ): Promise<OptimisticProjectCreation> {
+    const selectionRevisionAtStart = currentProjectSelectionRevision;
     const {
       activePageIdsByProject,
       currentWorkspaceId: storedCurrentWorkspaceId,
@@ -4768,6 +4800,7 @@ export const notionClient = {
           projectIdAliases.delete(oldestProjectId);
         }
         await replaceTempProject({
+          selectionRevisionAtStart,
           tempPage: page,
           tempProject: project,
           realPage,
@@ -4799,7 +4832,13 @@ export const notionClient = {
         const message =
           error instanceof Error ? error.message : 'Unable to create this project.';
         projectIdAliases.delete(project.id);
-        await rollbackTempProject(project, page, currentProjectId, message);
+        await rollbackTempProject(
+          project,
+          page,
+          currentProjectId,
+          message,
+          selectionRevisionAtStart,
+        );
         throw error;
       } finally {
         projectReconciliations.delete(project.id);
