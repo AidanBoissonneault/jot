@@ -91,35 +91,17 @@ export async function idbSetMany(items: Record<string, unknown>): Promise<void> 
 export async function pauseIdbWrites(): Promise<void> {
   writesPaused = true;
   await Promise.allSettled([...pendingWrites]);
-  const db = await openDb();
-  await new Promise<void>((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, 'readwrite');
-    const store = tx.objectStore(STORE_NAME);
-    const request = store.get(WRITE_CONTROL_KEY);
-    request.onsuccess = () => {
-      const control = normalizeWriteControl(request.result);
-      store.put({ ...control, paused: true }, WRITE_CONTROL_KEY);
-    };
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
+  await withWriteControl((store, control) => {
+    store.put({ ...control, paused: true }, WRITE_CONTROL_KEY);
   });
 }
 
 /** Re-enables writes after an aborted deletion, or adopts the new epoch after a successful wipe. */
 export async function resumeIdbWrites(options: { adoptCurrentEpoch?: boolean } = {}): Promise<void> {
-  const db = await openDb();
   let nextEpoch = writerEpoch;
-  await new Promise<void>((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, 'readwrite');
-    const store = tx.objectStore(STORE_NAME);
-    const request = store.get(WRITE_CONTROL_KEY);
-    request.onsuccess = () => {
-      const control = normalizeWriteControl(request.result);
-      nextEpoch = control.epoch;
-      store.put({ ...control, paused: false }, WRITE_CONTROL_KEY);
-    };
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
+  await withWriteControl((store, control) => {
+    nextEpoch = control.epoch;
+    store.put({ ...control, paused: false }, WRITE_CONTROL_KEY);
   });
   if (options.adoptCurrentEpoch) {
     writerEpoch = nextEpoch;
@@ -140,22 +122,28 @@ async function trackWrite(write: () => Promise<void>): Promise<void> {
   }
 }
 
-async function writeIfCurrent(write: (store: IDBObjectStore) => void): Promise<void> {
-  const epoch = await getWriterEpoch();
-  if (writesPaused) return;
-
+/** Reads and updates the deletion fence inside one serialized IndexedDB transaction. */
+async function withWriteControl(
+  update: (store: IDBObjectStore, control: WriteControl) => void,
+): Promise<void> {
   const db = await openDb();
   await new Promise<void>((resolve, reject) => {
     const tx = db.transaction(STORE_NAME, 'readwrite');
     const store = tx.objectStore(STORE_NAME);
     const request = store.get(WRITE_CONTROL_KEY);
-    request.onsuccess = () => {
-      const control = normalizeWriteControl(request.result);
-      if (control.paused || control.epoch !== epoch) return;
-      write(store);
-    };
+    request.onsuccess = () => update(store, normalizeWriteControl(request.result));
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
+  });
+}
+
+async function writeIfCurrent(write: (store: IDBObjectStore) => void): Promise<void> {
+  const epoch = await getWriterEpoch();
+  if (writesPaused) return;
+
+  await withWriteControl((store, control) => {
+    if (control.paused || control.epoch !== epoch) return;
+    write(store);
   });
 }
 
