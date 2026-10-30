@@ -105,8 +105,9 @@ function expectSeededDocumentsPreserved() {
   });
 }
 
-afterEach(() => {
+afterEach(async () => {
   vi.stubGlobal('fetch', originalFetch);
+  await resumeIdbWrites({ adoptCurrentEpoch: true });
   resetBrowserStorage();
 });
 
