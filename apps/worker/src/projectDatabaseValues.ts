@@ -173,7 +173,7 @@ function propertyVisibility(
  */
 export function propertyIdMap(properties: Record<string, JsonObject>): Record<string, string> {
   return Object.fromEntries(
-    Object.entries(properties).map(([name, property]) => [name, stringProperty(property, 'id') ?? name]),
+    Object.entries(properties).map(([name, property]) => [name, nestedString(property, 'id') ?? name]),
   );
 }
 
@@ -233,7 +233,7 @@ export function firstDataSourceId(database: NotionObject): string | undefined {
   const dataSources: unknown = database.data_sources;
   if (Array.isArray(dataSources)) {
     const first: unknown = dataSources[0];
-    const id = stringProperty(first, 'id');
+    const id = nestedString(first, 'id');
     if (id) return id;
   }
   return nestedString(database, 'initial_data_source', 'id');
@@ -338,7 +338,7 @@ export function titleFromDatabase(database: NotionObject): string {
  */
 export function titleFromPage(page: NotionObject): string {
   const titleProperty = Object.values(page.properties ?? {}).find(
-    (property: JsonObject) => stringProperty(property, 'type') === 'title',
+    (property: JsonObject) => nestedString(property, 'type') === 'title',
   );
   const title = titleProperty ? richTextArray(titleProperty, 'title') : [];
   return richTextValue(title) || (typeof page.title === 'string' ? page.title : '') || 'Untitled';
@@ -436,13 +436,6 @@ function objectProperty(value: unknown, key: string): JsonObject | undefined {
   return property && typeof property === 'object' && !Array.isArray(property) ? property as JsonObject : undefined;
 }
 
-/** Reads a string property from an unknown value. @param value - Unknown value. @param key - Property name. @returns String value when present. */
-function stringProperty(value: unknown, key: string): string | undefined {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
-  const property: unknown = (value as JsonObject)[key];
-  return typeof property === 'string' ? property : undefined;
-}
-
 /** Reads a finite number property from an unknown value. */
 function numberProperty(value: unknown, key: string): number | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
@@ -463,10 +456,10 @@ function richTextValue(items: NotionRichText[]): string {
 
 /** Extracts a string error code from an unknown thrown value. @param error - Unknown error. @returns Error code when present. */
 function errorCode(error: unknown): string | undefined {
-  return stringProperty(error, 'code');
+  return nestedString(error, 'code');
 }
 
 /** Converts an unknown thrown value to readable text. @param error - Unknown error. @returns Error message. */
 function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : stringProperty(error, 'message') ?? String(error);
+  return error instanceof Error ? error.message : nestedString(error, 'message') ?? String(error);
 }

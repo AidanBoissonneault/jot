@@ -30,7 +30,7 @@ import type {
   NotionRequester,
   WorkerStore,
 } from './types.js';
-import { isNotionPageIdValidationError, notionQueryPages } from './workerUtils.js';
+import { isNotionPageIdValidationError, nestedString, notionQueryPages } from './workerUtils.js';
 
 /** Parent selection passed to database discovery. */
 interface ParentSelection {
@@ -529,10 +529,10 @@ export function createProjectDatabaseDiscoveryHelpers({
     ];
 
     for (const view of views) {
-      const viewName = stringProperty(view, 'name') ?? 'Unnamed view';
-      const existingView = existing.find((candidate) => stringProperty(candidate, 'name') === viewName);
+      const viewName = nestedString(view, 'name') ?? 'Unnamed view';
+      const existingView = existing.find((candidate) => nestedString(candidate, 'name') === viewName);
       if (existingView) {
-        const viewId = stringProperty(existingView, 'id');
+        const viewId = nestedString(existingView, 'id');
         if (viewId && needsPageFirstViewUpdate(existingView, view, propertyIds[PROJECT_PROPERTIES.title])) {
           await notionRequest(store, `/views/${viewId}`, {
             method: 'PATCH',
@@ -576,7 +576,7 @@ export function createProjectDatabaseDiscoveryHelpers({
 
       const response = await notionRequest(store, `/views?${search}`).catch(() => undefined);
       for (const viewRef of response?.results ?? []) {
-        if (stringProperty(viewRef, 'name')) {
+        if (nestedString(viewRef, 'name')) {
           results.push(viewRef);
         } else if (viewRef.id) {
           const view = await notionRequest(store, `/views/${viewRef.id}`).catch(() => viewRef);
@@ -617,13 +617,7 @@ function errorMessage(error: unknown): string {
 }
 
 function errorCode(error: unknown): string | undefined {
-  return stringProperty(error, 'code');
-}
-
-function stringProperty(value: unknown, key: string): string | undefined {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
-  const property: unknown = (value as JsonObject)[key];
-  return typeof property === 'string' ? property : undefined;
+  return nestedString(error, 'code');
 }
 
 function checkboxValue(property: JsonObject | undefined): boolean {
