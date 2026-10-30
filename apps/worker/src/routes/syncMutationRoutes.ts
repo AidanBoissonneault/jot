@@ -63,7 +63,7 @@ export function registerSyncMutationRoutes(app: Hono<{ Bindings: WorkerEnv }>): 
     const body = await readSyncPageRequestBody(c.req.raw);
     if (!body) return c.json({ error: 'Sync request is too large.' }, 413);
     const { page, project, selectedParentPageId } = body;
-    const ops = Array.isArray(body?.ops) ? body.ops : [];
+    const ops = Array.isArray(body.ops) ? body.ops : [];
   
     if (!ops.length && (!page?.id || !project?.id)) {
       return c.json({ status: 'error', message: 'Missing page or project.' });
