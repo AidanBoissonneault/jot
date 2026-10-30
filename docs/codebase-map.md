@@ -166,3 +166,5 @@ The YouTube node is private to `MediaKit`, which is the editor's public media ex
 The Worker HMAC signer is private to `notionAuth.ts`; security tests now generate fixture signatures independently with Node crypto. All Worker security tests pass (34), as does the Worker typecheck.
 
 `/sync/status` now counts active and dead-lettered queue payloads through one shared query builder. The unused boolean payload probe is removed; queue-status and Worker queue tests pass (6 tests), and the Worker typecheck passes.
+
+The direct-media upload lease duration is private to `mediaContent.ts`; its boundary remains covered at the 2-minute expiry. All media-content tests pass (14), with root and Worker typechecks clean.
