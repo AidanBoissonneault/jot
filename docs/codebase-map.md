@@ -224,3 +224,5 @@ Editor data-URL creation and Worker upload preparation now share the documented 
 Sync push, page-resync, and pull routes now destructure the body directly after normalizing missing JSON to `{}`; their second nullish fallback was redundant. Worker security and request utility suites pass (38 tests), with Worker typecheck clean.
 
 Normal and dead-letter queue failures now publish through one documented Worker notifier. Each path keeps its message and failure-specific fields; queue-consumer tests assert both event shapes, and the suite passes (10 tests) with Worker typecheck clean. Fallow's duplicate-line count falls from 80 to 68.
+
+Conflict review now calls the shared content-signature helper directly; its redundant exported signature wrapper is removed, and block-ID lookup is private. Review tests exercise IDs and upload matching through the public row builder. Conflict-review and auto-merge suites pass (19 tests), root typecheck passes, and Fallow's unused-export findings fall from 9 to 7.
