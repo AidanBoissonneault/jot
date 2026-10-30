@@ -20,7 +20,6 @@ vi.mock('../apps/worker/src/services/workerRuntime.js', () => ({
 
 import {
   failedSyncQueuePayloadCount,
-  hasPendingSyncQueuePayload,
   pendingSyncQueuePayloadCount,
 } from '../apps/worker/src/routes/syncQueryRoutes';
 
@@ -46,18 +45,20 @@ describe('sync queue status', () => {
   it('uses queued payloads as the active-work source of truth', async () => {
     const query = makeQueueQuery([]);
     runtime.supabase.from.mockReturnValue(query);
-    await expect(hasPendingSyncQueuePayload(42)).resolves.toBe(false);
+    await expect(pendingSyncQueuePayloadCount(42)).resolves.toBe(0);
     expect(runtime.supabase.from).toHaveBeenCalledWith('jottathing_sync_queue_payloads');
-    expect(query.select).toHaveBeenCalledWith('id');
+    expect(query.select).toHaveBeenCalledWith('id', { count: 'exact', head: true });
     expect(query.eq).toHaveBeenCalledWith('installation_id', 42);
     expect(query.eq).toHaveBeenCalledWith('status', 'pending');
     expect(query.is).toHaveBeenCalledWith('payload->>deadLetteredAt', null);
-    expect(query.limit).toHaveBeenCalledWith(1);
   });
 
-  it('reports pending while the installation still has an unprocessed payload', async () => {
-    runtime.supabase.from.mockReturnValue(makeQueueQuery([{ id: 'job-1' }]));
-    await expect(hasPendingSyncQueuePayload(42)).resolves.toBe(true);
+  it('counts accepted payloads that are still waiting for the consumer', async () => {
+    const query = makeQueueQuery([{ id: 'job-1' }, { id: 'job-2' }]);
+    runtime.supabase.from.mockReturnValue(query);
+
+    await expect(pendingSyncQueuePayloadCount(42)).resolves.toBe(2);
+    expect(query.is).toHaveBeenCalledWith('payload->>deadLetteredAt', null);
   });
 
   it('keeps parked failures out of the active upload count', async () => {

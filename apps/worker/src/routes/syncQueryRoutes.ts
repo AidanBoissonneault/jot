@@ -322,39 +322,30 @@ export function registerSyncQueryRoutes(app: Hono<{ Bindings: WorkerEnv }>): voi
   });
 }
 
-/** Uses persisted queue payloads as the source of truth for active server work. */
-export async function hasPendingSyncQueuePayload(installationId: string | number): Promise<boolean> {
-  const { data, error } = await supabase
-    .from('jottathing_sync_queue_payloads')
-    .select('id')
-    .eq('installation_id', installationId)
-    .eq('status', 'pending')
-    .is('payload->>deadLetteredAt', null)
-    .limit(1);
-  if (error) throw new Error('Unable to read queued synchronization status.');
-  return Boolean(data?.length);
-}
-
-/** Counts durable, accepted work that has not been acknowledged by the Queue consumer. */
-export async function pendingSyncQueuePayloadCount(installationId: string | number): Promise<number> {
-  const { count, error } = await supabase
+/** Counts pending payloads, optionally including retained dead letters. */
+async function syncQueuePayloadCount(installationId: string | number, includeDeadLettered: boolean): Promise<number> {
+  const query = supabase
     .from('jottathing_sync_queue_payloads')
     .select('id', { count: 'exact', head: true })
     .eq('installation_id', installationId)
-    .eq('status', 'pending')
-    .is('payload->>deadLetteredAt', null);
-  if (error) throw new Error('Unable to read queued synchronization status.');
+    .eq('status', 'pending');
+  const { count, error } = await (includeDeadLettered
+    ? query.not('payload->>deadLetteredAt', 'is', null)
+    : query.is('payload->>deadLetteredAt', null));
+  if (error) {
+    throw new Error(includeDeadLettered
+      ? 'Unable to read failed synchronization status.'
+      : 'Unable to read queued synchronization status.');
+  }
   return count ?? 0;
+}
+
+/** Counts durable work that has not been acknowledged by the Queue consumer. */
+export function pendingSyncQueuePayloadCount(installationId: string | number): Promise<number> {
+  return syncQueuePayloadCount(installationId, false);
 }
 
 /** Counts retained permanent failures separately from work still being processed. */
-export async function failedSyncQueuePayloadCount(installationId: string | number): Promise<number> {
-  const { count, error } = await supabase
-    .from('jottathing_sync_queue_payloads')
-    .select('id', { count: 'exact', head: true })
-    .eq('installation_id', installationId)
-    .eq('status', 'pending')
-    .not('payload->>deadLetteredAt', 'is', null);
-  if (error) throw new Error('Unable to read failed synchronization status.');
-  return count ?? 0;
+export function failedSyncQueuePayloadCount(installationId: string | number): Promise<number> {
+  return syncQueuePayloadCount(installationId, true);
 }
