@@ -3048,10 +3048,6 @@ function rememberPageIdAlias(tempPageId: string, realPageId: string) {
   }
 }
 
-async function replaceTempPage(tempPage: ProjectPage, realPage: ProjectPage) {
-  await replacePageAtomically(tempPage, realPage);
-}
-
 async function replayTempPageSave(tempPageId: string, realPage: ProjectPage) {
   // Include editor writes that captured the temporary row before its ID was
   // replaced but were queued behind that replacement in the storage writer.
@@ -3301,7 +3297,7 @@ async function recoverOrphanedTemporaryProject(tempProjectId: string): Promise<P
           syncState: 'saved',
           syncMessage: undefined,
         };
-        await replaceTempPage(storedPage, page);
+        await replacePageAtomically(storedPage, page);
       }
       pagesToQueue.push({ page, ...(tempPageId ? { tempPageId } : {}) });
     }
@@ -5839,7 +5835,7 @@ export const notionClient = {
         });
         const syncedPage = await enqueuePageSync(realPage, realProject);
 
-        await replaceTempPage(page, syncedPage);
+        await replacePageAtomically(page, syncedPage);
         const savedPage = await replayTempPageSave(page.id, syncedPage);
         void flushPendingSyncOps({ force: true }).catch(() => undefined);
         return savedPage;
