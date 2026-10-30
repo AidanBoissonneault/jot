@@ -218,6 +218,14 @@ function dragItemFrom(event: DragEvent) {
   return null;
 }
 
+/** Finds the page represented by the current drag payload. */
+function draggedPage(event: DragEvent) {
+  const item = dragItemFrom(event);
+  return item?.kind === 'page'
+    ? Object.values(props.pagesByProject).flat().find((page) => page.id === item.id)
+    : undefined;
+}
+
 function dragOverWorkspace(event: DragEvent, workspaceId: string) {
   const item = dragItemFrom(event);
   const project = item?.kind === 'project'
@@ -234,10 +242,7 @@ function dragOverWorkspace(event: DragEvent, workspaceId: string) {
 }
 
 function dragOverProject(event: DragEvent, projectId: string) {
-  const item = dragItemFrom(event);
-  const page = item?.kind === 'page'
-    ? Object.values(props.pagesByProject).flat().find((entry) => entry.id === item.id)
-    : undefined;
+  const page = draggedPage(event);
   const targetExists = props.projects.some((project) => project.id === projectId);
   if (!targetExists || !page) {
     cancelProjectExpansion(projectId);
@@ -261,10 +266,7 @@ function dragOverProject(event: DragEvent, projectId: string) {
 }
 
 function dragOverPageSlot(event: DragEvent, projectId: string, slotIndex: number) {
-  const item = dragItemFrom(event);
-  const page = item?.kind === 'page'
-    ? Object.values(props.pagesByProject).flat().find((entry) => entry.id === item.id)
-    : undefined;
+  const page = draggedPage(event);
   if (!page) {
     activeDropTarget.value = '';
     return;
@@ -295,10 +297,7 @@ function dropOnWorkspace(event: DragEvent, workspaceId: string) {
 function dropOnProject(event: DragEvent, projectId: string) {
   event.preventDefault();
   event.stopPropagation();
-  const item = dragItemFrom(event);
-  const page = item?.kind === 'page'
-    ? Object.values(props.pagesByProject).flat().find((entry) => entry.id === item.id)
-    : undefined;
+  const page = draggedPage(event);
   if (page) emit('movePage', page.id, projectId);
   finishDrag();
 }
@@ -306,10 +305,7 @@ function dropOnProject(event: DragEvent, projectId: string) {
 function dropOnPageSlot(event: DragEvent, projectId: string, slotIndex: number) {
   event.preventDefault();
   event.stopPropagation();
-  const item = dragItemFrom(event);
-  const page = item?.kind === 'page'
-    ? Object.values(props.pagesByProject).flat().find((entry) => entry.id === item.id)
-    : undefined;
+  const page = draggedPage(event);
   if (!page) {
     finishDrag();
     return;

@@ -183,4 +183,6 @@ Worker sync-state writes now use one Supabase upsert keyed by the table's `insta
 
 Worker database-value and discovery parsing now share the documented `nestedString` reader from `workerUtils.ts`; duplicate private one-level string readers are removed while missing properties, arrays, and non-string values keep the same behavior. Project database, row, state, and cache suites pass (26 tests), and root plus Worker typechecks pass.
 
+Workspace-menu page drag handling now resolves the dragged page once through a documented helper used by hover and drop actions. The existing project expansion, page-slot ordering, and move events remain in their callers. Root plus Worker typechecks and the extension production build pass.
+
 The latest full test run reports 427 passing and 41 failing tests across 60 files. Failures remain confined to `connectionLifecycle.test.ts` and `jottathingStore.optimistic.test.ts`, covering stale queue-status fixtures, account-ownership expectations, and workspace/reload/timer assumptions. Focused Worker suites and root plus Worker typechecks pass; keep the full-suite failures visible as unresolved test debt.
