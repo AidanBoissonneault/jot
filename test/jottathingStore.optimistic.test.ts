@@ -2556,7 +2556,7 @@ describe('page title and content saves', () => {
     });
 
     await advanceTimersToFlush(fetchMock);
-    const [, requestInit] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    const [, requestInit] = pushedRequests(fetchMock)[0]!;
     const requestBody = JSON.parse(String(requestInit.body));
 
     expect(requestBody.ops.at(-1).payload.page.title).toBe('Renamed Page');
@@ -2567,7 +2567,11 @@ describe('page title and content saves', () => {
   test('local content is persisted before queue delivery resolves', async () => {
     vi.useFakeTimers();
     const saveRequest = deferred<Response>();
-    const fetchMock = vi.fn(() => saveRequest.promise);
+    const fetchMock = vi.fn((input: RequestInfo | URL) =>
+      String(input).includes('/sync/retry')
+        ? Promise.resolve(jsonResponse({ requeuedCount: 0, requeuedOperationIds: [] }))
+        : saveRequest.promise,
+    );
     vi.stubGlobal('fetch', fetchMock);
     const store = useJottathingStore();
     const content = docWithText('durable draft');
@@ -2583,20 +2587,20 @@ describe('page title and content saves', () => {
     saveRequest.resolve(jsonResponse({ queued: true, versions: { 'page-jottathing': 1 } }));
   });
 
-  test('content save shows saved locally after IndexedDB queue write', async () => {
+  test('content save stays queued locally until its delivery timer fires', async () => {
     const { fetchMock, store } = await setupTimerFetchStoreTest();
     await store.saveCurrentPageContent(docWithText('local state is enough'), {
       preserveLocalContent: true,
     });
 
-    expect(store.saveStatus).toBe('saved');
-    expect(store.currentPage?.syncState).toBe('saved');
+    expect(store.saveStatus).toBe('saving');
+    expect(store.currentPage?.syncState).toBe('saving');
     expect((await listPendingSyncOps()).length).toBeGreaterThan(0);
-    await vi.advanceTimersByTimeAsync(9_999);
+    await vi.advanceTimersByTimeAsync(499);
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  test('local queue waits 10 seconds after the latest edit before pushing compacted updates', async () => {
+  test('local queue waits 500 ms after the latest edit before pushing compacted updates', async () => {
     vi.useFakeTimers();
     const fetchMock = vi.fn(async () =>
       jsonResponse({ queued: true, versions: { 'page-jottathing': 2 } }),
@@ -2610,19 +2614,19 @@ describe('page title and content saves', () => {
     await store.saveCurrentPageContent(docWithBlock('debounced-block', 'second'), {
       preserveLocalContent: true,
     });
-    await vi.advanceTimersByTimeAsync(5_000);
+    await vi.advanceTimersByTimeAsync(250);
     await store.saveCurrentPageContent(docWithBlock('debounced-block', 'third'), {
       preserveLocalContent: true,
     });
 
-    await vi.advanceTimersByTimeAsync(9_999);
+    await vi.advanceTimersByTimeAsync(499);
     expect(fetchMock).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(1);
     await flushPromises(10);
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [, requestInit] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(pushedRequests(fetchMock)).toHaveLength(1);
+    const [, requestInit] = pushedRequests(fetchMock)[0]!;
     const requestBody = JSON.parse(String(requestInit.body));
     expect(requestBody.ops).toHaveLength(1);
     expect(requestBody.ops[0].type).toBe('block_update');
@@ -2647,7 +2651,7 @@ describe('page title and content saves', () => {
 
     await notionClient.flushPendingSyncOps({ force: true });
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(pushedRequests(fetchMock)).toHaveLength(1);
     expect(await listPendingSyncOps()).toEqual([]);
   });
 
@@ -2657,15 +2661,18 @@ describe('page title and content saves', () => {
     const secondPush = deferred<Response>();
     const firstRequestStarted = deferred<void>();
     const secondRequestStarted = deferred<void>();
-    const fetchMock = vi.fn()
-      .mockImplementationOnce(async () => {
+    let pushCount = 0;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).includes('/sync/retry')) {
+        return jsonResponse({ requeuedCount: 0, requeuedOperationIds: [] });
+      }
+      if (++pushCount === 1) {
         firstRequestStarted.resolve(undefined);
         return firstPush.promise;
-      })
-      .mockImplementationOnce(async () => {
-        secondRequestStarted.resolve(undefined);
-        return secondPush.promise;
-      });
+      }
+      secondRequestStarted.resolve(undefined);
+      return secondPush.promise;
+    });
     vi.stubGlobal('fetch', fetchMock);
     const store = useJottathingStore();
     const startingPage = { ...basePage, content: docWithBlock('focus-block', 'first') };
@@ -2685,7 +2692,7 @@ describe('page title and content saves', () => {
 
     firstPush.resolve(jsonResponse({ queued: true, versions: { 'page-jottathing': 1 } }));
     await secondRequestStarted.promise;
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(pushedRequests(fetchMock)).toHaveLength(2);
 
     secondPush.resolve(jsonResponse({ queued: true, versions: { 'page-jottathing': 2 } }));
     await Promise.all([firstFlush, overlappingFlush]);
@@ -3451,11 +3458,11 @@ async function setupTimerFetchStoreTest() {
 
 async function advanceTimersToFlush(fetchMock: ReturnType<typeof vi.fn>) {
   await vi.advanceTimersByTimeAsync(0);
-  await vi.advanceTimersByTimeAsync(9_999);
+  await vi.advanceTimersByTimeAsync(499);
   expect(fetchMock).not.toHaveBeenCalled();
   await vi.advanceTimersByTimeAsync(1);
   await flushPromises(10);
-  expect(fetchMock).toHaveBeenCalledTimes(1);
+  expect(pushedRequests(fetchMock)).toHaveLength(1);
 }
 
 async function waitForFirstRequest(fetchMock: ReturnType<typeof vi.fn>) {
@@ -3467,8 +3474,13 @@ async function waitForFirstRequest(fetchMock: ReturnType<typeof vi.fn>) {
 
 async function flushAndReadRequest(fetchMock: ReturnType<typeof vi.fn>) {
   await notionClient.flushPendingSyncOps({ force: true });
-  const [, requestInit] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+  const [, requestInit] = pushedRequests(fetchMock)[0]!;
   return JSON.parse(String(requestInit.body));
+}
+
+function pushedRequests(fetchMock: ReturnType<typeof vi.fn>) {
+  return (fetchMock.mock.calls as unknown as Array<[string, RequestInit]>)
+    .filter(([url]) => url.endsWith('/sync/push'));
 }
 
 async function setupOfflineEmptyPageTest(blockId: string) {

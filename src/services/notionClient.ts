@@ -5999,7 +5999,6 @@ export const notionClient = {
 
     const syncedPage = await enqueuePageSync(updatedPage, project, previousPage);
     await persistPage(syncedPage);
-    void flushPendingSyncOps({ force: true }).catch(() => undefined);
     return syncedPage;
   },
 
@@ -6052,7 +6051,6 @@ export const notionClient = {
 
     const syncedPage = await enqueuePageSync(updatedPage, savedProject, page);
     await persistPage(syncedPage);
-    void flushPendingSyncOps({ force: true }).catch(() => undefined);
     return syncedPage;
   },
 
