@@ -226,3 +226,5 @@ Sync push, page-resync, and pull routes now destructure the body directly after 
 Normal and dead-letter queue failures now publish through one documented Worker notifier. Each path keeps its message and failure-specific fields; queue-consumer tests assert both event shapes, and the suite passes (10 tests) with Worker typecheck clean. Fallow's duplicate-line count falls from 80 to 68.
 
 Conflict review now calls the shared content-signature helper directly; its redundant exported signature wrapper is removed, and block-ID lookup is private. Review tests exercise IDs and upload matching through the public row builder. Conflict-review and auto-merge suites pass (19 tests), root typecheck passes, and Fallow's unused-export findings fall from 9 to 7.
+
+`UnmappedNotionContentError` no longer duplicates the shared code constant on each error instance; route responses still use the constant and the type guard still recognizes the class. Managed-block and queue-consumer suites pass (28 tests), Worker typecheck passes, and Fallow reports one remaining unused class member instead of two.
