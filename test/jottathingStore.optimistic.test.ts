@@ -16,6 +16,8 @@ import { readBrowserStorage, resetBrowserStorage } from './setup';
 import { doc, paragraph, image } from './helpers/docBuilders';
 import { sourceFromProjectState } from '@/src/extensions/sourceRegistry';
 
+const originalFetch = globalThis.fetch;
+
 type Deferred<T> = {
   promise: Promise<T>;
   reject: (error: unknown) => void;
@@ -100,6 +102,8 @@ beforeEach(() => {
 afterEach(() => {
   vi.clearAllTimers();
   vi.useRealTimers();
+  vi.restoreAllMocks();
+  vi.stubGlobal('fetch', originalFetch);
 });
 
 describe('local workspace defaults', () => {
