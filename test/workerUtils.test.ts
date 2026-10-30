@@ -1,5 +1,22 @@
 import { describe, expect, test } from 'vitest';
-import { notionBlockIdFromError, safeNotionErrorMetadata } from '@/apps/worker/src/workerUtils';
+import {
+  notionBlockIdFromError,
+  readLimitedBody,
+  safeNotionErrorMetadata,
+} from '@/apps/worker/src/workerUtils';
+
+describe('readLimitedBody', () => {
+  test('returns empty text for requests without a body', async () => {
+    await expect(readLimitedBody(new Request('https://example.test'), 0)).resolves.toBe('');
+  });
+
+  test('counts UTF-8 bytes and rejects streams that exceed the limit', async () => {
+    const request = () => new Request('https://example.test', { method: 'POST', body: 'é' });
+
+    await expect(readLimitedBody(request(), 2)).resolves.toBe('é');
+    await expect(readLimitedBody(request(), 1)).resolves.toBeNull();
+  });
+});
 
 describe('safeNotionErrorMetadata', () => {
   test('includes the failed Notion operation without exposing quoted user content or IDs', () => {

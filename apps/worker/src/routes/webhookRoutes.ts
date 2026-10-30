@@ -9,10 +9,11 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import { verifyNotionWebhookSignature } from '../notionAuth.js';
 import { supabase } from '../services/workerRuntime.js';
 import type { JsonObject, WorkerEnv } from '../types.js';
-import { randomToken, safeErrorMetadata, serverBaseUrl } from '../workerUtils.js';
+import { randomToken, readLimitedBody, safeErrorMetadata, serverBaseUrl } from '../workerUtils.js';
 
 const SETUP_ARM_WINDOW_SECONDS = 10 * 60;
 const MAX_VERIFICATION_TOKEN_LENGTH = 4096;
+const MAX_WEBHOOK_BODY_BYTES = 1024 * 1024;
 
 /**
  * Registers the Notion webhook endpoint.
@@ -89,7 +90,11 @@ export function registerWebhookRoutes(app: Hono<{ Bindings: WorkerEnv }>): void 
     c: Context<{ Bindings: WorkerEnv }>,
     callbackToken?: string,
   ) => {
-    const rawBody = await readWebhookBody(c.req.raw, 1024 * 1024);
+    const contentLength = Number(c.req.raw.headers.get('content-length'));
+    if (Number.isFinite(contentLength) && contentLength > MAX_WEBHOOK_BODY_BYTES) {
+      return c.json({ error: 'Webhook payload is too large.' }, 413);
+    }
+    const rawBody = await readLimitedBody(c.req.raw, MAX_WEBHOOK_BODY_BYTES);
     if (rawBody === null) return c.json({ error: 'Webhook payload is too large.' }, 413);
   
     let payload: Record<string, unknown>;
@@ -264,38 +269,5 @@ function constantTimeTokenEquals(left: string, right: string): boolean {
 /** Stores only a digest of the random callback URL segment. */
 function hashToken(token: string): string {
   return createHash('sha256').update(token, 'utf8').digest('hex');
-}
-
-/** Reads a raw webhook body with a hard byte limit before JSON parsing. */
-async function readWebhookBody(request: Request, maxBytes: number): Promise<string | null> {
-  const contentLength = Number(request.headers.get('content-length'));
-  if (Number.isFinite(contentLength) && contentLength > maxBytes) return null;
-  if (!request.body) return '';
-
-  const reader = request.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let totalBytes = 0;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      totalBytes += value.byteLength;
-      if (totalBytes > maxBytes) {
-        await reader.cancel();
-        return null;
-      }
-      chunks.push(value);
-    }
-  } finally {
-    reader.releaseLock();
-  }
-
-  const body = new Uint8Array(totalBytes);
-  let offset = 0;
-  for (const chunk of chunks) {
-    body.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return new TextDecoder().decode(body);
 }
 
