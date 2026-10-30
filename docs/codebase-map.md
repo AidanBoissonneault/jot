@@ -256,3 +256,5 @@ If a local logout cleanup fails, the store still clears legacy access and refres
 Session refresh now waits for in-flight queue delivery and cancels a pending delivery timer when the authenticated account or workspace changes. Reconnect schedules delivery only after checking that eligible queue or media work exists. All 27 connection lifecycle tests and root plus Worker typechecks pass.
 
 The connection lifecycle test teardown now resumes and adopts the current IndexedDB writer generation after stale-context deletion tests, so a deliberate stale-writer simulation cannot silently disable persistence for later tests. All 27 lifecycle cases pass in file order.
+
+Startup now preserves the validation error and local page when the sync server cannot validate the cache; it avoids replacing that useful error with a second failed reload request. The startup regression case passes with an explicit local-workspace fixture, and root plus Worker typechecks pass.

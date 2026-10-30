@@ -270,8 +270,10 @@ export const useJottathingStore = defineStore('jottathing', () => {
       : false;
 
     if (sessionVerified && !hydrated) {
+      let validationFailed = false;
       const validateResult = isOnline.value
         ? await notionClient.validateNotionCache().catch((error) => {
+            validationFailed = true;
             syncCheckError.value = error instanceof Error
               ? `Couldn't check Notion for changes. ${error.message}`
               : "Couldn't check Notion for changes.";
@@ -297,7 +299,9 @@ export const useJottathingStore = defineStore('jottathing', () => {
       if (isOnline.value && syncConfig.value.connected) {
         pendingSyncCount.value = await notionClient.pendingSyncEventCount();
         if (pendingSyncCount.value === 0) {
-          refreshedFromRemoteSnapshot = await reloadRemoteWorkspaceWhenSafe();
+          if (!validationFailed) {
+            refreshedFromRemoteSnapshot = await reloadRemoteWorkspaceWhenSafe();
+          }
         } else {
           // Keep remote inventory refresh pending while local edits finish syncing.
           reloadDiscoveredPagesAfterQueueDrain = true;
