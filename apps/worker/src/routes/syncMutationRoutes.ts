@@ -44,6 +44,7 @@ import {
   stringValue,
 } from '../workerUtils.js';
 import type { SyncQueueMessage, WorkerEnv } from '../types.js';
+import { readSyncPageRequestBody } from './syncPageRequest.js';
 import {
   isUnmappedNotionContentError,
   UNMAPPED_NOTION_CONTENT_CODE,
@@ -59,9 +60,8 @@ export function registerSyncMutationRoutes(app: Hono<{ Bindings: WorkerEnv }>): 
   
   /** Queues page or block synchronization work. @param c - Hono context. @returns JSON response. */
   app.post('/sync/push', async (c) => {
-    const parsed = await readLimitedJsonBody<SyncPageRequest>(c.req.raw, MAX_SYNC_JSON_REQUEST_BYTES);
-    if (parsed.tooLarge) return c.json({ error: 'Sync request is too large.' }, 413);
-    const body = (parsed.body ?? {}) as Partial<SyncPageRequest>;
+    const body = await readSyncPageRequestBody(c.req.raw);
+    if (!body) return c.json({ error: 'Sync request is too large.' }, 413);
     const { page, project, selectedParentPageId } = body;
     const ops = Array.isArray(body?.ops) ? body.ops : [];
   
@@ -241,9 +241,8 @@ export function registerSyncMutationRoutes(app: Hono<{ Bindings: WorkerEnv }>): 
 
   /** Runs a user-requested page reconciliation immediately so its content diff can be returned. */
   app.post('/sync/page/resync', async (c) => {
-    const parsed = await readLimitedJsonBody<SyncPageRequest>(c.req.raw, MAX_SYNC_JSON_REQUEST_BYTES);
-    if (parsed.tooLarge) return c.json({ error: 'Sync request is too large.' }, 413);
-    const body = (parsed.body ?? {}) as Partial<SyncPageRequest>;
+    const body = await readSyncPageRequestBody(c.req.raw);
+    if (!body) return c.json({ error: 'Sync request is too large.' }, 413);
     const { page, project, selectedParentPageId } = body;
     if (!page?.id || !project?.id) {
       return c.json({ status: 'error', message: 'Missing page or project.' }, 400);

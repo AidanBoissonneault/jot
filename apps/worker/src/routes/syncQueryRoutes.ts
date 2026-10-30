@@ -7,7 +7,6 @@
 import type { Hono } from 'hono';
 import type { ProjectPage } from '../../../../src/types/capture.js';
 import type {
-  SyncPageRequest,
   SyncReloadRequest,
   SyncValidationRequest,
 } from '../../../../src/types/sync.js';
@@ -35,6 +34,7 @@ import {
   isUnrepresentedSyncedPage,
 } from '../syncWorkspaceInventory.js';
 import type { WorkerEnv } from '../types.js';
+import { readSyncPageRequestBody } from './syncPageRequest.js';
 
 const SYNC_STATUS_PAGE_SIZE = 500;
 
@@ -232,9 +232,8 @@ export function registerSyncQueryRoutes(app: Hono<{ Bindings: WorkerEnv }>): voi
   
   /** Pulls a linked page from Notion. @param c - Hono context. @returns JSON response. */
   app.post('/sync/pull', async (c) => {
-    const parsed = await readLimitedJsonBody<SyncPageRequest>(c.req.raw, MAX_SYNC_JSON_REQUEST_BYTES);
-    if (parsed.tooLarge) return c.json({ error: 'Sync request is too large.' }, 413);
-    const body = (parsed.body ?? {}) as Partial<SyncPageRequest>;
+    const body = await readSyncPageRequestBody(c.req.raw);
+    if (!body) return c.json({ error: 'Sync request is too large.' }, 413);
     const { page } = body;
   
     if (!page?.id || !page.notionPageId) {
