@@ -148,3 +148,5 @@ Notion query pagination now shares one cursor loop across database search, manag
 Capture payload parsing now handles the top-level envelope separately from bounded highlight metadata. It still canonicalizes only HTTP(S) URLs, rejects malformed field types and oversized text/context, retains only recognized metadata, and drops source links outside the same page. Security, capture-type, and provenance suites pass (40 tests), with root and Worker typechecks clean.
 
 Session refresh now changes queue ownership only after the previous account has no pending events, hydrated Notion content, or remotely backed project data. Existing queued work and synced documents stay bound to their original account across sign-in changes. The focused account-transition cases pass (3 tests), as do queue suites (11 tests) and root plus Worker typechecks.
+
+The media extension no longer re-exports the YouTube URL utility; the editor and Worker use its canonical `src/lib/youtubeUtils.ts` module, and the media test imports that utility directly. Media and block-conversion suites pass (31 tests), along with root and Worker typechecks.
