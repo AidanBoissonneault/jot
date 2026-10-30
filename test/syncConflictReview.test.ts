@@ -3,8 +3,6 @@ import {
   buildSyncConflictMerge,
   createSyncConflictRows,
   hasUnresolvedSyncConflictRows,
-  syncConflictBlockId,
-  syncConflictBlockSignature,
   syncConflictBlockText,
   syncConflictDiffParts,
   type SyncConflictRow,
@@ -207,14 +205,22 @@ describe('syncConflictDiffParts', () => {
   });
 });
 
-describe('sync conflict block identity', () => {
-  it('reads only non-empty string block IDs', () => {
-    expect(syncConflictBlockId(block('block-1', 'text'))).toBe('block-1');
-    expect(syncConflictBlockId({ type: 'paragraph', attrs: { jottathingBlockId: '' } })).toBeUndefined();
-    expect(syncConflictBlockId({ type: 'paragraph', attrs: { jottathingBlockId: 12 } })).toBeUndefined();
+describe('sync conflict block matching', () => {
+  it('uses only non-empty string IDs when building review rows', () => {
+    const rows = createSyncConflictRows({
+      ...conflict(),
+      localContent: document([
+        block('block-1', 'text'),
+        { type: 'paragraph', attrs: { jottathingBlockId: '' } },
+        { type: 'paragraph', attrs: { jottathingBlockId: 12 } },
+      ]),
+      remoteContent: null,
+    });
+
+    expect(rows.map(({ id }) => id)).toEqual(['block-1', 'local-1', 'local-2']);
   });
 
-  it('ignores identity and upload-state changes but compares ordinary source URLs', () => {
+  it('matches uploads without comparing changing identity or upload state', () => {
     const uploaded = (id: string, src: string) => ({
       type: 'image',
       attrs: {
@@ -225,19 +231,30 @@ describe('sync conflict block identity', () => {
         src,
       },
     });
-    expect(syncConflictBlockSignature(uploaded('local', 'blob:old')))
-      .toBe(syncConflictBlockSignature(uploaded('remote', 'https://files.example/image.png')));
+    const rows = createSyncConflictRows({
+      ...conflict(),
+      localContent: document([uploaded('local', 'blob:old')]),
+      remoteContent: document([uploaded('remote', 'https://files.example/image.png')]),
+    });
 
-    expect(syncConflictBlockSignature({ type: 'image', attrs: { src: 'https://files.example/a.png' } }))
-      .not.toBe(syncConflictBlockSignature({ type: 'image', attrs: { src: 'https://files.example/b.png' } }));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ duplicate: true, needsChoice: true, choice: '' });
+  });
 
-    expect(syncConflictBlockSignature({
-      type: 'image',
-      attrs: { src: 'https://prod-files-secure.s3.us-west-2.amazonaws.com/page/image.png?X-Amz-Signature=old' },
-    })).toBe(syncConflictBlockSignature({
-      type: 'image',
-      attrs: { src: 'https://prod-files-secure.s3.us-west-2.amazonaws.com/page/image.png?X-Amz-Signature=new' },
-    }));
+  it('keeps ordinary media URL changes as separate review rows', () => {
+    const rows = createSyncConflictRows({
+      ...conflict(),
+      localContent: document([{
+        type: 'image',
+        attrs: { jottathingBlockId: 'local', src: 'https://files.example/a.png' },
+      }]),
+      remoteContent: document([{
+        type: 'image',
+        attrs: { jottathingBlockId: 'remote', src: 'https://files.example/b.png' },
+      }]),
+    });
+
+    expect(rows).toHaveLength(2);
   });
 
   it('formats missing blocks and media using stable, readable labels', () => {

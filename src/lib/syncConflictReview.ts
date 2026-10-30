@@ -88,7 +88,7 @@ function changedFromBase(
   changedIds: Set<string> | undefined,
 ): boolean {
   if (id && changedIds) return changedIds.has(id);
-  return Boolean(block && base && syncConflictBlockSignature(block) !== syncConflictBlockSignature(base));
+  return Boolean(block && base && syncConflictContentSignature(block) !== syncConflictContentSignature(base));
 }
 
 function createConflictReviewContext(conflict: SyncContentConflict): ConflictReviewContext {
@@ -146,7 +146,7 @@ function createLocalConflictRow(
   const base = localId ? context.baseById.get(localId) : undefined;
   const localChanged = changedFromBase(localId, local, base, context.localChangedIds);
   const notionChanged = changedFromBase(localId, notion, base, context.remoteChangedIds);
-  const changed = Boolean(notion && syncConflictBlockSignature(local) !== syncConflictBlockSignature(notion));
+  const changed = Boolean(notion && syncConflictContentSignature(local) !== syncConflictContentSignature(notion));
   const bothEdited = Boolean(base && localChanged && notionChanged && changed);
   const notionDeleted = Boolean(context.hasRemoteContent && base && !notion);
   const internal = isInternalProjectBlock(context.conflict, local);
@@ -176,10 +176,10 @@ function findIdenticalLocalRow(
   internal: boolean,
   baseById: Map<string, DocumentContent>,
 ): SyncConflictRow | undefined {
-  const signature = syncConflictBlockSignature(notion);
+  const signature = syncConflictContentSignature(notion);
   return rows.find((row) => {
     if (!row.local || row.notion || row.internal !== internal) return false;
-    if (syncConflictBlockSignature(row.local) !== signature) return false;
+    if (syncConflictContentSignature(row.local) !== signature) return false;
     if (internal) return true;
     const localId = syncConflictBlockId(row.local);
     return !baseById.has(localId ?? '') && !baseById.has(notionId ?? '');
@@ -402,14 +402,9 @@ export function syncConflictDiffParts(
 }
 
 /** Reads a block's stable Jottathing identity for conflict matching. */
-export function syncConflictBlockId(block: DocumentContent): string | undefined {
+function syncConflictBlockId(block: DocumentContent): string | undefined {
   const value = block.attrs?.jottathingBlockId;
   return typeof value === 'string' && value ? value : undefined;
-}
-
-/** Compares block content while ignoring sync identity and volatile upload fields. */
-export function syncConflictBlockSignature(block: DocumentContent): string {
-  return syncConflictContentSignature(block);
 }
 
 /** Formats block text and media labels for the conflict review interface. */
