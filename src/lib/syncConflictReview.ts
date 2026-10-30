@@ -73,27 +73,27 @@ export function createSyncConflictRows(conflict: SyncContentConflict): SyncConfl
     ? new Set(conflict.remoteChangedBlockIds)
     : undefined;
   const baseById = new Map((conflict.baseContent?.content ?? [])
-    .map((block) => [stableBlockId(block), block] as const)
+    .map((block) => [syncConflictBlockId(block), block] as const)
     .filter((entry): entry is readonly [string, DocumentContent] => Boolean(entry[0])));
   const notionIndexById = new Map<string, number>();
   notionBlocks.forEach((block, index) => {
-    const id = stableBlockId(block);
+    const id = syncConflictBlockId(block);
     if (id && !notionIndexById.has(id)) notionIndexById.set(id, index);
   });
   const consumedNotion = new Set<number>();
   const result: SyncConflictRow[] = localBlocks.map((local, index) => {
-    const localId = stableBlockId(local);
+    const localId = syncConflictBlockId(local);
     const notionIndex = localId ? notionIndexById.get(localId) : undefined;
     const notion = notionIndex === undefined ? undefined : notionBlocks[notionIndex];
     if (notionIndex !== undefined) consumedNotion.add(notionIndex);
     const base = localId ? baseById.get(localId) : undefined;
     const localChanged = localId && localChangedIds
       ? localChangedIds.has(localId)
-      : Boolean(base && signature(local) !== signature(base));
+      : Boolean(base && syncConflictBlockSignature(local) !== syncConflictBlockSignature(base));
     const notionChanged = localId && remoteChangedIds
       ? remoteChangedIds.has(localId)
-      : Boolean(base && notion && signature(notion) !== signature(base));
-    const changed = Boolean(notion && signature(local) !== signature(notion));
+      : Boolean(base && notion && syncConflictBlockSignature(notion) !== syncConflictBlockSignature(base));
+    const changed = Boolean(notion && syncConflictBlockSignature(local) !== syncConflictBlockSignature(notion));
 
     return {
       id: localId ?? `local-${index}`,
@@ -112,14 +112,14 @@ export function createSyncConflictRows(conflict: SyncContentConflict): SyncConfl
 
   notionBlocks.forEach((notion, index) => {
     if (consumedNotion.has(index)) return;
-    const notionId = stableBlockId(notion);
+    const notionId = syncConflictBlockId(notion);
     const base = notionId ? baseById.get(notionId) : undefined;
     const notionChanged = notionId && remoteChangedIds
       ? remoteChangedIds.has(notionId)
-      : Boolean(base && signature(notion) !== signature(base));
+      : Boolean(base && syncConflictBlockSignature(notion) !== syncConflictBlockSignature(base));
     const identicalLocal = result.find((row) =>
-      row.local && !row.notion && signature(row.local) === signature(notion) &&
-      !baseById.has(stableBlockId(row.local) ?? '') && !baseById.has(notionId ?? ''),
+      row.local && !row.notion && syncConflictBlockSignature(row.local) === syncConflictBlockSignature(notion) &&
+      !baseById.has(syncConflictBlockId(row.local) ?? '') && !baseById.has(notionId ?? ''),
     );
     if (identicalLocal) {
       identicalLocal.notion = notion;
@@ -291,6 +291,18 @@ export function syncConflictDiffParts(
   return operations;
 }
 
+/** Reads a block's stable Jottathing identity for conflict matching. */
+export function syncConflictBlockId(block: DocumentContent): string | undefined {
+  const value = block.attrs?.jottathingBlockId;
+  return typeof value === 'string' && value ? value : undefined;
+}
+
+/** Compares block content while ignoring sync identity and volatile upload fields. */
+export function syncConflictBlockSignature(block: DocumentContent): string {
+  return JSON.stringify(withoutIdentity(block));
+}
+
+/** Formats block text and media labels for the conflict review interface. */
 export function syncConflictBlockText(block?: DocumentContent): string {
   return displayBlock(block);
 }
@@ -317,15 +329,6 @@ function displayBlock(block?: DocumentContent): string {
 
 function textFrom(block: DocumentContent): string {
   return (block.text ?? '') + (block.content ?? []).map(textFrom).join('');
-}
-
-function stableBlockId(block: DocumentContent): string | undefined {
-  const value = block.attrs?.jottathingBlockId;
-  return typeof value === 'string' && value ? value : undefined;
-}
-
-function signature(block: DocumentContent): string {
-  return JSON.stringify(withoutIdentity(block));
 }
 
 function withoutIdentity(value: unknown): unknown {

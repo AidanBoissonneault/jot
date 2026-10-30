@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildSyncConflictMerge,
+  syncConflictBlockId,
+  syncConflictBlockSignature,
+  syncConflictBlockText,
   syncConflictDiffParts,
   type SyncConflictRow,
 } from '@/src/lib/syncConflictReview';
@@ -113,6 +116,48 @@ describe('syncConflictDiffParts', () => {
       { kind: 'removed', text: localText.trim() },
       { kind: 'added', text: notionText.trim() },
     ]);
+  });
+});
+
+describe('sync conflict block identity', () => {
+  it('reads only non-empty string block IDs', () => {
+    expect(syncConflictBlockId(block('block-1', 'text'))).toBe('block-1');
+    expect(syncConflictBlockId({ type: 'paragraph', attrs: { jottathingBlockId: '' } })).toBeUndefined();
+    expect(syncConflictBlockId({ type: 'paragraph', attrs: { jottathingBlockId: 12 } })).toBeUndefined();
+  });
+
+  it('ignores identity and upload-state changes but compares ordinary source URLs', () => {
+    const uploaded = (id: string, src: string) => ({
+      type: 'image',
+      attrs: {
+        jottathingBlockId: id,
+        notionBlockId: `notion-${id}`,
+        notionFileUploadId: 'upload-1',
+        uploadState: id,
+        src,
+      },
+    });
+    expect(syncConflictBlockSignature(uploaded('local', 'blob:old')))
+      .toBe(syncConflictBlockSignature(uploaded('remote', 'https://files.example/image.png')));
+
+    expect(syncConflictBlockSignature({ type: 'image', attrs: { src: 'https://files.example/a.png' } }))
+      .not.toBe(syncConflictBlockSignature({ type: 'image', attrs: { src: 'https://files.example/b.png' } }));
+
+    expect(syncConflictBlockSignature({
+      type: 'image',
+      attrs: { src: 'https://prod-files-secure.s3.us-west-2.amazonaws.com/page/image.png?X-Amz-Signature=old' },
+    })).toBe(syncConflictBlockSignature({
+      type: 'image',
+      attrs: { src: 'https://prod-files-secure.s3.us-west-2.amazonaws.com/page/image.png?X-Amz-Signature=new' },
+    }));
+  });
+
+  it('formats missing blocks and media using stable, readable labels', () => {
+    expect(syncConflictBlockText()).toBe('Block deleted');
+    expect(syncConflictBlockText({
+      type: 'image',
+      attrs: { src: 'https://files.example.test/page/image.png?expires=old' },
+    })).toBe('image: page/image.png');
   });
 });
 

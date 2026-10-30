@@ -4,7 +4,12 @@ import type { DocumentContent } from '@/src/types/capture';
 import type { SyncContentConflict } from '@/src/types/sync';
 import { normalizeJottathingBlockIds } from '@/src/extensions/jottathingBlockIds';
 import { isProjectStateMetadataNode } from '@/src/extensions/sourceRegistry';
-import { syncConflictDiffParts as diffParts } from '@/src/lib/syncConflictReview';
+import {
+  syncConflictBlockId as stableBlockId,
+  syncConflictBlockSignature as signature,
+  syncConflictBlockText,
+  syncConflictDiffParts as diffParts,
+} from '@/src/lib/syncConflictReview';
 
 type Choice = 'local' | 'notion' | 'both' | '';
 type ConflictRow = {
@@ -142,64 +147,11 @@ function createRows(conflict: SyncContentConflict): ConflictRow[] {
   return result;
 }
 
-function stableBlockId(block: DocumentContent): string | undefined {
-  const value = block.attrs?.jottathingBlockId;
-  return typeof value === 'string' && value ? value : undefined;
-}
-
-function signature(block: DocumentContent): string {
-  return JSON.stringify(withoutIdentity(block));
-}
-
-function withoutIdentity(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(withoutIdentity);
-  if (!value || typeof value !== 'object') return value;
-  const record = value as Record<string, unknown>;
-  const isFileUpload = Boolean(record.notionFileUploadId);
-  return Object.fromEntries(Object.entries(record)
-    .filter(([key]) => key !== 'jottathingBlockId' && key !== 'notionBlockId' && key !== 'jottathingConflictResolution' && key !== 'uploadState' && !(isFileUpload && key === 'src'))
-    .sort(([first], [second]) => first.localeCompare(second))
-    .map(([key, nested]) => [key, key === 'src' ? stableMediaUrl(nested) : withoutIdentity(nested)]));
-}
-
-function stableMediaUrl(value: unknown): unknown {
-  if (typeof value !== 'string') return withoutIdentity(value);
-  try {
-    const url = new URL(value);
-    if (url.searchParams.has('X-Amz-Signature') || url.hostname.startsWith('prod-files-secure.s3.')) {
-      return `${url.origin}${url.pathname}`;
-    }
-  } catch {
-    // Preserve non-URL media sources for comparison.
-  }
-  return value;
-}
-
 function displayBlock(block?: DocumentContent): string {
-  if (!block) return 'Block deleted';
-  if (props.conflict.targetType === 'project' && isProjectStateMetadataNode(block)) {
+  if (block && props.conflict.targetType === 'project' && isProjectStateMetadataNode(block)) {
     return 'Project source metadata (managed automatically)';
   }
-  const type = block.type ?? 'Block';
-  if (type === 'image' || type === 'audio' || type === 'youtube') {
-    const src = String(block.attrs?.src ?? block.attrs?.url ?? '');
-    if (type !== 'youtube' && src) {
-      try {
-        const url = new URL(String(stableMediaUrl(src)));
-        const path = decodeURIComponent(url.pathname.split('/').slice(-2).join('/'));
-        return `${type}: ${path || 'Notion media'}`;
-      } catch {
-        return `${type}: Notion media`;
-      }
-    }
-    return `${type}: ${src || 'media'}`;
-  }
-  const text = textFrom(block).trim();
-  return text || (type === 'horizontalRule' ? 'Divider' : type);
-}
-
-function textFrom(block: DocumentContent): string {
-  return (block.text ?? '') + (block.content ?? []).map(textFrom).join('');
+  return syncConflictBlockText(block);
 }
 
 function resolve() {
