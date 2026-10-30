@@ -150,3 +150,5 @@ Capture payload parsing now handles the top-level envelope separately from bound
 Session refresh now changes queue ownership only after the previous account has no pending events, hydrated Notion content, or remotely backed project data. Existing queued work and synced documents stay bound to their original account across sign-in changes. The focused account-transition cases pass (3 tests), as do queue suites (11 tests) and root plus Worker typechecks.
 
 The media extension no longer re-exports the YouTube URL utility; the editor and Worker use its canonical `src/lib/youtubeUtils.ts` module, and the media test imports that utility directly. Media and block-conversion suites pass (31 tests), along with root and Worker typechecks.
+
+The Worker now defines `BlockPosition` once in `managedBlockIdentity.ts`; block operations and shared utilities import that type. Managed-block and queue-operation suites pass (16 tests), root and Worker typechecks pass, and Fallow no longer reports a duplicate `BlockPosition` export.
