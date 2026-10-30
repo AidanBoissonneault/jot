@@ -158,3 +158,5 @@ The sync queue no longer contains its unused automatic project-rebase path or me
 Legal version constants and acceptance-record builders/validators are now private to `src/services/legal.ts`; the app API is the current-acceptance read/write flow plus public policy URLs. The legal acceptance and page-route tests pass (4 tests), with root and Worker typechecks clean.
 
 `normalizeUserPreferences` is private to the preference storage service; callers load or save through its public API, while scale normalization remains available to the UI control. Preference tests pass (4 tests), with root and Worker typechecks clean.
+
+`refreshSyncSession` now delegates account ownership to the documented `resolveSyncQueueOwnership` helper. The helper preserves owners for retained work and requests a queue transfer only when local work is clear; the method then performs that transfer and persists the session. Four focused transition cases pass, root and Worker typechecks pass, and Fallow no longer ranks session refresh among its top twelve production complexity findings.
