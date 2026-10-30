@@ -70,10 +70,18 @@ function seedLocalWorkspace(syncConfig: SyncConfig = connectedConfig) {
 }
 
 function stubJsonResponse(payload: unknown) {
-  vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(payload), {
-    status: 200,
-    headers: { 'Content-Type': 'application/json' },
-  })));
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    const response = url.endsWith('/sync/status')
+      ? { hasPending: false, pendingCount: 0, failedCount: 0 }
+      : url.endsWith('/sync/push')
+        ? { queued: true, versions: {} }
+        : payload;
+    return new Response(JSON.stringify(response), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }));
 }
 
 function expectSeededDocumentsPreserved() {
@@ -123,8 +131,9 @@ describe('Jottathing connection data lifecycle', () => {
     expect(result.syncConfig).toMatchObject({ authenticated: false, connected: false });
     expect(result.syncConfig.logoutCleanupPending).toBe(false);
     expect(result.notionTokenRevoked).toBe(true);
+    expect(result.queueDrainDeferred).toBe(false);
     expectSeededDocumentsPreserved();
-    expect(await notionClient.pendingSyncEventCount()).toBeGreaterThan(0);
+    expect(await notionClient.pendingSyncEventCount()).toBe(0);
     expect((stored.syncConfig as SyncConfig).authenticated).toBe(false);
     expect((stored.syncConfig as SyncConfig).connected).toBe(false);
     expect(stored.syncConfig).not.toHaveProperty('selectedParentPageId');
@@ -369,7 +378,7 @@ describe('Jottathing connection data lifecycle', () => {
 
   it('clears local authentication when the server cannot be reached and preserves local documents', async () => {
     seedLocalWorkspace();
-    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('offline'); }));
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('offline'); }));
 
     const result = await notionClient.logoutSyncSession();
     const stored = readBrowserStorage();
@@ -388,7 +397,13 @@ describe('Jottathing connection data lifecycle', () => {
   it('keeps logout retryable until the server confirms cleanup without deleting local work', async () => {
     seedLocalWorkspace();
     let requestCount = 0;
-    vi.stubGlobal('fetch', vi.fn(async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).endsWith('/sync/status')) {
+        return new Response(JSON.stringify({ hasPending: false, pendingCount: 0, failedCount: 0 }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
       requestCount += 1;
       return requestCount === 1
         ? new Response(JSON.stringify({

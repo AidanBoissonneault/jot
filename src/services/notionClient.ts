@@ -5469,11 +5469,17 @@ export const notionClient = {
             }
 
             options.onProgress?.({ phase: 'waiting_for_server', pending: 0 });
-            await waitForRemoteSyncQueueToSettle(
-              syncConfig,
-              options.onProgress,
-              Math.max(1, drainDeadline - Date.now()),
-            );
+            try {
+              await waitForRemoteSyncQueueToSettle(
+                syncConfig,
+                options.onProgress,
+                Math.max(1, drainDeadline - Date.now()),
+              );
+            } catch (error) {
+              if (!(error instanceof TypeError)) throw error;
+              queueDrainDeferred = true;
+              break;
+            }
 
             if (isBrowserOffline()) {
               throw new Error(
