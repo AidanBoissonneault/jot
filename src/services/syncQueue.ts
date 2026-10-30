@@ -26,7 +26,7 @@ const queueChangeListeners = new Set<() => void>();
 let queueMutation = Promise.resolve();
 
 export type ProjectSyncBlock = {
-  code: 'unmapped_notion_content';
+  code: string;
   message: string;
   blockedAt: string;
   diff?: SyncConflictDiff;

@@ -1514,7 +1514,10 @@ async function deliverProjectSyncEvent(
       });
     }
     if (response.status === 'error') {
-      throw new Error(response.message ?? `Unable to sync this ${target}.`);
+      throw Object.assign(new Error(response.message ?? `Unable to sync this ${target}.`), {
+        code: response.code ?? 'project_sync_rejected',
+        status: 400,
+      });
     }
     await removePendingProjectSyncEvents([event.eventId]);
     await clearProjectConflictResolutionMarkers(project.id);
@@ -1528,6 +1531,18 @@ async function deliverProjectSyncEvent(
         ...(error.diff ? { diff: { ...error.diff, localContent: project.stateContent } } : {}),
       });
       return withProjectSyncStatus(notionProject, 'error', error.message);
+    }
+
+    if (isPermanentSyncRequestFailure(error)) {
+      await blockPendingProjectSyncEvents(project.id, {
+        code: syncRequestErrorCode(error, 'project_sync_rejected'),
+        message: syncRequestErrorMessage(error),
+      });
+      return withProjectSyncStatus(
+        notionProject,
+        'error',
+        syncRequestErrorMessage(error),
+      );
     }
 
     recordQueueDeliveryFailure(error);
@@ -1677,6 +1692,24 @@ function isUnmappedContentConflict(error: unknown): error is SyncServerError {
     error.code === 'unmapped_notion_content' ||
     error.message.includes('Notion and local content differ in blocks that could not be matched')
   );
+}
+
+/** Stops retrying requests the server or Notion has rejected permanently. */
+function isPermanentSyncRequestFailure(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const status = (error as { status?: unknown }).status;
+  return typeof status === 'number' && [400, 401, 403, 404].includes(status);
+}
+
+function syncRequestErrorCode(error: unknown, fallback: string): string {
+  const code = error && typeof error === 'object'
+    ? (error as { code?: unknown }).code
+    : undefined;
+  return typeof code === 'string' ? code : fallback;
+}
+
+function syncRequestErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 async function requestServer<T>(
@@ -3578,6 +3611,14 @@ async function deliverPendingProjectSyncEvents(syncConfig: SyncConfig): Promise<
         failedProjectIds.add(event.projectId);
         continue;
       }
+      if (isPermanentSyncRequestFailure(error)) {
+        await blockPendingProjectSyncEvents(event.projectId, {
+          code: syncRequestErrorCode(error, 'project_sync_rejected'),
+          message: syncRequestErrorMessage(error),
+        });
+        failedProjectIds.add(event.projectId);
+        continue;
+      }
       failedProjectIds.add(event.projectId);
       retryError ??= error;
       continue;
@@ -3585,7 +3626,14 @@ async function deliverPendingProjectSyncEvents(syncConfig: SyncConfig): Promise<
 
     if (response.status === 'error') {
       failedProjectIds.add(event.projectId);
-      retryError ??= new Error(response.message ?? 'Unable to sync this project.');
+      const error = Object.assign(
+        new Error(response.message ?? 'Unable to sync this project.'),
+        { code: response.code ?? 'project_sync_rejected', status: 400 },
+      );
+      await blockPendingProjectSyncEvents(event.projectId, {
+        code: syncRequestErrorCode(error, 'project_sync_rejected'),
+        message: syncRequestErrorMessage(error),
+      });
       continue;
     }
 
@@ -4892,10 +4940,6 @@ export const notionClient = {
         const queuedPage = await enqueuePageSync(latestRealPage, savedProject);
         const persistedPage = await persistSyncedPagePreservingNewerEdit(queuedPage);
         const savedPage = await replayTempPageSave(page.id, persistedPage);
-        // A new project and its first page are user-visible immediately. Start
-        // an outbox delivery from this live UI context instead of depending on
-        // a timer that a suspended extension worker may not run promptly.
-        void flushPendingSyncOps({ force: true }).catch(() => undefined);
         return { page: savedPage, project: savedProject };
       } catch (error) {
         const message =

@@ -553,20 +553,29 @@ export const useJottathingStore = defineStore('jottathing', () => {
       void creation.settled.then(async ({ page, project }) => {
         const wasViewingProject = currentProjectId.value === creation.project.id;
         const wasViewingPage = currentPage.value?.id === creation.page.id;
+        const [nextProjects, nextPages] = await Promise.all([
+          notionClient.listProjects(),
+          wasViewingProject
+            ? notionClient.listProjectPages(project.id)
+            : Promise.resolve(undefined),
+        ]);
 
-        projects.value = await notionClient.listProjects();
+        projects.value = nextProjects;
         void refreshWorkspaceMenuTree().catch(() => undefined);
-        if (wasViewingProject) {
+        if (wasViewingProject && currentProjectId.value === creation.project.id) {
+          // Keep the selected project and its first durable page linked in the
+          // same reactive turn so the UI cannot enter an unlinked state.
+          pages.value = nextPages ?? [];
+          if (wasViewingPage && currentPage.value?.id === creation.page.id) {
+            currentPage.value = page;
+            applyPageSyncState(page);
+          }
           currentProjectId.value = project.id;
         }
 
-        if (currentProjectId.value === project.id) {
-          await loadProjectPages();
-        }
-
-        if (wasViewingPage) {
-          currentPage.value = page;
-          applyPageSyncState(page);
+        if (project.syncState === 'error') {
+          errorMessage.value = project.syncMessage ?? 'The project was created locally but could not be synced.';
+          saveStatus.value = 'error';
         }
       }).catch(async (error) => {
         const message =

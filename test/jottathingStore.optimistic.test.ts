@@ -1,6 +1,6 @@
 import { setActivePinia, createPinia } from 'pinia';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
-import { nextTick } from 'vue';
+import { nextTick, watch } from 'vue';
 import { applySyncResult, notionClient } from '@/src/services/notionClient';
 import { idbGetMany } from '@/src/services/idbStore';
 import {
@@ -428,6 +428,86 @@ describe('optimistic project creation', () => {
     expect(store.currentProject?.name).toBe('Broken');
     expect(store.projects.some((project) => project.id === tempProjectId)).toBe(false);
     expect(await notionClient.pendingSyncEventCount()).toBeGreaterThan(0);
+  });
+
+  test('keeps the project selected and reports a permanent project setup error', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).endsWith('/sync/project')) {
+        return new Response(JSON.stringify({
+          code: 'notion_access_denied',
+          message: 'Notion rejected the project request.',
+        }), { status: 403 });
+      }
+      return jsonResponse({ queued: true, versions: {} });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const store = useJottathingStore();
+    await seedNotionStore(store);
+
+    await store.createProject('Needs attention');
+
+    await waitFor(() => expect(store.errorMessage).toBe('Notion rejected the project request.'));
+    const projectId = store.currentProjectId;
+    const blockedEvents = await listPendingProjectSyncEvents();
+
+    expect(projectId).toBeTruthy();
+    expect(store.currentProject?.name).toBe('Needs attention');
+    expect(store.currentPage?.projectId).toBe(projectId);
+    expect(blockedEvents.find((event) => event.projectId === projectId)?.deliveryBlocked)
+      .toMatchObject({ code: 'notion_access_denied', message: 'Notion rejected the project request.' });
+    expect((fetchMock.mock.calls as unknown as Array<[string]>).some(([url]) =>
+      url.endsWith('/sync/push'),
+    )).toBe(false);
+  });
+
+  test('keeps first-page work waiting during a Notion rate limit without a false error', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).endsWith('/sync/project')) {
+        return new Response(JSON.stringify({
+          code: 'notion_rate_limited',
+          message: 'Notion is rate limiting requests.',
+        }), { status: 429, headers: { 'Retry-After': '120' } });
+      }
+      return jsonResponse({ queued: true, versions: {} });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const store = useJottathingStore();
+    await seedNotionStore(store);
+    const selectedProjectLinksToPage: boolean[] = [];
+    const stopWatchingProject = watch(
+      () => store.currentProjectId,
+      (projectId) => {
+        if (!projectId.startsWith('temp-project-')) {
+          selectedProjectLinksToPage.push(store.currentPage?.projectId === projectId);
+        }
+      },
+      { flush: 'sync' },
+    );
+
+    try {
+      await store.createProject('Wait for Notion');
+      await waitFor(() => {
+        expect(store.currentProjectId).not.toMatch(/^temp-project-/);
+        expect(store.currentPage?.projectId).toBe(store.currentProjectId);
+      });
+    } finally {
+      stopWatchingProject();
+    }
+    const projectId = store.currentProjectId;
+    const pendingEvents = await listPendingProjectSyncEvents();
+
+    expect(store.currentProject?.name).toBe('Wait for Notion');
+    expect(store.currentPage?.projectId).toBe(projectId);
+    expect(selectedProjectLinksToPage).toEqual([true]);
+    expect(store.errorMessage).toBe('');
+    expect(pendingEvents.find((event) => event.projectId === projectId)?.deliveryBlocked)
+      .toBeUndefined();
+    expect((fetchMock.mock.calls as unknown as Array<[string]>).filter(([url]) =>
+      url.endsWith('/sync/project'),
+    )).toHaveLength(1);
+    expect((fetchMock.mock.calls as unknown as Array<[string]>).some(([url]) =>
+      url.endsWith('/sync/push'),
+    )).toBe(false);
   });
 });
 
