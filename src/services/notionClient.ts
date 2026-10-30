@@ -4932,7 +4932,11 @@ export const notionClient = {
         ? `${previousQueueOwner}::${previousWorkspaceOwner ?? 'connected-workspace'}`
         : '';
       const nextQueueScope = `${session.userId}::${session.workspaceId ?? 'connected-workspace'}`;
-      if (previousQueueOwner && previousQueueScope !== nextQueueScope) {
+      if (
+        previousQueueOwner &&
+        previousQueueScope !== nextQueueScope &&
+        !hasRetainedLocalData
+      ) {
         await Promise.allSettled(
           [queueDeliveryPromise, forcedQueueDeliveryPromise].filter(
             (promise): promise is Promise<void> => Boolean(promise),
