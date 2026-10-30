@@ -1,8 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createHash } from 'node:crypto';
+import { createHash, createHmac } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import {
-  computeHmacSignature,
   createNotionOAuthState,
   notionOAuthGenerationFromState,
   revokeNotionToken,
@@ -26,6 +25,10 @@ const env = {
   SUPABASE_URL: 'https://supabase.example.test',
   SUPABASE_SERVICE_KEY: 'service-role-test-key',
 } as WorkerEnv;
+
+function hmacSha256(secret: string, body: string): string {
+  return createHmac('sha256', secret).update(body).digest('hex');
+}
 
 interface FakeWebhookDatabase {
   armed: boolean;
@@ -903,7 +906,7 @@ describe('privileged RPC migration', () => {
 describe('Notion webhook verification', () => {
   it('accepts only the expected sha256 signature in constant-time verification', async () => {
     const body = JSON.stringify({ type: 'page.content_updated', entity: { id: 'page-test' } });
-    const signature = `sha256=${await computeHmacSignature(env.NOTION_WEBHOOK_SECRET!, body)}`;
+    const signature = `sha256=${hmacSha256(env.NOTION_WEBHOOK_SECRET!, body)}`;
 
     await expect(verifyNotionWebhookSignature(env.NOTION_WEBHOOK_SECRET!, body, signature)).resolves.toBe(true);
     await expect(verifyNotionWebhookSignature(env.NOTION_WEBHOOK_SECRET!, body, `v0=${signature.slice(7)}`)).resolves.toBe(false);
@@ -1008,7 +1011,7 @@ describe('Notion webhook verification', () => {
     expect(secondRetrieve.status).toBe(409);
 
     const eventBody = JSON.stringify({ type: 'page.content_updated', entity: { id: 'page-test' } });
-    const signature = `sha256=${await computeHmacSignature(token, eventBody)}`;
+    const signature = `sha256=${hmacSha256(token, eventBody)}`;
     const verifiedEvent = await workerApp.request(callbackPath, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-notion-signature': signature },
@@ -1043,7 +1046,7 @@ describe('Notion webhook verification', () => {
     };
     initializeWebhookRoutes(database);
     const body = JSON.stringify({ type: 'page.content_updated', entity: { id: 'notion-page-test' } });
-    const signature = `sha256=${await computeHmacSignature(env.NOTION_WEBHOOK_SECRET!, body)}`;
+    const signature = `sha256=${hmacSha256(env.NOTION_WEBHOOK_SECRET!, body)}`;
 
     const response = await workerApp.request('/webhooks/notion', {
       method: 'POST',

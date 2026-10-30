@@ -40,7 +40,7 @@ export interface NotionOAuthUser {
  * @param body - Exact raw request body.
  * @returns Lowercase hexadecimal signature.
  */
-export async function computeHmacSignature(secret: string, body: string): Promise<string> {
+async function computeHmacSignature(secret: string, body: string): Promise<string> {
   const key = await crypto.subtle.importKey(
     'raw',
     new TextEncoder().encode(secret),
