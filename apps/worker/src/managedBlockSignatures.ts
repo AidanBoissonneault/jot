@@ -46,7 +46,9 @@ function comparableValue(value: unknown): unknown {
       .sort(([first], [second]) => first.localeCompare(second))
       .map(([key, nested]) => [
         key,
-        key === 'url' ? stableNotionFileUrl(nested) : comparableValue(nested),
+        key === 'url' && typeof nested === 'string'
+          ? stableNotionFileUrl(nested)
+          : comparableValue(nested),
       ]),
   );
 }
@@ -71,8 +73,7 @@ function isDefaultAnnotations(value: unknown): boolean {
 }
 
 /** Ignores rotating credentials in Notion-hosted, time-limited media URLs. */
-function stableNotionFileUrl(value: unknown): unknown {
-  if (typeof value !== 'string') return comparableValue(value);
+export function stableNotionFileUrl(value: string): string {
   try {
     const url = new URL(value);
     if (
@@ -82,7 +83,7 @@ function stableNotionFileUrl(value: unknown): unknown {
       return `${url.origin}${url.pathname}`;
     }
   } catch {
-    // Retain malformed or non-URL values exactly for the normal comparison.
+    // Retain malformed values exactly for the normal comparison.
   }
-  return comparableValue(value);
+  return value;
 }

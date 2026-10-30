@@ -21,7 +21,7 @@ import {
   mappingFromDesired,
   positionAfter,
 } from './managedBlockIdentity.js';
-import { managedBlockSignature } from './managedBlockSignatures.js';
+import { managedBlockSignature, stableNotionFileUrl } from './managedBlockSignatures.js';
 import type { BlockPosition, DesiredManagedBlock } from './managedBlockIdentity.js';
 import { rebuildReorderedRange, reconcileManagedBlocks } from './managedBlockReconciliation.js';
 import { notionBlocksToTiptapDocumentStrict } from './blockConversion/notionToTiptap.js';
@@ -1034,7 +1034,10 @@ function mappedMediaMatches(
   const localMatchesBase = localMediaMatchesBaseline(mapping, desired);
   const remoteMatchesBase = remoteMediaMatchesBaseline(mapping, desired, remote);
   return (localMatchesBase === true && remoteMatchesBase === true) ||
-    Boolean(desiredUrl && remoteUrl && stableMediaUrl(desiredUrl) === stableMediaUrl(remoteUrl));
+    Boolean(
+      desiredUrl && remoteUrl &&
+      stableNotionFileUrl(desiredUrl) === stableNotionFileUrl(remoteUrl),
+    );
 }
 
 function localMediaMatchesBaseline(
@@ -1049,7 +1052,9 @@ function localMediaMatchesBaseline(
   if (baseUploadId && desiredUploadId) return baseUploadId === desiredUploadId;
   const baseUrl = mapping.newState ? mediaUrlFromState(mapping.newState) : undefined;
   const desiredUrl = mediaUrlFromState(desired.notionBlock);
-  if (baseUrl && desiredUrl) return stableMediaUrl(baseUrl) === stableMediaUrl(desiredUrl);
+  if (baseUrl && desiredUrl) {
+    return stableNotionFileUrl(baseUrl) === stableNotionFileUrl(desiredUrl);
+  }
   return undefined;
 }
 
@@ -1064,7 +1069,9 @@ function remoteMediaMatchesBaseline(
   if (baseUploadId && remoteUploadId) return baseUploadId === remoteUploadId;
   const baseUrl = mapping.newState ? mediaUrlFromState(mapping.newState) : undefined;
   const remoteUrl = mediaUrlFromState(remote as unknown as NotionBlockPayload);
-  if (baseUrl && remoteUrl) return stableMediaUrl(baseUrl) === stableMediaUrl(remoteUrl);
+  if (baseUrl && remoteUrl) {
+    return stableNotionFileUrl(baseUrl) === stableNotionFileUrl(remoteUrl);
+  }
   const desiredUploadId = desired ? fileUploadIdFromState(desired.notionBlock) : undefined;
   if (baseUploadId && baseUploadId === desiredUploadId && !baseUrl) return true;
   return undefined;
@@ -1073,18 +1080,6 @@ function remoteMediaMatchesBaseline(
 function mediaUrlFromState(state: NotionBlockPayload): string | undefined {
   const body = objectValue(state[state.type]);
   return body ? externalUrl(body) ?? fileUrl(body) ?? stringValue(body.url) : undefined;
-}
-
-function stableMediaUrl(value: string): string {
-  try {
-    const url = new URL(value);
-    if (url.searchParams.has('X-Amz-Signature') || url.hostname.startsWith('prod-files-secure.s3.')) {
-      return `${url.origin}${url.pathname}`;
-    }
-  } catch {
-    // Preserve malformed media URLs for exact comparison.
-  }
-  return value;
 }
 
 function createContentConflict(
