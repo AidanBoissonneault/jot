@@ -621,11 +621,7 @@ export const useJottathingStore = defineStore('jottathing', () => {
               currentProject.value?.stateContent,
             ),
       });
-      projects.value = projects.value
-        .map((storedProject) =>
-          storedProject.id === project.id ? project : storedProject,
-        )
-        .sort(sortProjectsByUpdatedDesc);
+      replaceProjectInList(project);
       applyProjectOrPageSyncState(project, currentPage.value);
     } catch (error) {
       errorMessage.value =
@@ -662,11 +658,7 @@ export const useJottathingStore = defineStore('jottathing', () => {
       blockId,
       payload,
     );
-    projects.value = projects.value
-      .map((storedProject) =>
-        storedProject.id === project.id ? project : storedProject,
-      )
-      .sort(sortProjectsByUpdatedDesc);
+    replaceProjectInList(project);
     applyProjectOrPageSyncState(project, currentPage.value);
   }
 
@@ -1610,6 +1602,13 @@ export const useJottathingStore = defineStore('jottathing', () => {
       page.syncState === 'error' || page.syncState === 'stale'
         ? page.syncMessage ?? ''
         : '';
+  }
+
+  /** Replaces one project and keeps the list sorted before sync-state projection. */
+  function replaceProjectInList(project: Project) {
+    projects.value = projects.value
+      .map((storedProject) => storedProject.id === project.id ? project : storedProject)
+      .sort(sortProjectsByUpdatedDesc);
   }
 
   function applyProjectOrPageSyncState(project: Project, page?: ProjectPage) {
