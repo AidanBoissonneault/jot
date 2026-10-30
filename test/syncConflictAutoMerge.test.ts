@@ -71,6 +71,41 @@ describe('automatic merge of independent page additions', () => {
     }))).toBeUndefined();
   });
 
+  it('keeps Notion identity for one matching empty paragraph from a page-create race', () => {
+    const localEmpty: DocumentContent = {
+      type: 'paragraph',
+      attrs: { jottathingBlockId: 'local-empty' },
+    };
+    const notionEmpty: DocumentContent = {
+      type: 'paragraph',
+      attrs: { jottathingBlockId: 'notion-notion-empty', notionBlockId: 'notion-empty' },
+      content: [],
+    };
+    const result = autoMergeUniquePageAdditions(conflict({
+      baseContent: document([]),
+      localContent: document([localEmpty]),
+      remoteContent: document([notionEmpty]),
+    }));
+
+    expect(result?.content).toEqual([notionEmpty]);
+    expect(result?.attrs).toMatchObject({
+      jottathingConflictResolution: true,
+      jottathingPreserveRemoteBlocks: true,
+    });
+  });
+
+  it('keeps review for multiple matching empty paragraphs because their spacing is ambiguous', () => {
+    const empty = (id: string): DocumentContent => ({
+      type: 'paragraph',
+      attrs: { jottathingBlockId: id },
+    });
+    expect(autoMergeUniquePageAdditions(conflict({
+      baseContent: document([]),
+      localContent: document([empty('local-one'), empty('local-two')]),
+      remoteContent: document([empty('notion-one')]),
+    }))).toBeUndefined();
+  });
+
   it('treats expiring signed media URLs as the same addition', () => {
     const image = (id: string, signature: string): DocumentContent => ({
       type: 'image',

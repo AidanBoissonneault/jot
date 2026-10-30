@@ -57,6 +57,8 @@ Page moves have two paths. Moving within a project only changes page order. Movi
 
 Manual resync checks the active account, unblocks and redrives durable queue work, sends unbaselined project snapshots, reconciles dirty or failed pages, then flushes again. It reloads the Notion workspace only after local queues settle with no conflicts or failed uploads; otherwise it leaves remote reload pending.
 
+When a manual resync finds exactly one identical empty paragraph added on each side, it keeps Notion's block identity and removes the duplicate automatically. Multiple matching empty paragraphs remain in review because their spacing may be intentional.
+
 ## Simplification plan
 
 Keep each slice independently reviewable: one behavior change, focused tests, then a commit. Preserve current page content, source provenance, offline edits, conflict review, account isolation, and deletion safety.

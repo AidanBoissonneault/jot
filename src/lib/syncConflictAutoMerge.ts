@@ -24,8 +24,12 @@ export function autoMergeUniquePageAdditions(
 
   if (sharedBlocksConflict(localById, remoteById, baseIds, hasChangeSummary)) return undefined;
 
-  const remoteAdditions = collectRemoteAdditions(localBlocks, remoteBlocks, localById, baseIds);
-  if (!remoteAdditions?.length) return undefined;
+  const additions = collectRemoteAdditions(localBlocks, remoteBlocks, localById, baseIds);
+  if (!additions || (!additions.blocks.length && !additions.replacements.size)) return undefined;
+
+  const mergedLocalBlocks = localBlocks.map((block, index) =>
+    additions.replacements.get(index) ?? block,
+  );
 
   return {
     ...conflict.localContent,
@@ -35,7 +39,7 @@ export function autoMergeUniquePageAdditions(
       jottathingConflictResolution: true,
       jottathingPreserveRemoteBlocks: true,
     },
-    content: [...localBlocks, ...remoteAdditions],
+    content: [...mergedLocalBlocks, ...additions.blocks],
   };
 }
 
@@ -72,33 +76,61 @@ function sharedBlocksConflict(
   return false;
 }
 
-/** Returns remote-only blocks, or undefined if an addition may duplicate local content. */
+/** Merges remote-only blocks and safely adopts Notion's identity for one empty duplicate. */
 function collectRemoteAdditions(
   localBlocks: DocumentContent[],
   remoteBlocks: DocumentContent[],
   localById: BlockIndex,
   baseIds: ReadonlySet<string>,
-): DocumentContent[] | undefined {
-  const localSignatures = new Set(localBlocks.map(signature));
-  const additionSignatures = new Set<string>();
-  const additions: DocumentContent[] = [];
+): { blocks: DocumentContent[]; replacements: Map<number, DocumentContent> } | undefined {
+  const localIndexesBySignature = new Map<string, number[]>();
+  localBlocks.forEach((block, index) => {
+    const id = blockId(block);
+    if (id && baseIds.has(id)) return;
+    const matches = localIndexesBySignature.get(signature(block)) ?? [];
+    matches.push(index);
+    localIndexesBySignature.set(signature(block), matches);
+  });
 
+  const remoteAdditionGroups = new Map<string, DocumentContent[]>();
   for (const remote of remoteBlocks) {
     const id = blockId(remote);
     if (id && localById.has(id)) continue;
     if (id && baseIds.has(id)) return undefined;
+    const matches = remoteAdditionGroups.get(signature(remote)) ?? [];
+    matches.push(remote);
+    remoteAdditionGroups.set(signature(remote), matches);
+  }
 
-    const contentSignature = signature(remote);
-    // Identical additions need the user to decide whether they are duplicates.
-    if (localSignatures.has(contentSignature) || additionSignatures.has(contentSignature)) {
+  const blocks: DocumentContent[] = [];
+  const replacements = new Map<number, DocumentContent>();
+
+  for (const [contentSignature, remoteMatches] of remoteAdditionGroups) {
+    const localMatches = localIndexesBySignature.get(contentSignature) ?? [];
+    if (localMatches.length || remoteMatches.length > 1) {
+      // A lone empty paragraph on each side is a common page-creation race.
+      // Keep Notion's block and identity; other identical additions need review.
+      if (
+        localMatches.length === 1 && remoteMatches.length === 1 &&
+        isEmptyParagraph(localBlocks[localMatches[0]]) && isEmptyParagraph(remoteMatches[0])
+      ) {
+        replacements.set(localMatches[0], remoteMatches[0]);
+        continue;
+      }
       return undefined;
     }
 
-    additionSignatures.add(contentSignature);
-    additions.push(remote);
+    blocks.push(remoteMatches[0]);
   }
 
-  return additions;
+  return { blocks, replacements };
+}
+
+/** Recognizes a blank paragraph without treating other visually empty blocks as disposable. */
+function isEmptyParagraph(block: DocumentContent | undefined): boolean {
+  return block?.type === 'paragraph' && (block.content ?? []).every((child) =>
+    child.type === 'text' && !child.text?.trim(),
+  );
 }
 
 function blockId(block: DocumentContent): string | undefined {
@@ -114,6 +146,7 @@ function indexById(blocks: DocumentContent[]): BlockIndex {
 }
 
 function signature(block: DocumentContent): string {
+  if (isEmptyParagraph(block)) return 'empty-paragraph';
   return syncConflictContentSignature(block, true);
 }
 
