@@ -62,7 +62,6 @@ describe('Notion media routes', () => {
         'local-page-1': [{
           localPageId: 'local-page-1',
           jottathingBlockId: 'image-1',
-          localNodeId: 'image-1',
           notionBlockId: 'notion-image-1',
           kind: 'media',
           order: 0,

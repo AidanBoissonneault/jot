@@ -473,7 +473,7 @@ function jottathingBlockIdsForProjectState(
     ) continue;
 
     for (const mapping of mappings) {
-      const id = mapping.jottathingBlockId ?? mapping.localNodeId;
+      const id = mapping.jottathingBlockId;
       if (id && !id.startsWith(SOURCE_BLOCK_ID_PREFIX)) ids.add(id);
     }
   }

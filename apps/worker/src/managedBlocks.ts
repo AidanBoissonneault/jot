@@ -322,7 +322,7 @@ export function restoreLocalBlockBaseline(
   });
   const baselineById = new Map(desired.map((entry) => [entry.jottathingBlockId, entry]));
   for (const mapping of mappings) {
-    const id = mapping.jottathingBlockId ?? mapping.localNodeId;
+    const id = mapping.jottathingBlockId;
     const baseline = baselineById.get(id);
     if (!baseline) continue;
     mapping.localBaselineAcknowledged = true;
@@ -425,7 +425,7 @@ function mergeRemoteOnlyChangesIntoContent(
 
   for (const mapping of mappings) {
     if (!mapping.newState) continue;
-    const blockId = mapping.jottathingBlockId ?? mapping.localNodeId;
+    const blockId = mapping.jottathingBlockId;
     const desired = desiredById.get(blockId);
     const nodeIndex = desired?.order;
     const local = nodeIndex === undefined ? undefined : localNodes[nodeIndex];
@@ -519,7 +519,7 @@ async function replaceAfterUserConflictResolution({
   const remoteBlocks = await listAllBlockChildren(store, notionPageId);
   const mappingByJottathingId = new Map(
     (store.blockMappings[localPageId] ?? []).map((mapping) => [
-      mapping.jottathingBlockId ?? mapping.localNodeId,
+      mapping.jottathingBlockId,
       mapping,
     ]),
   );
@@ -615,7 +615,7 @@ async function preserveRemoteBlocksAfterUserConflictResolution({
   const remoteById = new Map(remoteBlocks.map((block) => [block.id, block]));
   const knownRemoteIds = new Set(remoteBlocks.map((block) => block.id));
   const mappingByJottathingId = new Map((store.blockMappings[localPageId] ?? []).map((mapping) => [
-    mapping.jottathingBlockId ?? mapping.localNodeId,
+    mapping.jottathingBlockId,
     mapping,
   ]));
   const forcedRemoteIds = collectForcedRemoteIds(content, desiredBlocks, mappingByJottathingId);
@@ -873,12 +873,12 @@ function repairMappingsByContent(
   );
 
   for (const mapping of orderedMappings) {
-    const desired = desiredById.get(mapping.jottathingBlockId ?? mapping.localNodeId);
+    const desired = desiredById.get(mapping.jottathingBlockId);
     const current = mapping.notionBlockId ? remoteById.get(mapping.notionBlockId) : undefined;
     const expectedSignature = mapping.newState ? managedBlockSignature(mapping.newState) : undefined;
     const desiredSignature = desired ? managedBlockSignature(desired.notionBlock) : undefined;
 
-    if (current && explicitLocalChoices.has(mapping.jottathingBlockId ?? mapping.localNodeId)) {
+    if (current && explicitLocalChoices.has(mapping.jottathingBlockId)) {
       mapping.newState = current as unknown as NotionBlockPayload;
       usedRemoteIds.add(current.id);
       continue;
@@ -921,7 +921,7 @@ function repairMappingsByContent(
   // content here; the duplicate review pool must see those as separate blocks.
   for (const desired of desiredBlocks) {
     if (existingMappings.some((entry) =>
-      (entry.jottathingBlockId ?? entry.localNodeId) === desired.jottathingBlockId,
+      entry.jottathingBlockId === desired.jottathingBlockId,
     )) continue;
     const node = content.content?.[desired.order];
     const notionId = stringValue(node?.attrs?.notionBlockId);
@@ -930,7 +930,6 @@ function repairMappingsByContent(
     existingMappings.push({
       localPageId: desired.localPageId,
       jottathingBlockId: desired.jottathingBlockId,
-      localNodeId: desired.localNodeId,
       notionBlockId: remote.id,
       kind: desired.kind,
       order: desired.order,
@@ -964,7 +963,7 @@ function hasUnresolvedRemoteChanges(
   const remoteById = new Map(remoteBlocks.map((block) => [block.id, block]));
 
   for (const mapping of mappings) {
-    const desired = desiredById.get(mapping.jottathingBlockId ?? mapping.localNodeId);
+    const desired = desiredById.get(mapping.jottathingBlockId);
     const remote = mapping.notionBlockId
       ? remoteById.get(mapping.notionBlockId)
       : undefined;
@@ -1006,7 +1005,7 @@ function hasUnresolvedExactDuplicates(
   remoteBlocks: NotionBlock[],
 ): boolean {
   const mappingByLocalId = new Map(mappings.map((mapping) => [
-    mapping.jottathingBlockId ?? mapping.localNodeId,
+    mapping.jottathingBlockId,
     mapping,
   ]));
   const mappedRemoteIds = new Set(
@@ -1102,7 +1101,7 @@ function createContentConflict(
       .filter((entry): entry is readonly [string, DocumentContent] => Boolean(entry[0])),
   );
   const mappingByLocalId = new Map(
-    mappings.map((mapping) => [mapping.jottathingBlockId ?? mapping.localNodeId, mapping]),
+    mappings.map((mapping) => [mapping.jottathingBlockId, mapping]),
   );
   const desiredByLocalId = new Map(desiredBlocks.map((desired) => [desired.jottathingBlockId, desired]));
   const remoteByNotionId = new Map(remoteBlocks.map((block) => [block.id, block]));
@@ -1143,7 +1142,7 @@ function createContentConflict(
       .sort((first, second) => first.order - second.order)
       .flatMap((mapping) => {
         if (!mapping.newState) return [];
-        const blockId = mapping.jottathingBlockId ?? mapping.localNodeId;
+        const blockId = mapping.jottathingBlockId;
         const baseNode = documentNodeFromNotionState(
           mapping.newState,
           localById.get(blockId),
@@ -1157,7 +1156,7 @@ function createContentConflict(
   const remoteChangedBlockIds: string[] = [];
   for (const mapping of mappings) {
     if (!mapping.newState) continue;
-    const blockId = mapping.jottathingBlockId ?? mapping.localNodeId;
+    const blockId = mapping.jottathingBlockId;
     const desired = desiredByLocalId.get(blockId);
     const remote = mapping.notionBlockId ? remoteByNotionId.get(mapping.notionBlockId) : undefined;
     const baseSignature = managedBlockSignature(mapping.newState);
@@ -1178,7 +1177,7 @@ function createContentConflict(
     const mappedIdByNotionId = new Map(
       mappings
         .filter((mapping) => mapping.notionBlockId)
-        .map((mapping) => [mapping.notionBlockId!, mapping.jottathingBlockId ?? mapping.localNodeId]),
+        .map((mapping) => [mapping.notionBlockId!, mapping.jottathingBlockId]),
     );
     remoteContent.content = remoteContent.content?.map((node, index) => {
       const notionId = remoteBlocks[index]?.id;

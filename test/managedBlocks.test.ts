@@ -163,7 +163,6 @@ describe('managed block snapshot replacement', () => {
       blockMappings: {
         'local-page': [{
           jottathingBlockId: 'block-one',
-          localNodeId: 'block-one',
           localPageId: 'local-page',
           notionBlockId: 'old-remote',
           kind: 'heading_1',
@@ -264,7 +263,6 @@ describe('managed block replacement safety', () => {
   test('an empty snapshot never deletes existing Notion content', async () => {
     const existingMapping = {
       jottathingBlockId: 'block-one',
-      localNodeId: 'block-one',
       localPageId: 'local-page',
       notionBlockId: 'notion-block-one',
       kind: 'paragraph',
@@ -391,8 +389,8 @@ describe('managed block replacement safety', () => {
     const store = {
       blockMappings: {
         'local-page': [
-          { jottathingBlockId: 'a', localNodeId: 'a', localPageId: 'local-page', notionBlockId: 'old-a', kind: 'paragraph', order: 0, lastSyncedHash: 'a', oldState: null, newState: null },
-          { jottathingBlockId: 'b', localNodeId: 'b', localPageId: 'local-page', notionBlockId: 'old-b', kind: 'paragraph', order: 1, lastSyncedHash: 'b', oldState: null, newState: null },
+          { jottathingBlockId: 'a', localPageId: 'local-page', notionBlockId: 'old-a', kind: 'paragraph', order: 0, lastSyncedHash: 'a', oldState: null, newState: null },
+          { jottathingBlockId: 'b', localPageId: 'local-page', notionBlockId: 'old-b', kind: 'paragraph', order: 1, lastSyncedHash: 'b', oldState: null, newState: null },
         ],
       },
     };

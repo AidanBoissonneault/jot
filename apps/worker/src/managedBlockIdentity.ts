@@ -15,7 +15,6 @@ export interface DesiredManagedBlock {
   jottathingBlockId: string;
   kind: string;
   lastSyncedHash: string;
-  localNodeId: string;
   localPageId: string;
   notionBlock: NotionBlockPayload;
   order: number;
@@ -55,7 +54,6 @@ export function desiredManagedBlocks({
     const jottathingBlockId = jottathingBlockIdFromNode(nodes[index], index);
     return {
       jottathingBlockId,
-      localNodeId: jottathingBlockId,
       localPageId,
       notionBlock,
       kind: kindFromNotionBlock(notionBlock),
@@ -82,7 +80,6 @@ export function mappingFromDesired(
   return {
     localPageId: entry.localPageId,
     jottathingBlockId: entry.jottathingBlockId,
-    localNodeId: entry.localNodeId,
     localBaselineAcknowledged: previous.localBaselineAcknowledged ?? false,
     notionBlockId,
     kind: entry.kind,
@@ -125,9 +122,9 @@ export function mappingsByJottathingId(mappings: BlockMapping[]): Map<string, Bl
   return result;
 }
 
-/** Returns the stable local key for a current or legacy mapping. */
+/** Returns a mapping's stable Jottathing block ID. */
 export function mappingKey(mapping: BlockMapping): string {
-  return mapping.jottathingBlockId ?? mapping.localNodeId;
+  return mapping.jottathingBlockId;
 }
 
 /** Computes the shared mapping identifiers in old and desired order. */

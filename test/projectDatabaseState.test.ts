@@ -61,7 +61,6 @@ describe('thread content reload identity', () => {
       targetStore.blockMappings[page.id] = [{
         localPageId: page.id,
         jottathingBlockId: 'stable-local-block-1',
-        localNodeId: 'stable-local-block-1',
         notionBlockId: 'notion-paragraph-1',
         kind: 'paragraph',
         order: 0,

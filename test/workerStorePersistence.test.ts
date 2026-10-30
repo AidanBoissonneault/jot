@@ -126,7 +126,6 @@ describe('worker sync-state persistence failures', () => {
       jottathingBlockId: 'block',
       kind: 'paragraph',
       lastSyncedHash: 'hash',
-      localNodeId: 'node',
       localPageId: 'page',
       localBaselineAcknowledged,
       newState: { type: 'paragraph' } as never,

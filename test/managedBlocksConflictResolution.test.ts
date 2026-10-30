@@ -100,7 +100,6 @@ function runGranularUpdate({
       'local-page': [{
         localPageId: 'local-page',
         jottathingBlockId: 'local-a',
-        localNodeId: 'local-a',
         notionBlockId: 'remote-a',
         kind: 'paragraph',
         order: 0,
@@ -165,7 +164,6 @@ describe('reviewed conflict merge block reconciliation', () => {
     const mapping = {
       localPageId: 'local-page',
       jottathingBlockId: 'local-a',
-      localNodeId: 'local-a',
       notionBlockId: 'remote-a',
       kind: 'paragraph',
       order: 0,
@@ -193,7 +191,6 @@ describe('reviewed conflict merge block reconciliation', () => {
     const mapping = {
       localPageId: 'local-page',
       jottathingBlockId: 'local-a',
-      localNodeId: 'local-a',
       notionBlockId: 'remote-a',
       kind: 'heading_1',
       order: 0,

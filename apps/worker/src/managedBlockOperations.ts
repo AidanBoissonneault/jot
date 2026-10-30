@@ -239,7 +239,6 @@ async function applySingleManagedBlockOp({
 
   const desired: DesiredManagedBlock = {
     jottathingBlockId: op.jottathingBlockId,
-    localNodeId: op.jottathingBlockId,
     localPageId,
     notionBlock,
     kind: kindFromNotionBlock(notionBlock),
@@ -437,7 +436,7 @@ function createBlockOperationConflict({
   if (remoteContent) {
     const idByNotionId = new Map(mappings
       .filter((mapping) => mapping.notionBlockId)
-      .map((mapping) => [mapping.notionBlockId!, mapping.jottathingBlockId ?? mapping.localNodeId]));
+      .map((mapping) => [mapping.notionBlockId!, mapping.jottathingBlockId]));
     remoteContent.content = remoteContent.content?.map((node, index) => {
       const notionId = remoteBlocks[index]?.id;
       const mappedId = notionId

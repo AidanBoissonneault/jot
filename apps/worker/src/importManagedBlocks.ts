@@ -90,8 +90,7 @@ function rebuildImportedBlockMappings({
   const content = (imported.content ?? []).map((node: DocumentContent, index: number) => {
     const notionBlock = notionBlocks[index];
     const existing = existingByNotionId.get(notionBlock?.id);
-    const jottathingBlockId =
-      existing?.jottathingBlockId ?? existing?.localNodeId ?? `jottathing-block-${randomUUID()}`;
+    const jottathingBlockId = existing?.jottathingBlockId ?? `jottathing-block-${randomUUID()}`;
     const fileUploadId = fileUploadIdFromMapping(existing);
 
     return {
@@ -122,7 +121,6 @@ function rebuildImportedBlockMappings({
     return {
       localPageId,
       jottathingBlockId: String(node.attrs?.[JOTTATHING_BLOCK_ID_ATTR]),
-      localNodeId: String(node.attrs?.[JOTTATHING_BLOCK_ID_ATTR]),
       notionBlockId: importedBlock.id,
       kind: kindFromNotionBlock(notionBlock),
       order: index,

@@ -112,7 +112,6 @@ export interface BlockMapping {
   jottathingBlockId: string;
   kind: string;
   lastSyncedHash: string;
-  localNodeId: string;
   localPageId: string;
   localBaselineAcknowledged?: boolean;
   newState: NotionBlockPayload | null;

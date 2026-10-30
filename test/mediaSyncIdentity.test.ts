@@ -9,7 +9,6 @@ describe('media sync identity', () => {
         'page-1': [{
           localPageId: 'page-1',
           jottathingBlockId: 'image-1',
-          localNodeId: 'image-1',
           notionBlockId: 'notion-image-1',
           kind: 'media',
           order: 0,
