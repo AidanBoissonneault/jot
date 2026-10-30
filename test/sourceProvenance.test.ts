@@ -199,33 +199,4 @@ describe('captured source provenance', () => {
     });
   });
 
-  it('recovers source navigation from a Notion-preserved source link', () => {
-    const normalized = normalizeJottathingBlockIds({
-      type: 'doc',
-      content: [
-        {
-          type: 'codeBlock',
-          attrs: { jottathingBlockId: 'code-1' },
-          content: [{ type: 'text', text: 'selected text' }],
-        },
-        {
-          type: 'paragraph',
-          attrs: { jottathingBlockId: 'source-1' },
-          content: [{
-            type: 'text',
-            text: 'Source: Example documentation',
-            marks: [{
-              type: 'link',
-              attrs: { href: source.highlightMeta.sourceLink },
-            }],
-          }],
-        },
-      ],
-    });
-
-    expect(normalized.content?.[0].attrs?.jottathingSource).toEqual({
-      u: 'https://example.com/docs?version=2',
-      t: 'selected text',
-    });
-  });
 });

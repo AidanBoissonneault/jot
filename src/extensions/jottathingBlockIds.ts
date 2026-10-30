@@ -104,7 +104,7 @@ export function normalizeJottathingBlockIds(content: DocumentContent): DocumentC
   const seen = new Set<string>();
   let changed = false;
   const children = content.content ?? [];
-  const normalizedChildren = children.map((originalNode, index) => {
+  const normalizedChildren = children.map((originalNode) => {
     let node = stripEmptySourceAttributes(originalNode);
     changed ||= node !== originalNode;
     const canOwnSource =
@@ -118,25 +118,16 @@ export function normalizeJottathingBlockIds(content: DocumentContent): DocumentC
             : null
         )
       : null;
-    const adjacentSource =
-      node.type === 'blockquote' || node.type === 'codeBlock'
-        ? sourceFromNode(children[index + 1]) ?? sourceFromSourceParagraph(
-            children[index + 1],
-            textFromDocumentNode(node),
-          )
-        : null;
-    const source = ownSource ?? adjacentSource;
-
     if (
       canOwnSource &&
       !decodeJottathingSource(node.attrs?.[JOTTATHING_SOURCE_ATTR]) &&
-      source
+      ownSource
     ) {
       node = {
         ...node,
         attrs: {
           ...node.attrs,
-          [JOTTATHING_SOURCE_ATTR]: storeJottathingSource(source),
+          [JOTTATHING_SOURCE_ATTR]: storeJottathingSource(ownSource),
         },
       };
       changed = true;
@@ -224,17 +215,6 @@ function sourceFromNode(
   }
 
   return null;
-}
-
-function sourceFromSourceParagraph(
-  node: DocumentContent | undefined,
-  sourceText: string,
-) {
-  if (!node || node.type !== 'paragraph' || !/^Source:\s/i.test(textFromDocumentNode(node))) {
-    return null;
-  }
-
-  return sourceFromLink(node, sourceText);
 }
 
 function sourceFromLink(
