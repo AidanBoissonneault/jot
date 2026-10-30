@@ -5094,12 +5094,22 @@ export const notionClient = {
       session,
       hasRetainedLocalData,
     );
-    if (queueSwitch) {
+    const sessionScopeChanged = Boolean(
+      session.authenticated && session.userId &&
+      (syncConfig.userId !== session.userId || syncConfig.workspaceId !== session.workspaceId),
+    );
+    if (sessionScopeChanged && queueDeliveryTimer) {
+      clearTimeout(queueDeliveryTimer);
+      queueDeliveryTimer = undefined;
+    }
+    if (queueSwitch || sessionScopeChanged) {
       await Promise.allSettled(
         [queueDeliveryPromise, forcedQueueDeliveryPromise].filter(
           (promise): promise is Promise<void> => Boolean(promise),
         ),
       );
+    }
+    if (queueSwitch) {
       await switchPendingSyncQueueAccount(queueSwitch.from, queueSwitch.to);
     }
 
@@ -5130,7 +5140,7 @@ export const notionClient = {
     }
 
     if (session.connected && syncQueueBelongsToActiveAccount(nextConfig)) {
-      triggerQueueDelivery();
+      void scheduleQueueDeliveryIfNeeded();
     }
 
     return nextConfig;
