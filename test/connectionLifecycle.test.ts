@@ -532,7 +532,25 @@ describe('Jottathing connection data lifecycle', () => {
 
   it('keeps previously synced local documents with their original account', async () => {
     seedLocalWorkspace();
-    await idbSet('notionHydrationSource', 'https://sync.example.test::workspace-test');
+    const workspaceId = 'workspace-notion-original-account';
+    await idbSet('workspaces', [{
+      id: workspaceId,
+      name: 'Original workspace',
+      kind: 'notion',
+      accountId: 'notion:original-account',
+      notionWorkspaceId: 'workspace-test',
+      createdAt: project.createdAt,
+      updatedAt: project.updatedAt,
+    }]);
+    await idbSet('projects', [{ ...project, workspaceId, syncMode: 'notion' }]);
+    await idbSet('pages', [{
+      ...page,
+      workspaceId,
+      syncMode: 'notion',
+      syncAccountId: 'notion:original-account',
+      syncWorkspaceId: 'workspace-test',
+      notionPageId: 'notion-page-original-account',
+    }]);
     stubJsonResponse({
       authenticated: true,
       userId: 'notion:other-account',
@@ -548,6 +566,15 @@ describe('Jottathing connection data lifecycle', () => {
     expect(await notionClient.needsInitialNotionHydration()).toBe(false);
     await expect(notionClient.validateNotionCache()).rejects.toThrow('locked to its original Notion account');
     expectSeededDocumentsPreserved();
+  });
+
+  it('does not recover workspace ownership from the retired hydration marker format', async () => {
+    seedLocalWorkspace({ ...connectedConfig, workspaceId: undefined });
+    await idbSet('notionHydrationSource', 'https://sync.example.test::workspace-test');
+
+    await notionClient.getSyncConfig();
+
+    expect((readBrowserStorage().pages as ProjectPage[])[0]?.syncWorkspaceId).toBeUndefined();
   });
 
   it('does not assign ownerless work by matching an old email address', async () => {

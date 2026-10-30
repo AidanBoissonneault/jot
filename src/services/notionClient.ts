@@ -795,7 +795,7 @@ async function readStorage(): Promise<Required<JottathingStorage>> {
   const hasStoredSyncCredentials = containsSyncCredentials(stored.syncConfig);
   const legacyAccountId = storedSyncConfig.syncQueueOwnerUserId ?? storedSyncConfig.userId;
   const legacyWorkspaceId = storedSyncConfig.syncQueueOwnerWorkspaceId ??
-    storedSyncConfig.workspaceId ?? workspaceFromHydrationSource(stored.notionHydrationSource);
+    storedSyncConfig.workspaceId;
   const syncConfig = stripStoredSyncCredentials({
     ...storedSyncConfig,
     syncQueueOwnerWorkspaceId: storedSyncConfig.syncQueueOwnerWorkspaceId ??
@@ -925,12 +925,6 @@ function hydrationSource(syncConfig: SyncConfig) {
   const workspace = syncConfig.workspaceId?.trim() || 'connected-workspace';
   const account = syncConfig.userId?.trim() || 'unassigned-account';
   return `${serverUrl}::${account}::${workspace}`;
-}
-
-function workspaceFromHydrationSource(source: string | undefined): string | undefined {
-  if (!source) return undefined;
-  const parts = source.split('::');
-  return parts.length >= 2 ? parts[parts.length - 1] : undefined;
 }
 
 function isPageVisibleForAccount(page: ProjectPage, syncConfig: SyncConfig): boolean {
