@@ -220,3 +220,5 @@ Project snapshot and source events now share the rule that carries a project's e
 Worker block signatures and media-conflict detection now share `stableNotionFileUrl`, which removes rotating Notion file credentials while preserving malformed and ordinary URLs. The duplicate normalizer is removed from `managedBlocks.ts`; four managed-block and Notion block-operation suites pass (29 tests), Worker typecheck passes, and Fallow's duplicate-line count falls from 124 to 113.
 
 Editor data-URL creation and Worker upload preparation now share the documented `bytesToBase64` helper, preserving bounded 8,192-byte conversion chunks. The base64 boundary tests and five media suites pass (31 tests); root typecheck and extension production build pass. Fallow's duplicate-line count falls from 113 to 101.
+
+Sync push, page-resync, and pull routes now destructure the body directly after normalizing missing JSON to `{}`; their second nullish fallback was redundant. Worker security and request utility suites pass (38 tests), with Worker typecheck clean.
