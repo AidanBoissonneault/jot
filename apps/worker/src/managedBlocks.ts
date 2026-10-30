@@ -5,6 +5,7 @@
  */
 
 import type { DocumentContent } from '../../../src/types/capture.js';
+import { stableNotionFileUrl } from '../../../src/lib/notionFileUrl.js';
 import type {
   BlockMapping,
   HashValue,
@@ -21,7 +22,7 @@ import {
   mappingFromDesired,
   positionAfter,
 } from './managedBlockIdentity.js';
-import { managedBlockSignature, stableNotionFileUrl } from './managedBlockSignatures.js';
+import { managedBlockSignature } from './managedBlockSignatures.js';
 import type { BlockPosition, DesiredManagedBlock } from './managedBlockIdentity.js';
 import { rebuildReorderedRange, reconcileManagedBlocks } from './managedBlockReconciliation.js';
 import { notionBlocksToTiptapDocumentStrict } from './blockConversion/notionToTiptap.js';

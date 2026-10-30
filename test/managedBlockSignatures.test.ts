@@ -93,6 +93,19 @@ describe('managed Notion block signatures', () => {
     expect(managedBlockSignature(returned)).not.toBe(managedBlockSignature(outgoing));
   });
 
+  it('treats rotating signed image URLs as the same media block', () => {
+    const original = {
+      type: 'image',
+      image: { external: { url: 'https://files.example/image.png?X-Amz-Signature=old' } },
+    };
+    const refreshed = {
+      type: 'image',
+      image: { external: { url: 'https://files.example/image.png?X-Amz-Signature=new' } },
+    };
+
+    expect(managedBlockSignature(original)).toBe(managedBlockSignature(refreshed));
+  });
+
   it('treats an empty text item like Notion’s empty paragraph rich_text array', () => {
     const outgoing = {
       object: 'block',

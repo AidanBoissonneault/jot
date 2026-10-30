@@ -1,4 +1,5 @@
 import type { DocumentContent } from '../types/capture.js';
+import { stableNotionFileUrl } from './notionFileUrl.js';
 
 /** Builds a stable block signature without sync identities or transient upload state. */
 export function syncConflictContentSignature(
@@ -22,7 +23,9 @@ function withoutIdentity(value: unknown, omitEmptyAttributes: boolean): unknown 
     .map(([key, nested]) => [
       key,
       key === 'src'
-        ? stableMediaUrl(nested, omitEmptyAttributes)
+        ? typeof nested === 'string'
+          ? stableNotionFileUrl(nested)
+          : withoutIdentity(nested, omitEmptyAttributes)
         : withoutIdentity(nested, omitEmptyAttributes),
     ]));
 
@@ -33,18 +36,4 @@ function withoutIdentity(value: unknown, omitEmptyAttributes: boolean): unknown 
 function isEmptyRecord(value: unknown): value is Record<string, never> {
   return value !== null && typeof value === 'object' &&
     !Array.isArray(value) && Object.keys(value).length === 0;
-}
-
-/** Ignores rotating credentials in Notion-hosted, time-limited media URLs. */
-function stableMediaUrl(value: unknown, omitEmptyAttributes: boolean): unknown {
-  if (typeof value !== 'string') return withoutIdentity(value, omitEmptyAttributes);
-  try {
-    const url = new URL(value);
-    if (url.searchParams.has('X-Amz-Signature') || url.hostname.startsWith('prod-files-secure.s3.')) {
-      return `${url.origin}${url.pathname}`;
-    }
-  } catch {
-    // Keep malformed and non-URL values exact.
-  }
-  return value;
 }

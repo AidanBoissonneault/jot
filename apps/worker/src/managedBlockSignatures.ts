@@ -1,4 +1,5 @@
 /** @file Compares Notion block request payloads with their API response shapes. */
+import { stableNotionFileUrl } from '../../../src/lib/notionFileUrl.js';
 import type { NotionBlock, NotionBlockPayload } from './types.js';
 
 /** Builds a stable comparison key from request and response shapes of one block. */
@@ -70,20 +71,4 @@ function isDefaultAnnotations(value: unknown): boolean {
   return Object.values(annotations).every((annotation) =>
     annotation === false || annotation === 'default',
   );
-}
-
-/** Ignores rotating credentials in Notion-hosted, time-limited media URLs. */
-export function stableNotionFileUrl(value: string): string {
-  try {
-    const url = new URL(value);
-    if (
-      url.searchParams.has('X-Amz-Signature') ||
-      url.hostname.startsWith('prod-files-secure.s3.')
-    ) {
-      return `${url.origin}${url.pathname}`;
-    }
-  } catch {
-    // Retain malformed values exactly for the normal comparison.
-  }
-  return value;
 }
