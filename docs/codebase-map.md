@@ -228,3 +228,5 @@ Normal and dead-letter queue failures now publish through one documented Worker 
 Conflict review now calls the shared content-signature helper directly; its redundant exported signature wrapper is removed, and block-ID lookup is private. Review tests exercise IDs and upload matching through the public row builder. Conflict-review and auto-merge suites pass (19 tests), root typecheck passes, and Fallow's unused-export findings fall from 9 to 7.
 
 `UnmappedNotionContentError` no longer duplicates the shared code constant on each error instance; route responses still use the constant and the type guard still recognizes the class. Managed-block and queue-consumer suites pass (28 tests), Worker typecheck passes, and Fallow reports one remaining unused class member instead of two.
+
+Conflict review reconstruction now gets local block IDs from the existing Notion-ID mapping instead of building a second map. It also removes a temporary ID alias; four managed-block suites pass (26 tests), Worker typecheck passes, and Fallow's duplicate-line count falls from 68 to 52.
