@@ -3296,12 +3296,12 @@ describe('project page caching', () => {
 describe('cross-instance workspace refresh', () => {
   test('manual resync refreshes the live project and page after a remote project change', async () => {
     const remoteProject: Project = {
-      ...baseProject,
+      ...notionTestProject,
       id: 'project-from-another-instance',
       name: 'Remote project',
     };
     const remotePage: ProjectPage = {
-      ...basePage,
+      ...notionTestPage,
       id: 'page-from-another-instance',
       projectId: remoteProject.id,
       title: 'Remote page',
@@ -3312,10 +3312,13 @@ describe('cross-instance workspace refresh', () => {
       resetBrowserStorage({
         activePageIdsByProject: { [remoteProject.id]: remotePage.id },
         currentProjectId: remoteProject.id,
+        currentProjectIdByWorkspace: { [testNotionWorkspace.id]: remoteProject.id },
+        currentWorkspaceId: testNotionWorkspace.id,
         hasMigratedCapturesToPages: true,
         pages: [remotePage],
         projects: [remoteProject],
         syncConfig: connectedConfig,
+        workspaces: [testNotionWorkspace],
       });
       return {
         blockedProjectCount: 0,
@@ -3338,12 +3341,12 @@ describe('cross-instance workspace refresh', () => {
 
   test('manual resync replaces a remotely deleted current page with the surviving page', async () => {
     const survivingPage: ProjectPage = {
-      ...basePage,
+      ...notionTestPage,
       id: 'page-that-survived-remotely',
       title: 'Surviving page',
     };
     const deletedPage: ProjectPage = {
-      ...basePage,
+      ...notionTestPage,
       id: 'page-deleted-remotely',
       title: 'Deleted page',
     };
@@ -3352,12 +3355,15 @@ describe('cross-instance workspace refresh', () => {
     store.currentPage = deletedPage;
     const resync = vi.spyOn(notionClient, 'resyncPendingChanges').mockImplementation(async () => {
       resetBrowserStorage({
-        activePageIdsByProject: { [baseProject.id]: survivingPage.id },
-        currentProjectId: baseProject.id,
+        activePageIdsByProject: { [notionTestProject.id]: survivingPage.id },
+        currentProjectId: notionTestProject.id,
+        currentProjectIdByWorkspace: { [testNotionWorkspace.id]: notionTestProject.id },
+        currentWorkspaceId: testNotionWorkspace.id,
         hasMigratedCapturesToPages: true,
         pages: [survivingPage],
-        projects: [baseProject],
+        projects: [notionTestProject],
         syncConfig: connectedConfig,
+        workspaces: [testNotionWorkspace],
       });
       return {
         blockedProjectCount: 0,
@@ -3378,7 +3384,7 @@ describe('cross-instance workspace refresh', () => {
 
   test('manual sync reloads when remote project/page IDs changed without local event rows', async () => {
     const externalPage: ProjectPage = {
-      ...basePage,
+      ...notionTestPage,
       id: 'page-created-in-another-instance',
       title: 'External page',
       notionPageId: 'external-thread-block',
@@ -3395,13 +3401,13 @@ describe('cross-instance workspace refresh', () => {
       workspaceChanged: true,
     });
     const reload = vi.spyOn(notionClient, 'reloadFromNotion').mockResolvedValue({
-      currentProjectId: baseProject.id,
-      pages: [basePage, externalPage],
-      projects: [baseProject],
+      currentProjectId: notionTestProject.id,
+      pages: [notionTestPage, externalPage],
+      projects: [notionTestProject],
       syncConfig: connectedConfig,
     });
-    vi.spyOn(notionClient, 'listProjectPages').mockResolvedValue([basePage, externalPage]);
-    vi.spyOn(notionClient, 'getProjectPage').mockResolvedValue(basePage);
+    vi.spyOn(notionClient, 'listProjectPages').mockResolvedValue([notionTestPage, externalPage]);
+    vi.spyOn(notionClient, 'getProjectPage').mockResolvedValue(notionTestPage);
     vi.spyOn(notionClient, 'prefetchProjectPages').mockResolvedValue(undefined);
 
     await store.syncPendingChanges();
@@ -3415,15 +3421,31 @@ async function setupStoreWithPages(
   store: ReturnType<typeof useJottathingStore>,
   pages: ProjectPage[],
 ) {
+  const project = { ...notionTestProject };
+  const scopedPages = pages.map((page) => ({
+    ...page,
+    workspaceId: testNotionWorkspace.id,
+    syncMode: 'notion' as const,
+    syncAccountId: testNotionWorkspace.accountId,
+    syncWorkspaceId: testNotionWorkspace.notionWorkspaceId,
+  }));
   resetBrowserStorage({
-    activePageIdsByProject: { 'project-jottathing': 'page-jottathing' },
-    currentProjectId: 'project-jottathing',
+    activePageIdsByProject: { [project.id]: scopedPages[0]?.id ?? '' },
+    currentProjectId: project.id,
+    currentProjectIdByWorkspace: { [testNotionWorkspace.id]: project.id },
+    currentWorkspaceId: testNotionWorkspace.id,
     hasMigratedCapturesToPages: true,
-    pages,
-    projects: [baseProject],
+    pages: scopedPages,
+    projects: [project],
     syncConfig: connectedConfig,
+    workspaces: [testNotionWorkspace],
   });
-  await seedStore(store, pages);
+  await seedStore(store, scopedPages);
+  store.projects = [project];
+  store.pages = scopedPages;
+  store.workspaces = [testNotionWorkspace];
+  store.currentWorkspaceId = testNotionWorkspace.id;
+  store.currentPage = scopedPages.find((page) => page.id === basePage.id) ?? scopedPages[0] ?? null;
 }
 
 function localWorkspacePage(page: ProjectPage): ProjectPage {
