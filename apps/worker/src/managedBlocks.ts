@@ -64,24 +64,24 @@ export function isUnmappedNotionContentError(error: unknown): error is UnmappedN
 }
 
 /** Describes the append managed blocks contract used by this API feature. */
-type AppendManagedBlocks = (
+export type AppendManagedBlocks = (
   store: WorkerStore,
   notionPageId: string,
   blocks: NotionBlockPayload[],
   position?: BlockPosition,
 ) => Promise<NotionBlock[]>;
 /** Describes the delete managed block contract used by this API feature. */
-type DeleteManagedBlock = (store: WorkerStore, blockId: string) => Promise<unknown>;
+export type DeleteManagedBlock = (store: WorkerStore, blockId: string) => Promise<unknown>;
 /** Describes the update managed block contract used by this API feature. */
-type UpdateManagedBlock = (
+export type UpdateManagedBlock = (
   store: WorkerStore,
   blockId: string,
   block: NotionBlockPayload,
 ) => Promise<unknown>;
 /** Describes the convert document contract used by this API feature. */
-type ConvertDocument = (content: DocumentContent) => NotionBlockPayload[];
+export type ConvertDocument = (content: DocumentContent) => NotionBlockPayload[];
 /** Describes the classify block contract used by this API feature. */
-type ClassifyBlock = (block: Pick<NotionBlockPayload, 'type'>) => string;
+export type ClassifyBlock = (block: Pick<NotionBlockPayload, 'type'>) => string;
 
 /** Describes the managed block dependencies contract used by this API feature. */
 interface ManagedBlockDependencies {

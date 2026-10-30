@@ -16,26 +16,18 @@ import {
   mappingKey,
   positionAfter,
 } from './managedBlockIdentity.js';
-import type { BlockPosition, DesiredManagedBlock } from './managedBlockIdentity.js';
+import type { DesiredManagedBlock } from './managedBlockIdentity.js';
 import { managedBlockSignature } from './managedBlockSignatures.js';
 import { appendAndTrackBlock } from './managedBlockReconciliation.js';
 import { notionBlocksToTiptapDocumentStrict } from './blockConversion/notionToTiptap.js';
 import { restoreLocalBlockBaseline, UnmappedNotionContentError } from './managedBlocks.js';
-
-type AppendManagedBlocks = (
-  store: WorkerStore,
-  notionPageId: string,
-  blocks: NotionBlockPayload[],
-  position?: BlockPosition,
-) => Promise<NotionBlock[]>;
-type DeleteManagedBlock = (store: WorkerStore, blockId: string) => Promise<unknown>;
-type UpdateManagedBlock = (
-  store: WorkerStore,
-  blockId: string,
-  block: NotionBlockPayload,
-) => Promise<unknown>;
-type ConvertDocument = (content: DocumentContent) => NotionBlockPayload[];
-type ClassifyBlock = (block: Pick<NotionBlockPayload, 'type'>) => string;
+import type {
+  AppendManagedBlocks,
+  ClassifyBlock,
+  ConvertDocument,
+  DeleteManagedBlock,
+  UpdateManagedBlock,
+} from './managedBlocks.js';
 const CURRENT_OPERATION_TYPES = new Set<ManagedBlockOperation['type']>([
   'page_upsert',
   'blocks_reset',
