@@ -16,7 +16,7 @@ import {
   visibleProjectStateContent,
 } from '@/src/extensions/sourceRegistry';
 import { createCapturedContent } from '@/src/services/notionClient';
-import { cloneableProjectState } from '@/src/services/idbStore';
+import { idbGet, idbSet } from '@/src/services/idbStore';
 import {
   notionBlocksToTiptapDocument,
   tiptapDocumentToNotionBlocks,
@@ -38,9 +38,10 @@ const source: SourceOpenPayload = {
 };
 
 describe('captured source provenance', () => {
-  it('unwraps reactive-style proxies before IndexedDB persistence', () => {
+  it('unwraps reactive-style proxies before IndexedDB persistence', async () => {
     const proxied = new Proxy({ nested: { source: 'https://example.com' } }, {});
-    const cloneable = cloneableProjectState(proxied);
+    await idbSet('proxy-clone-test', proxied);
+    const cloneable = await idbGet<typeof proxied>('proxy-clone-test');
 
     expect(cloneable).toEqual(proxied);
     expect(() => structuredClone(cloneable)).not.toThrow();

@@ -230,7 +230,7 @@ function normalizeWriteControl(value: unknown): WriteControl {
 /** Vue can proxy nested project state after it enters Pinia. IndexedDB cannot
  * structured-clone proxies, while all values in this KV store are JSON state.
  * A JSON round trip unwraps those proxies before they reach IDB. */
-export function cloneableProjectState<T>(value: T): T {
+function cloneableProjectState<T>(value: T): T {
   if (value === undefined) {
     return value;
   }
