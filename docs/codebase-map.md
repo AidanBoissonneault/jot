@@ -242,3 +242,5 @@ Optimistic page replacement and restart recovery now use `readPageReplacementSna
 The two durable queue-count helpers used only by `/sync/status` are private to the route module. Their tests now invoke the registered route, covering active counts, retained failures, and the database-error response; the queue-status and Worker security suites pass (37 tests), Worker typecheck passes, and Fallow's unused-export count falls from two to zero.
 
 Removed the `replaceTempPage` pass-through and routed both callers directly to `replacePageAtomically`. The temporary-ID restart recovery and queued edit replay tests pass (2 tests), with root typecheck clean.
+
+`withWriteControl` now owns the shared IndexedDB read-write transaction used to initialize the writer epoch, pause/resume writes, and clear local data. `idbClear` still increments the epoch only while paused and rejects without deleting data otherwise; the three focused fence/restart cases pass, root typecheck passes, and Fallow reports no production duplicate blocks.
