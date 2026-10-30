@@ -152,3 +152,5 @@ Session refresh now changes queue ownership only after the previous account has 
 The media extension no longer re-exports the YouTube URL utility; the editor and Worker use its canonical `src/lib/youtubeUtils.ts` module, and the media test imports that utility directly. Media and block-conversion suites pass (31 tests), along with root and Worker typechecks.
 
 The Worker now defines `BlockPosition` once in `managedBlockIdentity.ts`; block operations and shared utilities import that type. Managed-block and queue-operation suites pass (16 tests), root and Worker typechecks pass, and Fallow no longer reports a duplicate `BlockPosition` export.
+
+The sync queue no longer contains its unused automatic project-rebase path or merge helpers (251 lines including tests). The active conflict path remains the user-reviewed merge, which persists a reviewed project snapshot before replacing blocked queue work. Queue payload, conflict review, auto-merge, and project-source suites pass (13 tests), with root and Worker typechecks clean.
