@@ -217,7 +217,7 @@ Automatic page-addition merge and conflict review now share `syncConflictContent
 
 Project snapshot and source events now share the rule that carries a project's existing delivery block into replacement queue work. A new regression case covers both event types; the sync-queue payload and resync suites pass (7 tests), with root typecheck clean.
 
-Worker block signatures and media-conflict detection now share `stableNotionFileUrl`, which removes rotating Notion file credentials while preserving malformed and ordinary URLs. The duplicate normalizer is removed from `managedBlocks.ts`; four managed-block and Notion block-operation suites pass (29 tests), Worker typecheck passes, and Fallow's duplicate-line count falls from 124 to 113.
+Signed Notion file URL comparisons now use `stableNotionFileUrl` across Worker block signatures, media-conflict checks, and browser conflict signatures. The shared helper strips rotating credentials while preserving malformed and ordinary URLs; six focused suites pass (48 tests), root and Worker typechecks pass, the extension production build passes, and Fallow's duplicate-line count falls from 124 to 80.
 
 Editor data-URL creation and Worker upload preparation now share the documented `bytesToBase64` helper, preserving bounded 8,192-byte conversion chunks. The base64 boundary tests and five media suites pass (31 tests); root typecheck and extension production build pass. Fallow's duplicate-line count falls from 113 to 101.
 
