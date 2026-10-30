@@ -244,3 +244,5 @@ The two durable queue-count helpers used only by `/sync/status` are private to t
 Removed the `replaceTempPage` pass-through and routed both callers directly to `replacePageAtomically`. The temporary-ID restart recovery and queued edit replay tests pass (2 tests), with root typecheck clean.
 
 `withWriteControl` now owns the shared IndexedDB read-write transaction used to initialize the writer epoch, pause/resume writes, and clear local data. `idbClear` still increments the epoch only while paused and rejects without deleting data otherwise; the three focused fence/restart cases pass, root typecheck passes, and Fallow reports no production duplicate blocks.
+
+Removed the `workspaceFromHydrationSource` adapter that parsed an old two-part hydration marker to recover a missing Notion workspace ID. Current account ownership comes from scoped workspace/page records and the active sync configuration; the ownership-preservation case now uses those current fields, and a regression test confirms the retired marker does not assign a workspace. Three focused lifecycle tests and root typecheck pass.
