@@ -590,6 +590,9 @@ export const useJottathingStore = defineStore('jottathing', () => {
 
     try {
       const project = await notionClient.renameProject(currentProjectId.value, name);
+      projects.value = projects.value.map((storedProject) =>
+        storedProject.id === project.id ? project : storedProject,
+      );
       applyProjectOrPageSyncState(project, currentPage.value);
     } catch (error) {
       errorMessage.value =
@@ -618,6 +621,11 @@ export const useJottathingStore = defineStore('jottathing', () => {
               currentProject.value?.stateContent,
             ),
       });
+      projects.value = projects.value
+        .map((storedProject) =>
+          storedProject.id === project.id ? project : storedProject,
+        )
+        .sort(sortProjectsByUpdatedDesc);
       applyProjectOrPageSyncState(project, currentPage.value);
     } catch (error) {
       errorMessage.value =
@@ -654,6 +662,11 @@ export const useJottathingStore = defineStore('jottathing', () => {
       blockId,
       payload,
     );
+    projects.value = projects.value
+      .map((storedProject) =>
+        storedProject.id === project.id ? project : storedProject,
+      )
+      .sort(sortProjectsByUpdatedDesc);
     applyProjectOrPageSyncState(project, currentPage.value);
   }
 
@@ -1608,9 +1621,9 @@ export const useJottathingStore = defineStore('jottathing', () => {
       syncState: projectStatus,
       syncMessage: projectMessage,
     };
-    projects.value = projects.value
-      .map((entry) => entry.id === project.id ? pageScopedProject : entry)
-      .sort(sortProjectsByUpdatedDesc);
+    projects.value = projects.value.map((entry) =>
+      entry.id === project.id ? pageScopedProject : entry,
+    );
     workspaceMenuProjects.value = workspaceMenuProjects.value.map((entry) =>
       entry.id === project.id ? pageScopedProject : entry,
     );
