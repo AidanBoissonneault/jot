@@ -1,6 +1,7 @@
 import type { DocumentContent } from '../types/capture.js';
 import type { SyncContentConflict } from '../types/sync.js';
 import { normalizeJottathingBlockIds } from '../extensions/jottathingBlockIds.js';
+import { isProjectStateMetadataNode } from '../extensions/sourceRegistry.js';
 
 const SYNC_CONFLICT_BLOCK_TYPE = 'jottathingSyncConflict';
 
@@ -12,7 +13,10 @@ export type SyncConflictRow = {
   local?: DocumentContent;
   notion?: DocumentContent;
   duplicate?: boolean;
+  internal?: boolean;
+  bothEdited?: boolean;
   changed: boolean;
+  choice?: SyncConflictChoice;
   needsChoice?: boolean;
   localDeleted?: boolean;
   notionDeleted?: boolean;
@@ -62,6 +66,7 @@ export function stripSyncConflictBlocks(content: DocumentContent): DocumentConte
   };
 }
 
+/** Builds ordered review rows and default choices for page and project conflicts. */
 export function createSyncConflictRows(conflict: SyncContentConflict): SyncConflictRow[] {
   const localBlocks = conflict.localContent.content ?? [];
   const notionBlocks = conflict.remoteContent?.content ?? [];
@@ -94,19 +99,32 @@ export function createSyncConflictRows(conflict: SyncContentConflict): SyncConfl
       ? remoteChangedIds.has(localId)
       : Boolean(base && notion && syncConflictBlockSignature(notion) !== syncConflictBlockSignature(base));
     const changed = Boolean(notion && syncConflictBlockSignature(local) !== syncConflictBlockSignature(notion));
+    const bothEdited = Boolean(base && localChanged && notionChanged && changed);
+    const notionDeleted = Boolean(hasRemoteContent && base && !notion);
+    const internal = conflict.targetType === 'project' && isProjectStateMetadataNode(local);
+    const choice = internal
+      ? notionChanged && !localChanged ? 'notion' : 'local'
+      : bothEdited || (base && localChanged && notionDeleted)
+        ? ''
+        : notionChanged && !localChanged
+          ? 'notion'
+          : 'local';
 
     return {
       id: localId ?? `local-${index}`,
       base,
       local,
       notion,
+      internal,
+      bothEdited,
+      choice,
       changed,
-      needsChoice: changed
+      needsChoice: !internal && (changed
         ? Boolean(base && localChanged && notionChanged)
-        : Boolean(hasRemoteContent && base && !notion && localChanged),
+        : Boolean(hasRemoteContent && base && !notion && localChanged)),
       localChanged,
       notionChanged,
-      notionDeleted: Boolean(hasRemoteContent && base && !notion),
+      notionDeleted,
     };
   });
 
@@ -117,25 +135,36 @@ export function createSyncConflictRows(conflict: SyncContentConflict): SyncConfl
     const notionChanged = notionId && remoteChangedIds
       ? remoteChangedIds.has(notionId)
       : Boolean(base && syncConflictBlockSignature(notion) !== syncConflictBlockSignature(base));
+    const internal = conflict.targetType === 'project' && isProjectStateMetadataNode(notion);
     const identicalLocal = result.find((row) =>
-      row.local && !row.notion && syncConflictBlockSignature(row.local) === syncConflictBlockSignature(notion) &&
-      !baseById.has(syncConflictBlockId(row.local) ?? '') && !baseById.has(notionId ?? ''),
+      row.local && !row.notion && row.internal === internal &&
+      syncConflictBlockSignature(row.local) === syncConflictBlockSignature(notion) &&
+      (internal || (
+        !baseById.has(syncConflictBlockId(row.local) ?? '') && !baseById.has(notionId ?? '')
+      )),
     );
     if (identicalLocal) {
       identicalLocal.notion = notion;
-      identicalLocal.duplicate = true;
-      identicalLocal.needsChoice = true;
+      identicalLocal.notionChanged = notionChanged;
+      if (!internal) {
+        identicalLocal.duplicate = true;
+        identicalLocal.choice = '';
+        identicalLocal.needsChoice = true;
+      }
       return;
     }
 
+    const localDeleted = Boolean(base && conflict.remoteContent);
     result.push({
       id: notionId ?? `notion-${index}`,
       notion,
       base,
+      internal,
       changed: Boolean(base && notionChanged),
-      needsChoice: Boolean(base && notionChanged),
-      localDeleted: Boolean(base),
+      needsChoice: !internal && Boolean(base && notionChanged),
+      localDeleted,
       notionChanged,
+      choice: internal || !localDeleted || !notionChanged ? 'notion' : '',
     });
   });
   return result;

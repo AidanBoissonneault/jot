@@ -5,28 +5,14 @@ import type { SyncContentConflict } from '@/src/types/sync';
 import { isProjectStateMetadataNode } from '@/src/extensions/sourceRegistry';
 import {
   buildSyncConflictMerge,
-  syncConflictBlockId as stableBlockId,
-  syncConflictBlockSignature as signature,
+  createSyncConflictRows,
   syncConflictBlockText,
   syncConflictDiffParts as diffParts,
+  type SyncConflictChoice,
+  type SyncConflictRow,
 } from '@/src/lib/syncConflictReview';
 
-type Choice = 'local' | 'notion' | 'both' | '';
-type ConflictRow = {
-  id: string;
-  base?: DocumentContent;
-  local?: DocumentContent;
-  notion?: DocumentContent;
-  duplicate?: boolean;
-  internal?: boolean;
-  bothEdited?: boolean;
-  localDeleted?: boolean;
-  notionDeleted?: boolean;
-  localChanged?: boolean;
-  notionChanged?: boolean;
-  changed: boolean;
-  choice: Choice;
-};
+type ConflictRow = SyncConflictRow & { choice: SyncConflictChoice };
 
 const props = defineProps<{ conflict: SyncContentConflict; busy?: boolean; error?: string }>();
 const emit = defineEmits<{
@@ -49,102 +35,10 @@ const hasUnresolvedHunks = computed(() => rows.value.some((row) =>
 ));
 
 function createRows(conflict: SyncContentConflict): ConflictRow[] {
-  const localBlocks = conflict.localContent.content ?? [];
-  const notionBlocks = conflict.remoteContent?.content ?? [];
-  const localChangedIds = conflict.localChangedBlockIds
-    ? new Set(conflict.localChangedBlockIds)
-    : undefined;
-  const remoteChangedIds = conflict.remoteChangedBlockIds
-    ? new Set(conflict.remoteChangedBlockIds)
-    : undefined;
-  const baseById = new Map((conflict.baseContent?.content ?? [])
-    .map((block) => [stableBlockId(block), block] as const)
-    .filter((entry): entry is readonly [string, DocumentContent] => Boolean(entry[0])));
-  const notionIndexById = new Map<string, number>();
-  notionBlocks.forEach((block, index) => {
-    const id = stableBlockId(block);
-    if (id && !notionIndexById.has(id)) notionIndexById.set(id, index);
-  });
-  const consumedNotion = new Set<number>();
-  const result: ConflictRow[] = localBlocks.map((local, index) => {
-    const localId = stableBlockId(local);
-    const notionIndex = localId ? notionIndexById.get(localId) : undefined;
-    const notion = notionIndex === undefined ? undefined : notionBlocks[notionIndex];
-    if (notionIndex !== undefined) consumedNotion.add(notionIndex);
-    const base = localId ? baseById.get(localId) : undefined;
-    const localChanged = localId && localChangedIds
-      ? localChangedIds.has(localId)
-      : Boolean(base && signature(local) !== signature(base));
-    const notionChanged = localId && remoteChangedIds
-      ? remoteChangedIds.has(localId)
-      : Boolean(base && notion && signature(notion) !== signature(base));
-    const changed = Boolean(notion && signature(local) !== signature(notion));
-    const bothEdited = Boolean(base && localChanged && notionChanged && changed);
-    const notionDeleted = Boolean(conflict.remoteContent && base && !notion);
-    const deletionConflict = Boolean(base && localChanged && notionDeleted);
-    const internal = conflict.targetType === 'project' && isProjectStateMetadataNode(local);
-    const choice: Choice = internal
-      ? notionChanged && !localChanged ? 'notion' : 'local'
-      : bothEdited || deletionConflict
-        ? ''
-        : notionChanged && !localChanged
-          ? 'notion'
-          : 'local';
-
-    return {
-      id: localId ?? `local-${index}`,
-      base,
-      local,
-      notion,
-      internal,
-      bothEdited,
-      notionDeleted,
-      localChanged,
-      notionChanged,
-      changed,
-      choice,
-    };
-  });
-
-  notionBlocks.forEach((notion, index) => {
-    if (consumedNotion.has(index)) return;
-    const notionId = stableBlockId(notion);
-    const base = notionId ? baseById.get(notionId) : undefined;
-    const notionChanged = notionId && remoteChangedIds
-      ? remoteChangedIds.has(notionId)
-      : Boolean(base && signature(notion) !== signature(base));
-    const localDeleted = Boolean(base && conflict.remoteContent);
-    const internal = conflict.targetType === 'project' && isProjectStateMetadataNode(notion);
-    const identicalLocal = result.find((row) =>
-      row.local && !row.notion && row.internal === internal &&
-      signature(row.local) === signature(notion) &&
-      (internal || (
-        !baseById.has(stableBlockId(row.local) ?? '') &&
-        !baseById.has(notionId ?? '')
-      )),
-    );
-    if (identicalLocal) {
-      identicalLocal.notion = notion;
-      identicalLocal.notionChanged = notionChanged;
-      if (!internal) {
-        identicalLocal.duplicate = true;
-        identicalLocal.choice = '';
-      }
-      return;
-    }
-
-    result.push({
-      id: notionId ?? `notion-${index}`,
-      notion,
-      base,
-      localDeleted,
-      notionChanged,
-      internal,
-      changed: Boolean(base && notionChanged),
-      choice: localDeleted && notionChanged ? '' : 'notion',
-    });
-  });
-  return result;
+  return createSyncConflictRows(conflict).map((row) => ({
+    ...row,
+    choice: row.choice ?? 'local',
+  }));
 }
 
 function displayBlock(block?: DocumentContent): string {
