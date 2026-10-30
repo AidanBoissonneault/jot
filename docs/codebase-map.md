@@ -250,3 +250,5 @@ Removed the `workspaceFromHydrationSource` adapter that parsed an old two-part h
 Session refresh also retains queue ownership when a current Notion-scoped page belongs to an account, even if that page has no remote Notion ID yet. The empty-queue account-switch test now starts without stored documents, so it covers a truly empty workspace. Six focused account-transition cases and root plus Worker typechecks pass.
 
 Page edits and captures now rely on the queue scheduler's 500 ms delivery window instead of starting a second forced flush after enqueue. Explicit manual flushes and project-move flushes remain immediate. Eight focused queue timing and force-flush cases and root plus Worker typechecks pass.
+
+If a local logout cleanup fails, the store still clears legacy access and refresh token copies from its live config and marks the UI session signed out, while preserving the account ID and pending queue for retry. The focused regression test and root plus Worker typechecks pass.

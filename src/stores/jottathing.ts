@@ -1357,6 +1357,14 @@ export const useJottathingStore = defineStore('jottathing', () => {
     try {
       logoutResult = await notionClient.logoutSyncSession({ onProgress });
     } catch (error) {
+      const safeConfig = { ...syncConfig.value } as SyncConfig & Record<string, unknown>;
+      Reflect.deleteProperty(safeConfig, 'accessToken');
+      Reflect.deleteProperty(safeConfig, 'refresh_token');
+      syncConfig.value = {
+        ...safeConfig,
+        authenticated: false,
+        connected: false,
+      };
       errorMessage.value = error instanceof Error
         ? error.message
         : 'Could not finish syncing. Your Notion workspace is still connected; try signing out again.';
