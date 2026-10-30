@@ -985,6 +985,59 @@ function syncQueueBelongsToActiveAccount(syncConfig: SyncConfig): boolean {
   );
 }
 
+type SyncQueueOwnershipDecision = Pick<
+  SyncConfig,
+  'syncQueueOwnerUserId' | 'syncQueueOwnerWorkspaceId'
+> & { queueSwitch?: { from: string; to: string } };
+
+/** Keeps retained local work with its owner and requests transfer only when no work remains. */
+function resolveSyncQueueOwnership(
+  syncConfig: SyncConfig,
+  hasExplicitlyLoggedOut: boolean,
+  session: SyncSessionResponse,
+  hasRetainedLocalData: boolean,
+): SyncQueueOwnershipDecision {
+  let userId = syncConfig.syncQueueOwnerUserId;
+  let workspaceId = syncConfig.syncQueueOwnerWorkspaceId;
+  if (!session.authenticated || !session.userId) {
+    return { syncQueueOwnerUserId: userId, syncQueueOwnerWorkspaceId: workspaceId };
+  }
+
+  const previousOwner = userId ?? syncConfig.userId;
+  const previousWorkspace = workspaceId ?? syncConfig.workspaceId;
+  const nextScope = queueScope(session.userId, session.workspaceId);
+  const previousScope = previousOwner ? queueScope(previousOwner, previousWorkspace) : undefined;
+
+  if (!hasRetainedLocalData) {
+    return {
+      syncQueueOwnerUserId: session.userId,
+      syncQueueOwnerWorkspaceId: session.workspaceId,
+      ...(previousScope && previousScope !== nextScope
+        ? { queueSwitch: { from: previousScope, to: nextScope } }
+        : {}),
+    };
+  }
+
+  if (userId === undefined) {
+    userId = syncConfig.userId ?? (
+      hasExplicitlyLoggedOut || syncConfig.userEmail || syncConfig.workspaceId
+        ? null
+        : session.userId
+    );
+  }
+  if (userId === null && syncConfig.userId === session.userId) {
+    userId = session.userId;
+    workspaceId = session.workspaceId;
+  }
+  if (userId === session.userId && !workspaceId) workspaceId = session.workspaceId;
+
+  return { syncQueueOwnerUserId: userId, syncQueueOwnerWorkspaceId: workspaceId };
+}
+
+function queueScope(userId: string, workspaceId: string | undefined): string {
+  return `${userId}::${workspaceId ?? 'connected-workspace'}`;
+}
+
 async function writeStorage(
   storage: Partial<JottathingStorage>,
   options: { expectedVersion?: number; removeWorkspaceIds?: string[] } = {},
@@ -4922,49 +4975,23 @@ export const notionClient = {
     const hasRetainedLocalData = pendingLocalWork > 0 ||
       Boolean(workspace.notionHydrationSource) ||
       hasRemoteBackedData(workspace.projects, workspace.pages);
-    let syncQueueOwnerUserId = syncConfig.syncQueueOwnerUserId;
-    let syncQueueOwnerWorkspaceId = syncConfig.syncQueueOwnerWorkspaceId;
-    if (session.authenticated && session.userId) {
-      const previousQueueOwner = syncConfig.syncQueueOwnerUserId ?? syncConfig.userId;
-      const previousWorkspaceOwner = syncConfig.syncQueueOwnerWorkspaceId ??
-        syncConfig.workspaceId;
-      const previousQueueScope = previousQueueOwner
-        ? `${previousQueueOwner}::${previousWorkspaceOwner ?? 'connected-workspace'}`
-        : '';
-      const nextQueueScope = `${session.userId}::${session.workspaceId ?? 'connected-workspace'}`;
-      if (
-        previousQueueOwner &&
-        previousQueueScope !== nextQueueScope &&
-        !hasRetainedLocalData
-      ) {
-        await Promise.allSettled(
-          [queueDeliveryPromise, forcedQueueDeliveryPromise].filter(
-            (promise): promise is Promise<void> => Boolean(promise),
-          ),
-        );
-        await switchPendingSyncQueueAccount(previousQueueScope, nextQueueScope);
-        syncQueueOwnerUserId = session.userId;
-        syncQueueOwnerWorkspaceId = session.workspaceId;
-      } else if (!hasRetainedLocalData) {
-        syncQueueOwnerUserId = session.userId;
-        syncQueueOwnerWorkspaceId = session.workspaceId;
-      } else if (syncQueueOwnerUserId === undefined) {
-        if (syncConfig.userId) {
-          syncQueueOwnerUserId = syncConfig.userId;
-        } else if (hasExplicitlyLoggedOut || syncConfig.userEmail || syncConfig.workspaceId) {
-          // Keep unowned work local when prior account details exist.
-          syncQueueOwnerUserId = null;
-        } else {
-          syncQueueOwnerUserId = session.userId;
-        }
-      }
-      if (syncQueueOwnerUserId === null && syncConfig.userId === session.userId) {
-        syncQueueOwnerUserId = session.userId;
-        syncQueueOwnerWorkspaceId = session.workspaceId;
-      }
-      if (syncQueueOwnerUserId === session.userId && !syncQueueOwnerWorkspaceId) {
-        syncQueueOwnerWorkspaceId = session.workspaceId;
-      }
+    const {
+      queueSwitch,
+      syncQueueOwnerUserId,
+      syncQueueOwnerWorkspaceId,
+    } = resolveSyncQueueOwnership(
+      syncConfig,
+      hasExplicitlyLoggedOut,
+      session,
+      hasRetainedLocalData,
+    );
+    if (queueSwitch) {
+      await Promise.allSettled(
+        [queueDeliveryPromise, forcedQueueDeliveryPromise].filter(
+          (promise): promise is Promise<void> => Boolean(promise),
+        ),
+      );
+      await switchPendingSyncQueueAccount(queueSwitch.from, queueSwitch.to);
     }
 
     const accountConfig = session.authenticated && session.userId

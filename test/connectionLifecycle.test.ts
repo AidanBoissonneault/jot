@@ -484,6 +484,26 @@ describe('Jottathing connection data lifecycle', () => {
     expect(await notionClient.pendingSyncEventCount()).toBeGreaterThan(0);
   });
 
+  it('moves an empty queue to a newly signed-in account', async () => {
+    seedLocalWorkspace();
+    stubJsonResponse({
+      authenticated: true,
+      userId: 'notion:other-account',
+      userName: 'Other user',
+      userEmail: 'other@example.test',
+      connected: true,
+      workspaceId: 'other-workspace',
+    });
+
+    const config = await notionClient.refreshSyncSession(true);
+
+    expect(config).toMatchObject({
+      userId: 'notion:other-account',
+      syncQueueOwnerUserId: 'notion:other-account',
+      syncQueueOwnerWorkspaceId: 'other-workspace',
+    });
+  });
+
   it('keeps previously synced local documents with their original account', async () => {
     seedLocalWorkspace();
     await idbSet('notionHydrationSource', 'https://sync.example.test::workspace-test');
