@@ -8,30 +8,48 @@
     <link rel="icon" type="image/png" href="/jottathing-icon.png" />
     <title>Patch notes | Jottathing</title>
   </head>
-  <body class="patch-notes-page">
-    <div class="patch-notes-shell">
-      <header class="patch-notes-header">
-        <a class="patch-notes-brand" href="/" aria-label="Jottathing home">
-          <img src="/jottathing-icon.png" alt="" width="28" height="28" />
-          <span>Jottathing</span>
-        </a>
-        <nav aria-label="Jottathing pages">
-          <a href="/#capture">Product tour</a>
-          <a href="/patch-notes/" aria-current="page">Patch notes</a>
-        </nav>
-      </header>
+  <body class="marketing-demo patch-notes-page">
+    <div class="page-split">
+      <aside id="reading-pane" class="reading-pane patch-notes-reading-pane" aria-labelledby="page-title">
+        <div class="patch-notes-shell">
+          <header class="patch-notes-header">
+            <a class="patch-notes-brand" href="/" aria-label="Jottathing home">
+              <img src="/jottathing-icon.png" alt="" width="28" height="28" />
+              <span>Jottathing</span>
+            </a>
+            <nav aria-label="Jottathing pages">
+              <a href="/#capture">Product tour</a>
+              <a href="/patch-notes/" aria-current="page">Patch notes</a>
+            </nav>
+          </header>
 
-      <main class="patch-notes-content">
-        <p class="patch-notes-eyebrow">JOTTATHING / RELEASES</p>
-        <h1>Patch notes</h1>
-        <p class="patch-notes-intro">Release history and notes on what Jottathing can do.</p>
-        <section id="patch-notes-list" class="patch-note-list" aria-label="Jottathing releases"></section>
-      </main>
+          <main class="patch-notes-content">
+            <h1 id="page-title">Patch notes</h1>
+            <section id="patch-notes-list" class="patch-note-list" aria-label="Jottathing releases"></section>
+          </main>
 
-      <footer class="patch-notes-footer">
-        <span>Jottathing</span>
-        <a href="/">Back to the product tour</a>
-      </footer>
+          <footer class="patch-notes-footer">
+            <span>Jottathing</span>
+            <a href="/">Back to the product tour</a>
+          </footer>
+        </div>
+      </aside>
+
+      <div
+        id="split-divider"
+        class="split-divider"
+        role="separator"
+        aria-label="Resize the Jottathing editor"
+        aria-orientation="vertical"
+        aria-controls="reading-pane jottathing-demo-root"
+        aria-valuemin="48"
+        aria-valuemax="50"
+        aria-valuenow="48"
+        aria-valuetext="48% editor pane"
+        tabindex="0"
+      ><span aria-hidden="true"></span></div>
+
+      <section id="jottathing-demo-root" aria-label="Live Jottathing editor"></section>
     </div>
     <script type="module" src="/src/patchNotesPage.ts"></script>
   </body>

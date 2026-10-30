@@ -7,10 +7,8 @@ import type {
 } from '@/src/types/messages';
 import { detectCodeLanguage } from '@/src/lib/codeLanguages';
 import { captureSourceBlockFromAncestors } from '@/src/lib/sourceBlockType';
+import { installInlineCaptureButton } from '@/src/lib/inlineCaptureButton';
 
-const BUTTON_ID = 'jottathing-inline-save';
-const ACCENT_COLOR = '#173494';
-const ACCENT_HOVER_COLOR = '#0f2673';
 const JOTTATHING_DRAG_MIME = 'application/x-jottathing-capture';
 const JOTTATHING_HEADING_DRAG_MIME = 'application/x-jottathing-heading-capture';
 const JOTTATHING_SOURCE_DATA_ATTR = 'data-jottathing-source';
@@ -21,39 +19,6 @@ export default defineContentScript({
   matches: ['http://*/*', 'https://*/*'],
   allFrames: true,
   main() {
-    let selectedPayload: CaptureSelectionMessage['payload'] | null = null;
-    let removeTimer: number | undefined;
-
-    const button = document.createElement('button');
-    button.id = BUTTON_ID;
-    button.type = 'button';
-    button.textContent = 'Save';
-    button.setAttribute('aria-label', 'Save selection to Jottathing');
-    Object.assign(button.style, {
-      position: 'absolute',
-      zIndex: '2147483647',
-      display: 'none',
-      minHeight: '30px',
-      padding: '0 12px',
-      border: `1px solid ${ACCENT_HOVER_COLOR}`,
-      borderRadius: '8px',
-      background: ACCENT_COLOR,
-      boxShadow: '0 8px 24px rgb(0 0 0 / 18%)',
-      color: '#ffffff',
-      cursor: 'pointer',
-      transition: 'background-color 120ms ease, box-shadow 120ms ease',
-      font: '600 13px/1 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-    });
-
-    document.documentElement.append(button);
-
-    button.addEventListener('mouseenter', () => {
-      button.style.background = ACCENT_HOVER_COLOR;
-    });
-    button.addEventListener('mouseleave', () => {
-      button.style.background = ACCENT_COLOR;
-    });
-
     browser.runtime.onMessage.addListener((message: JottathingRuntimeMessage) => {
       if (message?.type !== 'jottathing.restoreHighlight') {
         return false;
@@ -61,11 +26,6 @@ export default defineContentScript({
 
       return restoreHighlight(message);
     });
-
-    function hideButton() {
-      selectedPayload = null;
-      button.style.display = 'none';
-    }
 
     function buildSourceLink(text: string, targetElement?: Element | null) {
       const url = new URL(window.location.href);
@@ -453,69 +413,17 @@ export default defineContentScript({
       return `<blockquote ${JOTTATHING_CAPTURE_DATA_ATTR}="${htmlEscape(JSON.stringify(payload))}" ${JOTTATHING_SOURCE_DATA_ATTR}="${htmlEscape(sourcePayload)}">${text}</blockquote>`;
     }
 
-    function showButton(selection: Selection, text: string) {
-      const range = selection.rangeCount ? selection.getRangeAt(0) : null;
-
-      if (!range) {
-        hideButton();
-        return;
-      }
-
-      const rect = range.getBoundingClientRect();
-
-      if (!rect.width && !rect.height) {
-        hideButton();
-        return;
-      }
-
-      selectedPayload = buildCapturePayload(selection, text);
-
-      button.style.left = `${Math.max(8, rect.left + window.scrollX)}px`;
-      button.style.top = `${Math.max(8, rect.bottom + window.scrollY + 8)}px`;
-      button.style.display = 'block';
+    if (!document.documentElement.hasAttribute('data-jottathing-marketing-demo')) {
+      installInlineCaptureButton({
+        document,
+        window,
+        buildPayload: buildCapturePayload,
+        onSave: (payload) => browser.runtime.sendMessage({
+          type: 'jottathing.captureSelection',
+          payload,
+        } satisfies CaptureSelectionMessage),
+      });
     }
-
-    document.addEventListener('selectionchange', () => {
-      window.clearTimeout(removeTimer);
-
-      removeTimer = window.setTimeout(() => {
-        const selection = window.getSelection();
-        const selectedText = selection?.toString().replace(/\r\n/g, '\n').trimEnd() ?? '';
-
-        if (!selection || !selectedText.trim()) {
-          hideButton();
-          return;
-        }
-
-        showButton(selection, selectedText);
-      }, 80);
-    });
-
-    button.addEventListener('mousedown', (event) => {
-      event.preventDefault();
-    });
-
-    button.addEventListener('click', async (event) => {
-      // Page scripts can see this injected DOM button and call click() on it.
-      // Only a real user gesture may forward selected page text to Jottathing.
-      if (!event.isTrusted || !selectedPayload) {
-        return;
-      }
-
-      button.disabled = true;
-      button.textContent = 'Saved';
-
-      await browser.runtime.sendMessage({
-        type: 'jottathing.captureSelection',
-        payload: selectedPayload,
-      } satisfies CaptureSelectionMessage);
-
-      window.setTimeout(() => {
-        button.disabled = false;
-        button.textContent = 'Save';
-        hideButton();
-      }, 500);
-    });
 
     document.addEventListener(
       'dragstart',

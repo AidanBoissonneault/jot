@@ -17,6 +17,8 @@ export type CategoryColor =
 /** State and commands the top bar needs from the sidepanel coordinator. */
 export interface TopBarContext {
   store: JottathingStore;
+  showStoreCta: boolean;
+  storeListingUrl?: string;
   isProjectNameEditing: Ref<boolean>;
   projectNameInputRef: Ref<HTMLInputElement | null>;
   projectNameDraft: Ref<string>;

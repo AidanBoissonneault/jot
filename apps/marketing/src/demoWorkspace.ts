@@ -1,8 +1,8 @@
 /** Names and seed content for the isolated local workspace used by the marketing page. */
 import { idbGetMany, idbSet, idbSetMany } from '../../../src/services/idbStore';
-import type { DocumentContent, Project, ProjectPage } from '../../../src/types/capture';
+import type { DocumentContent, Project, ProjectPage, Workspace } from '../../../src/types/capture';
 
-const preparedKey = '__jottathing_marketing_demo_names_v1__';
+const preparedKey = '__jottathing_marketing_demo_workspace_v2__';
 const workspaceKeys = [
   'projects',
   'pages',
@@ -23,6 +23,8 @@ function createDemoProject(now: string): Project {
     category: 'General',
     createdAt: now,
     updatedAt: now,
+    workspaceId: 'workspace-local-device',
+    syncMode: 'local',
     stateContent: emptyDocument(),
     tags: ['jottathing'],
     syncState: 'saved',
@@ -39,12 +41,24 @@ function createNotesPage(projectId: string, now: string): ProjectPage {
     content: emptyDocument(),
     createdAt: now,
     updatedAt: now,
+    workspaceId: 'workspace-local-device',
+    syncMode: 'local',
     localRevision: crypto.randomUUID(),
     syncState: 'saved',
   };
 }
 
-/** Prepares the same local workspace the side panel normally opens, with friendlier demo labels. */
+function createDemoWorkspaceRecord(now: string): Workspace {
+  return {
+    id: 'workspace-local-device',
+    name: 'Local workspace',
+    kind: 'local',
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+/** Seeds an isolated local workspace using the same records the extension reads. */
 export async function prepareDemoWorkspace(): Promise<void> {
   const stored = await idbGetMany(workspaceKeys);
   if (stored[preparedKey] === true) return;
@@ -52,52 +66,53 @@ export async function prepareDemoWorkspace(): Promise<void> {
   const now = new Date().toISOString();
   let projects = Array.isArray(stored.projects) ? (stored.projects as Project[]) : [];
   let pages = Array.isArray(stored.pages) ? (stored.pages as ProjectPage[]) : [];
-  const activeProjects = projects
-    .filter((project) => project.status !== 'archived')
-    .sort((first, second) => Date.parse(second.updatedAt) - Date.parse(first.updatedAt));
-
-  if (activeProjects.length === 0) {
-    const project = createDemoProject(now);
-    projects = [...projects, project];
-    activeProjects.push(project);
-  }
-
-  const storedProjectId = typeof stored.currentProjectId === 'string'
-    ? stored.currentProjectId
-    : '';
-  const project = activeProjects.find((item) => item.id === storedProjectId) ?? activeProjects[0]!;
-
-  if (project.name === 'Jottathing') {
-    const renamedProject = { ...project, name: 'Demo', updatedAt: now };
-    projects = projects.map((item) => item.id === project.id ? renamedProject : item);
-  }
+  const workspaces = Array.isArray(stored.workspaces) ? (stored.workspaces as Workspace[]) : [];
+  const workspace = workspaces.find((item) => item.id === 'workspace-local-device') ?? createDemoWorkspaceRecord(now);
+  const existingProject = projects.find((item) => item.id === 'project-jottathing');
+  const project: Project = {
+    ...(existingProject ?? createDemoProject(now)),
+    name: 'Demo',
+    workspaceId: workspace.id,
+    syncMode: 'local',
+    updatedAt: existingProject?.updatedAt ?? now,
+  };
+  projects = projects.some((item) => item.id === project.id)
+    ? projects.map((item) => item.id === project.id ? project : item)
+    : [project, ...projects];
 
   const activePageIds = stored.activePageIdsByProject && typeof stored.activePageIdsByProject === 'object'
     ? { ...stored.activePageIdsByProject as Record<string, string> }
     : {};
-  const page = pages.find((item) =>
-    item.id === activePageIds[project.id] &&
-    item.projectId === project.id &&
-    item.status !== 'archived',
+  const existingPage = pages.find((item) =>
+    item.id === activePageIds[project.id] && item.projectId === project.id && item.status !== 'archived',
   ) ?? pages.find((item) => item.projectId === project.id && item.status !== 'archived');
-
-  if (page) {
-    if (page.title === 'Untitled Page') {
-      pages = pages.map((item) => item.id === page.id
-        ? { ...item, title: 'Your Notes', updatedAt: now }
-        : item);
-    }
-    activePageIds[project.id] = page.id;
-  } else {
-    const notesPage = createNotesPage(project.id, now);
-    pages = [...pages, notesPage];
-    activePageIds[project.id] = notesPage.id;
-  }
+  const page: ProjectPage = {
+    ...(existingPage ?? createNotesPage(project.id, now)),
+    title: existingPage?.title && existingPage.title !== 'Untitled Page'
+      ? existingPage.title
+      : 'Your Notes',
+    workspaceId: workspace.id,
+    syncMode: 'local',
+    syncAccountId: undefined,
+    syncWorkspaceId: undefined,
+  };
+  pages = pages.some((item) => item.id === page.id)
+    ? pages.map((item) => item.id === page.id ? page : item)
+    : [...pages, page];
+  activePageIds[project.id] = page.id;
 
   await idbSetMany({
     projects,
     pages,
+    workspaces: workspaces.some((item) => item.id === workspace.id)
+      ? workspaces
+      : [...workspaces, workspace],
     currentProjectId: project.id,
+    currentWorkspaceId: workspace.id,
+    currentProjectIdByWorkspace: {
+      ...((stored.currentProjectIdByWorkspace as Record<string, string> | undefined) ?? {}),
+      [workspace.id]: project.id,
+    },
     activePageIdsByProject: activePageIds,
   });
   await idbSet(preparedKey, true);

@@ -6,6 +6,8 @@ import type { TopBarContext } from './topBarContext';
 const props = defineProps<{ context: TopBarContext }>();
 const {
   store,
+  showStoreCta,
+  storeListingUrl,
   canUseEditor,
   canOpenNotionConnectModal,
   isSigningIn,
@@ -137,8 +139,29 @@ const progressDetail = computed(() => {
         </div>
       </div>
     </Transition>
+    <a
+      v-if="showStoreCta && storeListingUrl"
+      class="notion-login-button"
+      :href="storeListingUrl"
+      target="_blank"
+      rel="noopener noreferrer"
+      title="Download Jottathing"
+      aria-label="Download Jottathing"
+    >
+      <span>Add to Notion</span>
+    </a>
     <button
-      v-if="!store.syncConfig.connected"
+      v-else-if="showStoreCta"
+      type="button"
+      class="notion-login-button"
+      disabled
+      title="The extension download is coming soon."
+      aria-label="Coming soon"
+    >
+      <span>Coming soon</span>
+    </button>
+    <button
+      v-else-if="!store.syncConfig.connected"
       type="button"
       class="notion-login-button"
       :disabled="!canOpenNotionConnectModal"

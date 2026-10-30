@@ -118,7 +118,7 @@ body.marketing-demo {
 
 .intro {
   max-width: 490px;
-  margin: 15px 0 32px;
+  margin: 15px 0 16px;
   color: #53575a;
   font-size: 13px;
   line-height: 1.7;
@@ -182,7 +182,7 @@ body.marketing-demo {
   font-weight: 620;
 }
 
-.sample-page > p:not(.sample-source, .selectable-passage, .capture-message) {
+.sample-page > p:not(.sample-source, .selectable-passage) {
   margin: 0 0 11px;
   color: #55595a;
   font-size: 11px;
@@ -207,39 +207,11 @@ body.marketing-demo {
   gap: 10px;
 }
 
-#capture-selection {
-  min-height: 31px;
-  padding: 0 10px;
-  border: 1px solid #173494;
-  border-radius: 3px;
-  background: #173494;
-  color: #fff;
-  font-size: 10px;
-  font-weight: 600;
-}
-
-#capture-selection:hover {
-  border-color: #0f2673;
-  background: #0f2673;
-}
-
-#capture-selection:focus-visible {
-  outline: 2px solid #173494;
-  outline-offset: 2px;
-}
-
 .capture-actions > p {
   margin: 0;
   color: #767877;
   font-size: 9px;
   line-height: 1.45;
-}
-
-.capture-message {
-  min-height: 14px;
-  margin: 6px 0 0;
-  color: #555d63;
-  font-size: 10px;
 }
 
 .feature-section {
@@ -389,32 +361,13 @@ body.marketing-demo {
 
 #jottathing-demo-root {
   width: 100%;
-  height: 100dvh;
+  height: 100vh;
   min-height: 100vh;
-  overflow: auto;
-  background: var(--jottathing-bg, #fafafa);
+  overflow-y: auto;
+  background: var(--jottathing-bg);
 }
 
-#jottathing-demo-root .shell {
-  min-height: 100dvh;
-}
-
-#jottathing-demo-root .topbar-status {
-  grid-template-columns: minmax(0, 1fr);
-}
-
-#jottathing-demo-root .topbar-status > .sync-badge,
-#jottathing-demo-root .topbar-meta > small {
-  display: none;
-}
-
-#jottathing-demo-root .topbar-actions button[aria-label="Resync with Notion"],
-#jottathing-demo-root .topbar-actions button[aria-label="Syncing with Notion"],
-#jottathing-demo-root .topbar-actions button[aria-label="Settings"] {
-  display: none;
-}
-
-@media (max-width: 830px) {
+@media (max-width: 673px) {
   html,
   body.marketing-demo {
     height: auto;
@@ -447,9 +400,5 @@ body.marketing-demo {
     height: 100dvh;
     min-height: 100dvh;
     border-top: 1px solid #c9c6bd;
-  }
-
-  #jottathing-demo-root .shell {
-    min-height: 100dvh;
   }
 }

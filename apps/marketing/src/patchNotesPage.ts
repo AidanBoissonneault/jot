@@ -1,3 +1,4 @@
+import './main';
 import './patch-notes.css';
 import { renderPatchNotes } from './patchNotes';
 

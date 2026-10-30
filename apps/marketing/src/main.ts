@@ -1,14 +1,32 @@
 import './demoBrowserShim';
 import { prepareDemoWorkspace } from './demoWorkspace';
 import { mountSidepanel } from '../../../entrypoints/sidepanel/bootstrap';
+import { installInlineCaptureButton } from '../../../src/lib/inlineCaptureButton';
 import './style.css';
 
 await prepareDemoWorkspace();
-mountSidepanel('#jottathing-demo-root');
+mountSidepanel('#jottathing-demo-root', { showStoreCta: true });
+installInlineCaptureButton({
+  document,
+  window,
+  buildPayload: (selection, text) => {
+    const sourceUrl = window.location.href;
+    return {
+      text,
+      sourceUrl,
+      pageTitle: document.title,
+      highlightMeta: { text, sourceLink: sourceUrl },
+    };
+  },
+  onSave: (payload) => window.browser.runtime.sendMessage({
+    type: 'jottathing.captureSelection',
+    payload,
+  }),
+});
 
 const pageSplit = document.querySelector<HTMLElement>('.page-split');
 const splitter = document.querySelector<HTMLElement>('#split-divider');
-const desktopLayout = window.matchMedia('(min-width: 831px)');
+const desktopLayout = window.matchMedia('(min-width: 674px)');
 const dividerSize = 14;
 const minReadingWidth = 340;
 const minEditorWidth = 320;
@@ -85,9 +103,6 @@ splitter?.addEventListener('keydown', (event) => {
 window.addEventListener('resize', setEditorWidthFromRatio);
 setEditorWidthFromRatio();
 
-const captureButton = document.querySelector<HTMLButtonElement>('#capture-selection');
-const captureMessage = document.querySelector<HTMLElement>('#capture-message');
-const fallbackPassage = document.querySelector<HTMLElement>('[data-passage]');
 const mediaPhotos = document.querySelectorAll<HTMLImageElement>('[data-media-photo]');
 
 mediaPhotos.forEach((photo) => {
@@ -104,31 +119,4 @@ mediaPhotos.forEach((photo) => {
     transfer.setData('text/plain', source);
     transfer.effectAllowed = 'copy';
   });
-});
-
-captureButton?.addEventListener('click', async () => {
-  const selectedText = window.getSelection()?.toString().replace(/\s+/g, ' ').trim();
-  const text = selectedText || fallbackPassage?.textContent?.trim();
-
-  if (!text) return;
-
-  const result = await window.browser.runtime.sendMessage({
-    type: 'jottathing.insertCaptureRequest',
-    payload: {
-      text,
-      sourceUrl: window.location.href,
-      pageTitle: document.title,
-      highlightMeta: {
-        text,
-        sourceLink: window.location.href,
-      },
-    },
-  });
-
-  if (captureMessage) {
-    captureMessage.textContent = result
-      ? 'Added to Your Notes.'
-      : 'The live editor is still loading. Try again in a moment.';
-  }
-  window.getSelection()?.removeAllRanges();
 });

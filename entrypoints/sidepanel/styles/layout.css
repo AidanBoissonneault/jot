@@ -483,6 +483,7 @@
   font-size: 0.74rem;
   font-weight: 720;
   white-space: nowrap;
+  text-decoration: none;
 }
 
 .topbar-actions .notion-login-button {

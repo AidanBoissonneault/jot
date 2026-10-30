@@ -444,6 +444,11 @@
   pointer-events: auto;
 }
 
+.workspace-tree-page-row .workspace-tree-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
 .workspace-tree-conflicts-button {
   display: inline-flex;
   flex: 0 0 auto;

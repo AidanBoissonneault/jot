@@ -119,9 +119,13 @@ const browserApi: Window['browser'] = {
       },
     },
     async sendMessage(message) {
+      const capture = message as { type?: string; payload?: unknown } | null;
+      const forwardedMessage = capture?.type === 'jottathing.captureSelection'
+        ? { type: 'jottathing.insertCaptureRequest', payload: capture.payload }
+        : message;
       const results = await Promise.all(
         [...runtimeListeners].map((listener) =>
-          Promise.resolve(listener(message, { tab: { id: 1, url: location.href } })),
+          Promise.resolve(listener(forwardedMessage, { tab: { id: 1, url: location.href } })),
         ),
       );
       return results.find((result) => result !== false && result !== undefined) ?? false;

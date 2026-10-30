@@ -38,6 +38,11 @@ import { useEditorMedia } from './composables/useEditorMedia';
 import { useEditorPersistence } from './composables/useEditorPersistence';
 import { useEditorCaptureInsertion } from './composables/useEditorCaptureInsertion';
 import { useEditorDropHandling } from './composables/useEditorDropHandling';
+
+const props = defineProps<{
+  showStoreCta?: boolean;
+  storeListingUrl?: string;
+}>();
 import { useSettingsActions } from './composables/useSettingsActions';
 import { useProjectSettings } from './composables/useProjectSettings';
 import { useTopBarStatus } from './composables/useTopBarStatus';
@@ -693,6 +698,8 @@ function handlePanelExit() {
 
 const topBarContext: TopBarContext = {
   store,
+  showStoreCta: props.showStoreCta ?? false,
+  storeListingUrl: props.storeListingUrl,
   isProjectNameEditing,
   projectNameInputRef,
   projectNameDraft,

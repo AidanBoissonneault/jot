@@ -100,8 +100,15 @@ library.add(
   faXmark,
 );
 
-export function mountSidepanel(target: string | Element): VueApp {
-  const app = createApp(App)
+export interface SidepanelOptions {
+  /** Replaces the Notion connection action with a store CTA in marketing previews. */
+  showStoreCta?: boolean;
+  /** Store listing URL; when absent, the marketing CTA is shown as Coming soon. */
+  storeListingUrl?: string;
+}
+
+export function mountSidepanel(target: string | Element, options: SidepanelOptions = {}): VueApp {
+  const app = createApp(App, { ...options })
     .component('font-awesome-icon', FontAwesomeIcon)
     .use(createPinia());
   app.mount(target);
