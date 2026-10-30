@@ -6,6 +6,7 @@
 
 import type { DocumentContent, NotionParentPage, Project, ProjectPage } from '../../../src/types/capture.js';
 import type { JottathingDatabase, JsonObject, NotionObject, NotionRichText } from './types.js';
+import { nestedString } from './workerUtils.js';
 
 export const JOTTATHING_DATABASE_TITLE = 'Jottathing';
 export const JOTTATHING_PROJECTS_DATA_SOURCE_TITLE = 'Projects';
@@ -447,16 +448,6 @@ function numberProperty(value: unknown, key: string): number | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
   const property: unknown = (value as JsonObject)[key];
   return typeof property === 'number' && Number.isFinite(property) ? property : undefined;
-}
-
-/** Reads a nested string from an unknown object. @param value - Unknown root value. @param path - Property path. @returns String value when present. */
-function nestedString(value: unknown, ...path: string[]): string | undefined {
-  let current: unknown = value;
-  for (const key of path) {
-    if (!current || typeof current !== 'object' || Array.isArray(current)) return undefined;
-    current = (current as JsonObject)[key];
-  }
-  return typeof current === 'string' ? current : undefined;
 }
 
 /** Reads a rich-text array from an object property. @param value - Source object. @param key - Property name. @returns Rich-text values. */

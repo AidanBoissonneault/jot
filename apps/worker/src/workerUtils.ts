@@ -457,7 +457,7 @@ export function stringValue(value: unknown): string | undefined {
 }
 
 /** Reads a nested string from an unknown object. @param value - Unknown root value. @param path - Property path. @returns String value when present. */
-function nestedString(value: unknown, ...path: string[]): string | undefined {
+export function nestedString(value: unknown, ...path: string[]): string | undefined {
   let current: unknown = value;
   for (const key of path) {
     if (!current || typeof current !== 'object' || Array.isArray(current)) return undefined;
