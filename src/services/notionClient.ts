@@ -5082,6 +5082,7 @@ export const notionClient = {
     const workspace = await readStorage();
     const hasRetainedLocalData = pendingLocalWork > 0 ||
       Boolean(workspace.notionHydrationSource) ||
+      workspace.pages.some((page) => page.syncMode === 'notion' && Boolean(page.syncAccountId)) ||
       hasRemoteBackedData(workspace.projects, workspace.pages);
     const {
       queueSwitch,

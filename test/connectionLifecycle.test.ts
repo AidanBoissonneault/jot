@@ -511,7 +511,13 @@ describe('Jottathing connection data lifecycle', () => {
   });
 
   it('moves an empty queue to a newly signed-in account', async () => {
-    seedLocalWorkspace();
+    resetBrowserStorage({
+      notionHydrationSource: '',
+      pages: [],
+      projects: [],
+      syncConfig: connectedConfig,
+      workspaces: [],
+    });
     stubJsonResponse({
       authenticated: true,
       userId: 'notion:other-account',
@@ -549,7 +555,6 @@ describe('Jottathing connection data lifecycle', () => {
       syncMode: 'notion',
       syncAccountId: 'notion:original-account',
       syncWorkspaceId: 'workspace-test',
-      notionPageId: 'notion-page-original-account',
     }]);
     stubJsonResponse({
       authenticated: true,
