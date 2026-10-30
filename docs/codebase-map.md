@@ -260,3 +260,5 @@ The connection lifecycle test teardown now resumes and adopts the current Indexe
 Startup now preserves the validation error and local page when the sync server cannot validate the cache; it avoids replacing that useful error with a second failed reload request. The startup regression case passes with an explicit local-workspace fixture, and root plus Worker typechecks pass.
 
 The optimistic-store fixtures now use explicit Notion scope for offline queued work and local-media upload, and verify the account plus workspace in the first-hydration marker. Queue-delivery assertions include the delivery-pending retry request. All four focused cases and root plus Worker typechecks pass.
+
+Workspace reload tests now keep remote records bound to their account/workspace, check that deleted Notion pages leave local starter data intact, and activate the connected workspace through the same store action used by sign-in. Metadata assertions select the target project by ID. The full optimistic-store file (83 tests), connection lifecycle file (27 tests), and both typechecks pass.

@@ -990,20 +990,16 @@ describe('project metadata', () => {
   });
 
   test('resync reloads server-only pages after queued local work finishes', async () => {
-    const linkedPage: ProjectPage = {
+    const linkedPageScoped: ProjectPage = {
       ...basePage,
       notionPageId: 'notion-page-local',
     };
     resetBrowserStorage({
-      activePageIdsByProject: { 'project-jottathing': linkedPage.id },
-      currentProjectId: 'project-jottathing',
+      ...notionWorkspaceStorage('workspace-test', [baseProject], [linkedPageScoped]),
       hasMigratedCapturesToPages: true,
-      pages: [linkedPage],
-      projects: [baseProject],
-      syncConfig: connectedConfig,
     });
     await notionClient.updateProjectPage({
-      ...linkedPage,
+      ...linkedPageScoped,
       content: docWithText('queued local edit'),
     });
     expect(await notionClient.pendingSyncEventCount()).toBeGreaterThan(0);
@@ -1015,7 +1011,8 @@ describe('project metadata', () => {
       notionPageId: 'notion-page-server-only',
     };
     const fetchMock = vi.fn(async (url: string) => {
-      if (String(url).endsWith('/sync/retry')) return jsonResponse({ requeuedCount: 0 });
+      if (String(url).includes('/sync/retry')) return jsonResponse({ requeuedCount: 0 });
+      if (String(url).endsWith('/sync/project')) return jsonResponse({ status: 'saved' });
       if (String(url).endsWith('/sync/validate')) {
         return jsonResponse({
           aheadPageIds: [],
@@ -1025,18 +1022,16 @@ describe('project metadata', () => {
         });
       }
       if (String(url).endsWith('/sync/page/resync')) {
-        return jsonResponse({ status: 'saved', page: linkedPage });
+        return jsonResponse({ status: 'saved', page: linkedPageScoped });
       }
       if (String(url).endsWith('/sync/status')) {
         return jsonResponse({ hasPending: false });
       }
       if (String(url).endsWith('/sync/reload')) {
         return jsonResponse({
-          activePageIdsByProject: {
-            'project-jottathing': linkedPage.id,
-          },
-          currentProjectId: 'project-jottathing',
-          pages: [linkedPage, remoteOnlyPage],
+          activePageIdsByProject: { [baseProject.id]: linkedPageScoped.id },
+          currentProjectId: baseProject.id,
+          pages: [linkedPageScoped, remoteOnlyPage],
           projects: [baseProject],
           status: 'saved',
         });
@@ -1589,12 +1584,9 @@ describe('project metadata', () => {
       notionPageId: 'thread-deleted-on-second-device',
     };
     resetBrowserStorage({
-      activePageIdsByProject: { 'project-jottathing': deletedPage.id },
-      currentProjectId: 'project-jottathing',
+      ...notionWorkspaceStorage('workspace-test', [baseProject], [deletedPage, survivingPage]),
+      activePageIdsByProject: { [baseProject.id]: deletedPage.id },
       hasMigratedCapturesToPages: true,
-      pages: [deletedPage, survivingPage],
-      projects: [baseProject],
-      syncConfig: connectedConfig,
     });
     const fetchMock = vi.fn(async (url: string) => {
       if (String(url).endsWith('/sync/retry')) return jsonResponse({ requeuedCount: 0 });
@@ -1610,8 +1602,8 @@ describe('project metadata', () => {
       if (String(url).endsWith('/sync/status')) return jsonResponse({ hasPending: false });
       if (String(url).endsWith('/sync/reload')) {
         return jsonResponse({
-          activePageIdsByProject: { 'project-jottathing': survivingPage.id },
-          currentProjectId: 'project-jottathing',
+          activePageIdsByProject: { [baseProject.id]: survivingPage.id },
+          currentProjectId: baseProject.id,
           pages: [survivingPage],
           projects: [baseProject],
           status: 'saved',
@@ -1624,8 +1616,10 @@ describe('project metadata', () => {
     const result = await notionClient.resyncPendingChanges();
 
     expect(result.reloadedFromNotion).toBe(true);
-    expect((readBrowserStorage().pages as ProjectPage[]).map((page) => page.id))
+    const storedPages = readBrowserStorage().pages as ProjectPage[];
+    expect(storedPages.filter((page) => page.syncMode === 'notion').map((page) => page.id))
       .toEqual([survivingPage.id]);
+    expect(storedPages.some((page) => page.syncMode === 'local')).toBe(true);
   });
 
   test('initial hydration keeps the starter project when the remote workspace is new', async () => {
@@ -1842,6 +1836,7 @@ describe('project metadata', () => {
     try {
       const store = useJottathingStore();
       await store.initialize();
+      await store.activateNotionWorkspace();
 
       expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
         'http://localhost:8787/session',
@@ -1852,8 +1847,9 @@ describe('project metadata', () => {
         'project-one',
         'project-two',
       ]);
+      expect(store.currentWorkspace?.notionWorkspaceId).toBe('workspace-main');
       expect(readBrowserStorage().notionHydrationSource).toBe(
-        'http://localhost:8787::workspace-main',
+        'http://localhost:8787::notion:fresh-user::workspace-main',
       );
     } finally {
       globalThis.EventSource = OriginalEventSource;
@@ -1861,18 +1857,26 @@ describe('project metadata', () => {
   });
 
   test('loads pages created by another installation after local sync drains', async () => {
+    const notionStorage = notionWorkspaceStorage('workspace-main', [baseProject], [basePage]);
+    const [workspace] = notionStorage.workspaces;
     const remoteProject: Project = {
       ...baseProject,
       id: 'project-from-server',
       name: 'Server project',
+      workspaceId: workspace.id,
+      syncMode: 'notion',
     };
     const remotePage: ProjectPage = {
       ...basePage,
       id: 'page-from-server',
       projectId: remoteProject.id,
       title: 'Page from server',
+      workspaceId: workspace.id,
+      syncMode: 'notion',
+      syncAccountId: workspace.accountId,
+      syncWorkspaceId: workspace.notionWorkspaceId,
     };
-    const workspaceConfig = { ...connectedConfig, workspaceId: 'workspace-main' };
+    const workspaceConfig = notionStorage.syncConfig;
     const reloadOrder: string[] = [];
     const reloadFromNotion = vi.spyOn(notionClient, 'reloadFromNotion')
       .mockImplementation(async () => {
@@ -1910,12 +1914,9 @@ describe('project metadata', () => {
     vi.spyOn(notionClient, 'prefetchProjectPages').mockResolvedValue(undefined);
     const originalEventSource = globalThis.EventSource;
     resetBrowserStorage({
-      activePageIdsByProject: { 'project-jottathing': 'page-jottathing' },
-      currentProjectId: 'project-jottathing',
+      ...notionStorage,
       hasMigratedCapturesToPages: true,
-      notionHydrationSource: 'http://localhost:8787::workspace-main',
-      pages: [basePage],
-      projects: [baseProject],
+      notionHydrationSource: 'http://localhost:8787::notion:test-user::workspace-main',
       syncConfig: workspaceConfig,
     });
 
@@ -1935,18 +1936,26 @@ describe('project metadata', () => {
   });
 
   test('reloads the workspace when a sync event refers to a page missing locally', async () => {
+    const notionStorage = notionWorkspaceStorage('workspace-main', [baseProject], [basePage]);
+    const [workspace] = notionStorage.workspaces;
     const remoteProject: Project = {
       ...baseProject,
       id: 'project-discovered-by-event',
       name: 'Discovered project',
+      workspaceId: workspace.id,
+      syncMode: 'notion',
     };
     const remotePage: ProjectPage = {
       ...basePage,
       id: 'page-discovered-by-event',
       projectId: remoteProject.id,
       title: 'Discovered page',
+      workspaceId: workspace.id,
+      syncMode: 'notion',
+      syncAccountId: workspace.accountId,
+      syncWorkspaceId: workspace.notionWorkspaceId,
     };
-    const workspaceConfig = { ...connectedConfig, workspaceId: 'workspace-main' };
+    const workspaceConfig = notionStorage.syncConfig;
     const reloadFromNotion = vi.spyOn(notionClient, 'reloadFromNotion')
       .mockResolvedValue({
         currentProjectId: remoteProject.id,
@@ -1981,12 +1990,9 @@ describe('project metadata', () => {
       constructor() { eventSource = this as unknown as EventSource; }
     } as unknown as typeof EventSource;
     resetBrowserStorage({
-      activePageIdsByProject: { 'project-jottathing': 'page-jottathing' },
-      currentProjectId: 'project-jottathing',
+      ...notionStorage,
       hasMigratedCapturesToPages: true,
-      notionHydrationSource: 'http://localhost:8787::workspace-main',
-      pages: [basePage],
-      projects: [baseProject],
+      notionHydrationSource: 'http://localhost:8787::notion:test-user::workspace-main',
       syncConfig: workspaceConfig,
     });
 
@@ -2027,16 +2033,12 @@ describe('project metadata', () => {
       updatedAt: '2026-01-03T00:00:00.000Z',
     };
 
+    const olderPage = { ...basePage, id: 'page-older', projectId: olderProject.id };
+    const newerPage = { ...basePage, id: 'page-newer', projectId: newerProject.id };
     resetBrowserStorage({
-      activePageIdsByProject: {
-        'project-older': 'page-jottathing',
-        'project-newer': 'page-jottathing',
-      },
-      currentProjectId: 'project-older',
+      ...notionWorkspaceStorage('workspace-test', [olderProject, newerProject], [olderPage, newerPage]),
+      currentProjectId: olderProject.id,
       hasMigratedCapturesToPages: true,
-      pages: [basePage],
-      projects: [olderProject, newerProject],
-      syncConfig: connectedConfig,
     });
 
     const projects = await notionClient.listProjects();
@@ -2053,7 +2055,7 @@ describe('project metadata', () => {
     vi.stubGlobal('fetch', fetchMock);
     const store = useJottathingStore();
 
-    await seedStore(store);
+    await seedNotionStore(store);
     const updatePromise = store.updateCurrentProjectMetadata({
       category: 'Research',
       stateText: 'Todo\nShip database sync',
@@ -2070,7 +2072,8 @@ describe('project metadata', () => {
     await updatePromise;
 
     expect(store.currentProject?.category).toBe('Research');
-    expect((readBrowserStorage().projects as Project[])[0].stateContent).toEqual(docWithParagraphs([
+    expect((readBrowserStorage().projects as Project[])
+      .find((project) => project.id === notionTestProject.id)?.stateContent).toEqual(docWithParagraphs([
       'Todo',
       'Ship database sync',
     ]));
