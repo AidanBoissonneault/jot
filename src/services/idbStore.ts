@@ -122,17 +122,21 @@ async function trackWrite(write: () => Promise<void>): Promise<void> {
   }
 }
 
-/** Reads and updates the deletion fence inside one serialized IndexedDB transaction. */
+/** Reads and updates the deletion fence in one transaction; returns its normalized pre-update value. */
 async function withWriteControl(
   update: (store: IDBObjectStore, control: WriteControl) => void,
-): Promise<void> {
+): Promise<WriteControl> {
   const db = await openDb();
-  await new Promise<void>((resolve, reject) => {
+  return new Promise<WriteControl>((resolve, reject) => {
     const tx = db.transaction(STORE_NAME, 'readwrite');
     const store = tx.objectStore(STORE_NAME);
     const request = store.get(WRITE_CONTROL_KEY);
-    request.onsuccess = () => update(store, normalizeWriteControl(request.result));
-    tx.oncomplete = () => resolve();
+    let control = normalizeWriteControl(undefined);
+    request.onsuccess = () => {
+      control = normalizeWriteControl(request.result);
+      update(store, control);
+    };
+    tx.oncomplete = () => resolve(control);
     tx.onerror = () => reject(tx.error);
   });
 }
@@ -147,27 +151,12 @@ async function writeIfCurrent(write: (store: IDBObjectStore) => void): Promise<v
   });
 }
 
+/** Caches this context's write generation, initializing an invalid fence when needed. */
 async function getWriterEpoch(): Promise<number> {
   if (!writerEpochPromise) {
-    writerEpochPromise = (async () => {
-      const db = await openDb();
-      return new Promise<number>((resolve, reject) => {
-        const tx = db.transaction(STORE_NAME, 'readwrite');
-        const store = tx.objectStore(STORE_NAME);
-        const request = store.get(WRITE_CONTROL_KEY);
-        let epoch = 1;
-        request.onsuccess = () => {
-          const control = request.result as WriteControl | undefined;
-          if (control && Number.isSafeInteger(control.epoch) && control.epoch > 0) {
-            epoch = control.epoch;
-          } else {
-            store.put({ epoch, paused: false } satisfies WriteControl, WRITE_CONTROL_KEY);
-          }
-        };
-        tx.oncomplete = () => resolve(epoch);
-        tx.onerror = () => reject(tx.error);
-      });
-    })().then((epoch) => {
+    writerEpochPromise = withWriteControl((store, control) => {
+      store.put(control, WRITE_CONTROL_KEY);
+    }).then(({ epoch }) => {
       writerEpoch = epoch;
       return epoch;
     }).catch((error) => {
@@ -181,24 +170,14 @@ async function getWriterEpoch(): Promise<number> {
 /** Removes every Jottathing document, preference, and pending sync item in IndexedDB. */
 export async function idbClear(): Promise<void> {
   await getWriterEpoch();
-  const db = await openDb();
-  return new Promise<void>((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, 'readwrite');
-    const store = tx.objectStore(STORE_NAME);
-    const request = store.get(WRITE_CONTROL_KEY);
-    let allowed = false;
-    request.onsuccess = () => {
-      const control = normalizeWriteControl(request.result);
-      if (!control.paused) return;
-      allowed = true;
-      store.clear();
-      store.put({ epoch: control.epoch + 1, paused: true } satisfies WriteControl, WRITE_CONTROL_KEY);
-    };
-    tx.oncomplete = () => allowed
-      ? resolve()
-      : reject(new Error('IndexedDB must be paused by the current context before clearing data.'));
-    tx.onerror = () => reject(tx.error);
+  let allowed = false;
+  await withWriteControl((store, control) => {
+    if (!control.paused) return;
+    allowed = true;
+    store.clear();
+    store.put({ epoch: control.epoch + 1, paused: true } satisfies WriteControl, WRITE_CONTROL_KEY);
   });
+  if (!allowed) throw new Error('IndexedDB must be paused by the current context before clearing data.');
 }
 
 function normalizeWriteControl(value: unknown): WriteControl {

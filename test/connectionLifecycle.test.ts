@@ -357,6 +357,16 @@ describe('Jottathing connection data lifecycle', () => {
     });
   });
 
+  it('refuses to clear local data while IndexedDB writes are active', async () => {
+    const localData = { text: 'keep until the write fence is paused' };
+    await idbSet('protected-local-state', localData);
+
+    await expect(idbClear()).rejects.toThrow(
+      'IndexedDB must be paused by the current context before clearing data.',
+    );
+    expect(readBrowserStorage()).toEqual({ 'protected-local-state': localData });
+  });
+
   it('clears local authentication when the server cannot be reached and preserves local documents', async () => {
     seedLocalWorkspace();
     vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('offline'); }));
