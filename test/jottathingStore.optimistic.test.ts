@@ -613,17 +613,22 @@ describe('project metadata', () => {
       }));
     vi.stubGlobal('fetch', fetchMock);
     resetBrowserStorage({
-      activePageIdsByProject: { 'project-jottathing': 'page-jottathing' },
-      currentProjectId: 'project-jottathing',
+      activePageIdsByProject: { [notionTestProject.id]: notionTestPage.id },
+      currentProjectId: notionTestProject.id,
+      currentProjectIdByWorkspace: { [testNotionWorkspace.id]: notionTestProject.id },
+      currentWorkspaceId: testNotionWorkspace.id,
       hasMigratedCapturesToPages: true,
-      pages: [basePage, { ...basePage, id: 'page-deleted' }],
-      projects: [baseProject],
+      pages: [notionTestPage, { ...notionTestPage, id: 'page-deleted' }],
+      projects: [notionTestProject],
       syncConfig,
+      workspaces: [testNotionWorkspace],
     });
     const store = useJottathingStore();
 
-    await seedStore(store);
+    await seedStore(store, [notionTestPage]);
     store.syncConfig = syncConfig;
+    store.workspaces = [testNotionWorkspace];
+    store.currentWorkspaceId = testNotionWorkspace.id;
     await store.reloadFromNotion();
     const storage = readBrowserStorage();
 
@@ -631,8 +636,12 @@ describe('project metadata', () => {
     expect(store.currentProjectId).toBe('project-remote');
     expect(store.currentPage?.id).toBe('page-remote');
     expect(store.pages.map((page) => page.id)).toEqual(['page-remote']);
-    expect((storage.pages as ProjectPage[]).map((page) => page.id)).toEqual(['page-remote']);
-    expect((storage.projects as Project[]).map((project) => project.id)).toEqual(['project-remote']);
+    expect((storage.pages as ProjectPage[])
+      .filter((page) => page.workspaceId === testNotionWorkspace.id)
+      .map((page) => page.id)).toEqual(['page-remote']);
+    expect((storage.projects as Project[])
+      .filter((project) => project.workspaceId === testNotionWorkspace.id)
+      .map((project) => project.id)).toEqual(['project-remote']);
     expect((storage.syncConfig as SyncConfig).selectedParentPageId).toBe('parent-page');
   });
 
