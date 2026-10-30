@@ -261,6 +261,16 @@ async function markQueuedSyncAsCompleted(
   }
 }
 
+/** Marks only the queued version's sync row as failed. */
+function markSyncRowFailed(job: SyncQueueMessage) {
+  return supabase
+    .from('notion_block_sync')
+    .update({ status: 'failed', updated_at: new Date().toISOString() })
+    .eq('installation_id', job.installationId)
+    .eq('local_id', job.localId)
+    .eq('local_version', job.queuedVersion);
+}
+
 /** Applies the failure policy for a job that did not complete. */
 async function handleQueuedSyncFailure(
   message: Message<SyncQueueReference>,
@@ -291,12 +301,7 @@ async function handleQueuedSyncFailure(
     return;
   }
 
-  const { error: failureStateError } = await supabase
-    .from('notion_block_sync')
-    .update({ status: 'failed', updated_at: new Date().toISOString() })
-    .eq('installation_id', job.installationId)
-    .eq('local_id', job.localId)
-    .eq('local_version', job.queuedVersion);
+  const { error: failureStateError } = await markSyncRowFailed(job);
   if (failureStateError) {
     console.error('[queue] failed sync state could not be persisted', safeErrorMetadata(failureStateError));
     message.retry();
@@ -449,12 +454,7 @@ export async function processSyncDeadLetterQueue(
         .eq('status', 'pending');
       if (retainError) throw new Error('Unable to retain the dead-letter sync payload.');
 
-      const { error: syncStateError } = await supabase
-        .from('notion_block_sync')
-        .update({ status: 'failed', updated_at: new Date().toISOString() })
-        .eq('installation_id', job.installationId)
-        .eq('local_id', job.localId)
-        .eq('local_version', job.queuedVersion);
+      const { error: syncStateError } = await markSyncRowFailed(job);
       if (syncStateError) throw new Error('Unable to mark the dead-letter sync as failed.');
 
       const doStub = env.SYNC_EVENTS.get(env.SYNC_EVENTS.idFromName(String(job.installationId)));

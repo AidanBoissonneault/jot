@@ -298,6 +298,9 @@ describe('content-free sync queue references', () => {
     } as never);
 
     expect(markFailed.update).toHaveBeenCalledWith(expect.objectContaining({ status: 'failed' }));
+    expect(markFailed.eq).toHaveBeenNthCalledWith(1, 'installation_id', job.installationId);
+    expect(markFailed.eq).toHaveBeenNthCalledWith(2, 'local_id', job.localId);
+    expect(markFailed.eq).toHaveBeenNthCalledWith(3, 'local_version', job.queuedVersion);
     expect(retainPayload.update).toHaveBeenCalledWith(expect.objectContaining({
       payload: expect.objectContaining({ deadLetteredAt: expect.any(String) }),
     }));
