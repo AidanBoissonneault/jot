@@ -145,47 +145,27 @@ export function createProjectDatabaseRows(notionRequest: NotionRequester) {
     const properties = dataSource.properties ?? {};
     const idProperty = PROJECT_PROPERTIES.jottathingId;
 
-    if (properties[idProperty]?.type === 'rich_text') {
-      // Several archived rows can share an ID after recreation. Page until an
-      // active row is found or the filtered result is exhausted.
-      for await (const rows of notionQueryPages<NotionObject>(
-        notionRequest,
-        store,
-        `/data_sources/${dataSourceId}/query`,
-        {
-          page_size: 100,
-          filter: { property: idProperty, rich_text: { equals: projectId } },
-        },
-        {
-          invalidResults: 'Notion returned an invalid project lookup result.',
-          incompleteResults: 'Notion returned an incomplete project lookup result.',
-        },
-      )) {
-        const activeRow = rows.find((row) => !isArchivedObject(row));
-        if (activeRow) return activeRow;
-      }
-      return undefined;
+    if (properties[idProperty]?.type !== 'rich_text') {
+      throw new Error('Managed project database is missing its rich-text Jottathing ID property.');
     }
 
-    // Adopted legacy databases may have had their ID field removed or changed
-    // to a different type. In that case, scan safely rather than sending a
-    // rich_text filter that Notion rejects with HTTP 400.
+    // Several archived rows can share an ID after recreation. Page until an
+    // active row is found or the filtered result is exhausted.
     for await (const rows of notionQueryPages<NotionObject>(
       notionRequest,
       store,
       `/data_sources/${dataSourceId}/query`,
-      { page_size: 100 },
+      {
+        page_size: 100,
+        filter: { property: idProperty, rich_text: { equals: projectId } },
+      },
       {
         invalidResults: 'Notion returned an invalid project lookup result.',
         incompleteResults: 'Notion returned an incomplete project lookup result.',
       },
     )) {
-      const match = rows.find((row) => {
-        if (isArchivedObject(row)) return false;
-        const rowProperties = row.properties ?? {};
-        return richTextProperty(rowProperties[PROJECT_PROPERTIES.jottathingId]).trim() === projectId;
-      });
-      if (match) return match;
+      const activeRow = rows.find((row) => !isArchivedObject(row));
+      if (activeRow) return activeRow;
     }
     return undefined;
   }

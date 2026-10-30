@@ -63,16 +63,15 @@ describe('project database row pagination', () => {
     expect(notionRequest.mock.calls[2][2]?.body).toMatchObject({ start_cursor: 'next' });
   });
 
-  test('scans all rows when the adopted ID property cannot be filtered', async () => {
-    const { rows } = rowsApi([
+  test('rejects a project database with an unsupported ID property', async () => {
+    const { notionRequest, rows } = rowsApi([
       { properties: { 'Jottathing ID': { type: 'title' } } },
-      { results: [row('other', { 'Jottathing ID': { rich_text: [{ plain_text: 'other' }] } })], has_more: true, next_cursor: 'next' },
-      { results: [row('match', { 'Jottathing ID': { rich_text: [{ plain_text: 'project' }] } })], has_more: false },
     ]);
 
-    const result = await rows.findProjectPageByJottathingId({} as WorkerStore, 'data-source', 'project');
+    await expect(rows.findProjectPageByJottathingId({} as WorkerStore, 'data-source', 'project'))
+      .rejects.toThrow('Managed project database is missing its rich-text Jottathing ID property.');
 
-    expect(result?.id).toBe('match');
+    expect(notionRequest).toHaveBeenCalledTimes(1);
   });
 
   test.each([
