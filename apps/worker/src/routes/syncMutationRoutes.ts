@@ -62,7 +62,7 @@ export function registerSyncMutationRoutes(app: Hono<{ Bindings: WorkerEnv }>): 
     const parsed = await readLimitedJsonBody<SyncPageRequest>(c.req.raw, MAX_SYNC_JSON_REQUEST_BYTES);
     if (parsed.tooLarge) return c.json({ error: 'Sync request is too large.' }, 413);
     const body = (parsed.body ?? {}) as Partial<SyncPageRequest>;
-    const { page, project, selectedParentPageId } = body ?? {};
+    const { page, project, selectedParentPageId } = body;
     const ops = Array.isArray(body?.ops) ? body.ops : [];
   
     if (!ops.length && (!page?.id || !project?.id)) {
@@ -244,7 +244,7 @@ export function registerSyncMutationRoutes(app: Hono<{ Bindings: WorkerEnv }>): 
     const parsed = await readLimitedJsonBody<SyncPageRequest>(c.req.raw, MAX_SYNC_JSON_REQUEST_BYTES);
     if (parsed.tooLarge) return c.json({ error: 'Sync request is too large.' }, 413);
     const body = (parsed.body ?? {}) as Partial<SyncPageRequest>;
-    const { page, project, selectedParentPageId } = body ?? {};
+    const { page, project, selectedParentPageId } = body;
     if (!page?.id || !project?.id) {
       return c.json({ status: 'error', message: 'Missing page or project.' }, 400);
     }

@@ -235,7 +235,7 @@ export function registerSyncQueryRoutes(app: Hono<{ Bindings: WorkerEnv }>): voi
     const parsed = await readLimitedJsonBody<SyncPageRequest>(c.req.raw, MAX_SYNC_JSON_REQUEST_BYTES);
     if (parsed.tooLarge) return c.json({ error: 'Sync request is too large.' }, 413);
     const body = (parsed.body ?? {}) as Partial<SyncPageRequest>;
-    const { page } = body ?? {};
+    const { page } = body;
   
     if (!page?.id || !page.notionPageId) {
       return c.json({ page, status: 'saved', message: 'No Notion page is linked yet.' });
