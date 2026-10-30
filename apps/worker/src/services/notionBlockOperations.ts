@@ -3,7 +3,7 @@
  * @author Aidan Boissonneault
  * @lastModified September 2026
  */
-import type { BlockPosition } from '../workerUtils.js';
+import type { BlockPosition } from '../managedBlockIdentity.js';
 import type {
   JsonObject,
   ListAllBlockChildren,

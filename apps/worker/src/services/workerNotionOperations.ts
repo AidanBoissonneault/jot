@@ -26,7 +26,7 @@ import {
   positionAfterCreatedBlocks,
   updateBodyFromNotionBlock,
 } from '../workerUtils.js';
-import type { BlockPosition } from '../workerUtils.js';
+import type { BlockPosition } from '../managedBlockIdentity.js';
 import { createNotionBlockOperations } from './notionBlockOperations.js';
 import { createNotionObjectCache } from './notionObjectCache.js';
 

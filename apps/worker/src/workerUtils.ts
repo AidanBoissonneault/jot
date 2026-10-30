@@ -6,6 +6,7 @@
 
 import { createHash, randomBytes } from 'node:crypto';
 import type { Context } from 'hono';
+import type { BlockPosition } from './managedBlockIdentity.js';
 import { notionApiHttpFailure } from './notionRequest.js';
 import type { JsonObject, NotionBlock, NotionBlockPayload, NotionObject, NotionRequester, WorkerEnv, WorkerStore } from './types.js';
 
@@ -80,12 +81,6 @@ export async function readLimitedJsonBody<T>(
   } catch {
     return { body: null, tooLarge: false };
   }
-}
-
-/** Describes a Notion child insertion position. */
-export interface BlockPosition {
-  after_block?: { id: string };
-  type: 'after_block' | 'start';
 }
 
 /** Checks whether a request origin is trusted. @param env - Worker bindings. @param origin - Request origin. @returns Trust decision. */
