@@ -340,11 +340,11 @@ async function syncQueuePayloadCount(installationId: string | number, includeDea
 }
 
 /** Counts durable work that has not been acknowledged by the Queue consumer. */
-export function pendingSyncQueuePayloadCount(installationId: string | number): Promise<number> {
+function pendingSyncQueuePayloadCount(installationId: string | number): Promise<number> {
   return syncQueuePayloadCount(installationId, false);
 }
 
 /** Counts retained permanent failures separately from work still being processed. */
-export function failedSyncQueuePayloadCount(installationId: string | number): Promise<number> {
+function failedSyncQueuePayloadCount(installationId: string | number): Promise<number> {
   return syncQueuePayloadCount(installationId, true);
 }

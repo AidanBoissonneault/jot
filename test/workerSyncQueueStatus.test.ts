@@ -18,22 +18,42 @@ vi.mock('../apps/worker/src/services/workerRuntime.js', () => ({
   writeStore: vi.fn(),
 }));
 
-import {
-  failedSyncQueuePayloadCount,
-  pendingSyncQueuePayloadCount,
-} from '../apps/worker/src/routes/syncQueryRoutes';
+import { registerSyncQueryRoutes } from '../apps/worker/src/routes/syncQueryRoutes';
 
-function makeQueueQuery(rows: Array<{ id: string }>, count = rows.length) {
+function makeQueueQuery(rows: Array<{ id: string }>, count = rows.length, error: Error | null = null) {
   const query: Record<string, ReturnType<typeof vi.fn>> = {};
   query.select = vi.fn(() => query);
   query.eq = vi.fn(() => query);
   query.is = vi.fn(() => query);
   query.not = vi.fn(() => query);
   query.limit = vi.fn(() => query);
-  query.then = vi.fn((resolve: (value: { data: typeof rows; error: null }) => unknown) =>
-    Promise.resolve({ data: rows, count, error: null }).then(resolve),
+  query.then = vi.fn((resolve: (value: { data: typeof rows; count: number; error: Error | null }) => unknown) =>
+    Promise.resolve({ data: rows, count, error }).then(resolve),
   );
   return query;
+}
+
+async function requestQueueStatus() {
+  type Context = {
+    req: { query: (name: string) => string | undefined };
+    json: (body: unknown, status?: number) => { body: unknown; status: number };
+  };
+  type Handler = (context: Context) => unknown | Promise<unknown>;
+  const handlers = new Map<string, Handler>();
+  const app = {
+    get: (path: string, handler: Handler) => handlers.set(`GET ${path}`, handler),
+    post: (path: string, handler: Handler) => handlers.set(`POST ${path}`, handler),
+  };
+  registerSyncQueryRoutes(app as unknown as Parameters<typeof registerSyncQueryRoutes>[0]);
+
+  const handler = handlers.get('GET /sync/status');
+  if (!handler) throw new Error('Sync status route was not registered.');
+  const result = await handler({
+    req: { query: () => undefined },
+    json: (body, status = 200) => ({ body, status }),
+  });
+  const response = result as { body: unknown; status: number };
+  return { response: { status: response.status }, body: response.body };
 }
 
 describe('sync queue status', () => {
@@ -43,33 +63,38 @@ describe('sync queue status', () => {
   });
 
   it('uses queued payloads as the active-work source of truth', async () => {
-    const query = makeQueueQuery([]);
-    runtime.supabase.from.mockReturnValue(query);
-    await expect(pendingSyncQueuePayloadCount(42)).resolves.toBe(0);
+    const pendingQuery = makeQueueQuery([{ id: 'job-1' }], 1);
+    const failedQuery = makeQueueQuery([], 0);
+    runtime.supabase.from.mockReturnValueOnce(pendingQuery).mockReturnValueOnce(failedQuery);
+
+    const { response, body } = await requestQueueStatus();
+
+    expect(response.status).toBe(200);
+    expect(body).toEqual({ hasPending: true, pendingCount: 1, failedCount: 0 });
     expect(runtime.supabase.from).toHaveBeenCalledWith('jottathing_sync_queue_payloads');
-    expect(query.select).toHaveBeenCalledWith('id', { count: 'exact', head: true });
-    expect(query.eq).toHaveBeenCalledWith('installation_id', 42);
-    expect(query.eq).toHaveBeenCalledWith('status', 'pending');
-    expect(query.is).toHaveBeenCalledWith('payload->>deadLetteredAt', null);
-  });
-
-  it('counts accepted payloads that are still waiting for the consumer', async () => {
-    const query = makeQueueQuery([{ id: 'job-1' }, { id: 'job-2' }]);
-    runtime.supabase.from.mockReturnValue(query);
-
-    await expect(pendingSyncQueuePayloadCount(42)).resolves.toBe(2);
-    expect(query.is).toHaveBeenCalledWith('payload->>deadLetteredAt', null);
-  });
-
-  it('keeps parked failures out of the active upload count', async () => {
-    const pendingQuery = makeQueueQuery([], 0);
-    runtime.supabase.from.mockReturnValue(pendingQuery);
-    await expect(pendingSyncQueuePayloadCount(42)).resolves.toBe(0);
+    expect(pendingQuery.select).toHaveBeenCalledWith('id', { count: 'exact', head: true });
+    expect(pendingQuery.eq).toHaveBeenCalledWith('installation_id', 42);
+    expect(pendingQuery.eq).toHaveBeenCalledWith('status', 'pending');
     expect(pendingQuery.is).toHaveBeenCalledWith('payload->>deadLetteredAt', null);
-
-    const failedQuery = makeQueueQuery([], 1);
-    runtime.supabase.from.mockReturnValue(failedQuery);
-    await expect(failedSyncQueuePayloadCount(42)).resolves.toBe(1);
     expect(failedQuery.not).toHaveBeenCalledWith('payload->>deadLetteredAt', 'is', null);
+  });
+
+  it('returns no active work when only retained failures remain', async () => {
+    const pendingQuery = makeQueueQuery([], 0);
+    const failedQuery = makeQueueQuery([], 2);
+    runtime.supabase.from.mockReturnValueOnce(pendingQuery).mockReturnValueOnce(failedQuery);
+
+    const { body } = await requestQueueStatus();
+
+    expect(body).toEqual({ hasPending: false, pendingCount: 0, failedCount: 2 });
+  });
+
+  it('returns an error response when a queue count cannot be read', async () => {
+    runtime.supabase.from.mockReturnValueOnce(makeQueueQuery([], 0, new Error('database offline')));
+
+    const { response, body } = await requestQueueStatus();
+
+    expect(response.status).toBe(500);
+    expect(body).toEqual({ error: 'Unable to read queued synchronization status.' });
   });
 });
