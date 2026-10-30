@@ -71,6 +71,25 @@ describe('block sync queue payloads', () => {
     expect(events[0].payload.project).not.toHaveProperty('stateContent');
   });
 
+  test('carries a blocked delivery state into newer project and source events', async () => {
+    resetBrowserStorage();
+    await addPendingProjectSyncEvent(project);
+    await blockPendingProjectSyncEvents(project.id, {
+      code: 'unmapped_notion_content',
+      message: 'Review the content conflict.',
+    });
+
+    const projectEvent = await addPendingProjectSyncEvent({ ...project, name: 'Renamed' });
+    const sourceEvent = await addPendingProjectSourceSyncEvent(
+      project,
+      'capture-2',
+      block('source:capture-2', 'jottathing_source_v1:{}'),
+    );
+
+    expect(projectEvent.deliveryBlocked?.message).toBe('Review the content conflict.');
+    expect(sourceEvent.deliveryBlocked?.message).toBe('Review the content conflict.');
+  });
+
   test('appending blocks emits one bounded create per block without a full reorder', () => {
     const first = block('first', 'first');
     const added = [block('second', 'second'), block('third', 'third'), block('fourth', 'fourth')];

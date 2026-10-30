@@ -160,9 +160,7 @@ export async function addPendingProjectSyncEvent(
   return mutateQueue(async () => {
     const pending = await readPendingProjectSyncEvents();
     const sequence = await nextSequence(1);
-    const deliveryBlocked = pending.find(
-      (queued) => queued.projectId === project.id && queued.deliveryBlocked,
-    )?.deliveryBlocked;
+    const deliveryBlocked = inheritedProjectDeliveryBlock(pending, project.id);
     const { syncConflicts: _syncConflicts, ...projectForSync } = project;
     const event: ProjectSyncEvent = {
       eventId: crypto.randomUUID(),
@@ -183,6 +181,15 @@ export async function addPendingProjectSyncEvent(
 export async function listPendingProjectSyncEvents(): Promise<ProjectSyncEvent[]> {
   await queueMutation;
   return readPendingProjectSyncEvents();
+}
+
+/** Keeps a project's delivery block when a newer event replaces its queued work. */
+function inheritedProjectDeliveryBlock(
+  events: ProjectSyncEvent[],
+  projectId: string,
+): ProjectSyncBlock | undefined {
+  return events.find((event) => event.projectId === projectId && event.deliveryBlocked)
+    ?.deliveryBlocked;
 }
 
 export async function listBlockedProjectSyncIds(): Promise<string[]> {
@@ -450,9 +457,7 @@ export async function addPendingProjectSourceSyncEvent(
   return mutateQueue(async () => {
     const pending = await readPendingProjectSyncEvents();
     const sequence = await nextSequence(1);
-    const deliveryBlocked = pending.find(
-      (queued) => queued.projectId === project.id && queued.deliveryBlocked,
-    )?.deliveryBlocked;
+    const deliveryBlocked = inheritedProjectDeliveryBlock(pending, project.id);
     const { stateContent: _stateContent, syncConflicts: _syncConflicts, ...projectContext } = project;
     const event: ProjectSourceSyncEvent = {
       eventId: crypto.randomUUID(),
