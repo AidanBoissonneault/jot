@@ -1,9 +1,9 @@
 import { notionClient } from '@/src/services/notionClient';
 import { safeJottathingSourceUrl } from '@/src/extensions/jottathingLink';
 import { parseCaptureSelectionPayload } from '@/src/lib/capturePayload';
+import { createDragCaptureState } from '@/src/lib/dragCapture';
 import type {
   CaptureSelectionMessage,
-  CaptureSelectionPayload,
   ConsumeHeadingDragMessage,
   ConsumeTextDragMessage,
   HeadingDragStartedMessage,
@@ -15,20 +15,7 @@ import type {
   TextDragStartedMessage,
 } from '@/src/types/messages';
 
-const HEADING_DRAG_TTL_MS = 8000;
-const TEXT_DRAG_TTL_MS = 8000;
-let lastHeadingDrag:
-  | {
-      payload: CaptureSelectionPayload;
-      createdAt: number;
-    }
-  | undefined;
-let lastTextDrag:
-  | {
-      payload: CaptureSelectionPayload;
-      createdAt: number;
-    }
-  | undefined;
+const dragCaptures = createDragCaptureState();
 
 export default defineBackground(() => {
   if (browser.sidePanel?.setPanelBehavior) {
@@ -89,75 +76,19 @@ export default defineBackground(() => {
 });
 
 function handleHeadingDragStarted(message: HeadingDragStartedMessage) {
-  const payload = parseCaptureSelectionPayload(message.payload);
-  if (!payload?.highlightMeta.isHeading) {
-    return false;
-  }
-
-  lastHeadingDrag = {
-    payload,
-    createdAt: Date.now(),
-  };
-
-  return true;
+  return dragCaptures.start(message.payload, 'heading');
 }
 
 function handleConsumeHeadingDrag(message: ConsumeHeadingDragMessage) {
-  if (!lastHeadingDrag) {
-    return null;
-  }
-
-  const drag = lastHeadingDrag;
-  const requestedText = message.payload?.text?.replace(/\s+/g, ' ').trim();
-  const draggedText = drag.payload.text.replace(/\s+/g, ' ').trim();
-  const isFresh = Date.now() - drag.createdAt <= HEADING_DRAG_TTL_MS;
-  const isMatchingText =
-    !requestedText ||
-    requestedText === draggedText ||
-    draggedText.includes(requestedText) ||
-    requestedText.includes(draggedText);
-
-  if (!isFresh || !isMatchingText) {
-    return null;
-  }
-
-  lastHeadingDrag = undefined;
-  return drag.payload;
+  return dragCaptures.consume(message.payload?.text, 'heading');
 }
 
 function handleTextDragStarted(message: TextDragStartedMessage) {
-  const payload = parseCaptureSelectionPayload(message.payload);
-  if (!payload || payload.highlightMeta.isHeading) return false;
-
-  lastTextDrag = {
-    payload,
-    createdAt: Date.now(),
-  };
-
-  return true;
+  return dragCaptures.start(message.payload, 'text');
 }
 
 function handleConsumeTextDrag(message: ConsumeTextDragMessage) {
-  if (!lastTextDrag) {
-    return null;
-  }
-
-  const drag = lastTextDrag;
-  const requestedText = message.payload?.text?.replace(/\s+/g, ' ').trim();
-  const draggedText = drag.payload.text.replace(/\s+/g, ' ').trim();
-  const isFresh = Date.now() - drag.createdAt <= TEXT_DRAG_TTL_MS;
-  const isMatchingText =
-    !requestedText ||
-    requestedText === draggedText ||
-    draggedText.includes(requestedText) ||
-    requestedText.includes(draggedText);
-
-  if (!isFresh || !isMatchingText) {
-    return null;
-  }
-
-  lastTextDrag = undefined;
-  return drag.payload;
+  return dragCaptures.consume(message.payload?.text, 'text');
 }
 
 async function handleCaptureSelection(message: CaptureSelectionMessage) {
