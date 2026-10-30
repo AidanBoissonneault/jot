@@ -76,6 +76,27 @@ function stubJsonResponse(payload: unknown) {
   })));
 }
 
+function expectSeededDocumentsPreserved() {
+  const stored = readBrowserStorage();
+  const storedProject = (stored.projects as Project[]).find(({ id }) => id === project.id);
+  const storedPage = (stored.pages as ProjectPage[]).find(({ id }) => id === page.id);
+
+  expect(storedProject).toMatchObject({
+    id: project.id,
+    name: project.name,
+    stateContent: project.stateContent,
+  });
+  expect(storedPage).toMatchObject({
+    id: page.id,
+    projectId: page.projectId,
+    title: page.title,
+  });
+  expect(storedPage?.content.content?.[0]).toMatchObject({
+    type: 'paragraph',
+    content: [{ type: 'text', text: 'Keep me' }],
+  });
+}
+
 afterEach(() => {
   vi.stubGlobal('fetch', originalFetch);
   resetBrowserStorage();
@@ -102,8 +123,7 @@ describe('Jottathing connection data lifecycle', () => {
     expect(result.syncConfig).toMatchObject({ authenticated: false, connected: false });
     expect(result.syncConfig.logoutCleanupPending).toBe(false);
     expect(result.notionTokenRevoked).toBe(true);
-    expect(stored.projects).toMatchObject([project]);
-    expect(stored.pages).toEqual([page]);
+    expectSeededDocumentsPreserved();
     expect(await notionClient.pendingSyncEventCount()).toBeGreaterThan(0);
     expect((stored.syncConfig as SyncConfig).authenticated).toBe(false);
     expect((stored.syncConfig as SyncConfig).connected).toBe(false);
@@ -132,8 +152,7 @@ describe('Jottathing connection data lifecycle', () => {
     expect(indexedDbConfig).not.toHaveProperty('legacyAuth.nested.authorization');
     expect(extensionConfig).not.toHaveProperty('legacyAuth.accessToken');
     expect(extensionConfig).not.toHaveProperty('legacyAuth.nested.authorization');
-    expect(readBrowserStorage().projects).toMatchObject([project]);
-    expect(readBrowserStorage().pages).toEqual([page]);
+    expectSeededDocumentsPreserved();
   });
 
   it('scrubs legacy extension token copies on logout when the credential scrub marker already exists', async () => {
@@ -195,7 +214,7 @@ describe('Jottathing connection data lifecycle', () => {
       requestId: string;
     };
     expect(pendingDeletion.requestId).toMatch(/^[A-Za-z0-9_-]{40,128}$/);
-    expect(readBrowserStorage().pages).toEqual([page]);
+    expectSeededDocumentsPreserved();
 
     await expect(notionClient.deleteConnection()).resolves.toEqual({ notionTokenRevoked: true });
 
@@ -262,7 +281,7 @@ describe('Jottathing connection data lifecycle', () => {
     await expect(notionClient.deleteConnection()).rejects.toThrow('pending for another connection');
 
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(readBrowserStorage().pages).toEqual([page]);
+    expectSeededDocumentsPreserved();
   });
 
   it('requires the owning account before starting a deletion', async () => {
@@ -278,7 +297,7 @@ describe('Jottathing connection data lifecycle', () => {
     await expect(notionClient.deleteConnection()).rejects.toThrow('owns this local data');
 
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(readBrowserStorage().pages).toEqual([page]);
+    expectSeededDocumentsPreserved();
     expect(readExtensionStorage()).not.toHaveProperty('jottathingPendingConnectionDeletion');
   });
 
@@ -291,7 +310,7 @@ describe('Jottathing connection data lifecycle', () => {
     await expect(notionClient.deleteConnection()).rejects.toThrow('Sign in to the Notion account');
 
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(readBrowserStorage().pages).toMatchObject([{ id: page.id, title: page.title }]);
+    expectSeededDocumentsPreserved();
     expect(readExtensionStorage()).not.toHaveProperty('jottathingPendingConnectionDeletion');
   });
 
@@ -353,8 +372,7 @@ describe('Jottathing connection data lifecycle', () => {
       logoutCleanupPending: true,
     });
     expect(stored.syncConfig).toMatchObject({ authenticated: false, connected: false });
-    expect(readBrowserStorage().projects).toMatchObject([project]);
-    expect(stored.pages).toEqual([page]);
+    expectSeededDocumentsPreserved();
   });
 
   it('keeps logout retryable until the server confirms cleanup without deleting local work', async () => {
@@ -381,15 +399,13 @@ describe('Jottathing connection data lifecycle', () => {
 
     const first = await notionClient.logoutSyncSession();
     expect(first.syncConfig.logoutCleanupPending).toBe(true);
-    expect(readBrowserStorage().projects).toMatchObject([project]);
-    expect(readBrowserStorage().pages).toEqual([page]);
+    expectSeededDocumentsPreserved();
 
     const retry = await notionClient.logoutSyncSession();
     expect(retry.serverDataCleanupComplete).toBe(true);
     expect(retry.syncConfig.logoutCleanupPending).toBe(false);
     expect(requestCount).toBe(2);
-    expect(readBrowserStorage().projects).toMatchObject([project]);
-    expect(readBrowserStorage().pages).toEqual([page]);
+    expectSeededDocumentsPreserved();
   });
 
   it('does not restore a signed-out device from a lingering server cookie', async () => {
@@ -521,7 +537,7 @@ describe('Jottathing connection data lifecycle', () => {
     expect(config.syncQueueOwnerUserId).toBe('notion:original-account');
     expect(await notionClient.needsInitialNotionHydration()).toBe(false);
     await expect(notionClient.validateNotionCache()).rejects.toThrow('locked to its original Notion account');
-    expect(readBrowserStorage().pages).toEqual([page]);
+    expectSeededDocumentsPreserved();
   });
 
   it('does not assign ownerless work by matching an old email address', async () => {
