@@ -4,6 +4,7 @@
  * @lastModified September 2026
  */
 import { projectStateKey, threadKey } from '../projectDatabaseValues.js';
+import { mapWithConcurrency } from '../concurrency.js';
 import type { Project, ProjectPage } from '../../../../src/types/capture.js';
 import type { AppendLog, NotionRequester, NotionObject, WorkerStore } from '../types.js';
 
@@ -20,23 +21,6 @@ interface NotionWorkspaceStructure {
   pageIds: string[];
   projectIds: string[];
   projectPageIds: string[];
-}
-
-/** Runs independent remote existence checks concurrently without flooding Notion. */
-async function mapWithConcurrency<Value>(
-  values: Value[],
-  limit: number,
-  check: (value: Value) => Promise<void>,
-): Promise<void> {
-  let nextIndex = 0;
-  const workerCount = Math.min(Math.max(1, limit), values.length);
-  await Promise.all(Array.from({ length: workerCount }, async () => {
-    while (true) {
-      const index = nextIndex++;
-      if (index >= values.length) return;
-      await check(values[index]);
-    }
-  }));
 }
 
 /** Creates cache validation and lookup operations for Notion-backed pages. */
