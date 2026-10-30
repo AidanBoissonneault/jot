@@ -647,18 +647,18 @@ describe('project metadata', () => {
 
   test('reloadFromNotion preserves the selected project and page when they still exist', async () => {
     const secondProject: Project = {
-      ...baseProject,
+      ...notionTestProject,
       id: 'project-career',
       name: 'Career Prep',
     };
     const selectedPage: ProjectPage = {
-      ...basePage,
+      ...notionTestPage,
       id: 'page-career-selected',
       projectId: secondProject.id,
       title: 'LinkedIn Demo',
     };
     const serverActivePage: ProjectPage = {
-      ...basePage,
+      ...notionTestPage,
       id: 'page-career-server-active',
       projectId: secondProject.id,
       title: 'Another page',
@@ -667,24 +667,27 @@ describe('project metadata', () => {
       .mockResolvedValueOnce(jsonResponse({ hasPending: false }))
       .mockResolvedValueOnce(jsonResponse({
         activePageIdsByProject: {
-          [baseProject.id]: basePage.id,
+          [notionTestProject.id]: notionTestPage.id,
           [secondProject.id]: serverActivePage.id,
         },
-        currentProjectId: baseProject.id,
-        pages: [basePage, selectedPage, serverActivePage],
-        projects: [baseProject, secondProject],
+        currentProjectId: notionTestProject.id,
+        pages: [notionTestPage, selectedPage, serverActivePage],
+        projects: [notionTestProject, secondProject],
         status: 'saved',
       })));
     resetBrowserStorage({
       activePageIdsByProject: {
-        [baseProject.id]: basePage.id,
+        [notionTestProject.id]: notionTestPage.id,
         [secondProject.id]: selectedPage.id,
       },
       currentProjectId: secondProject.id,
+      currentProjectIdByWorkspace: { [testNotionWorkspace.id]: secondProject.id },
+      currentWorkspaceId: testNotionWorkspace.id,
       hasMigratedCapturesToPages: true,
-      pages: [basePage, selectedPage],
-      projects: [baseProject, secondProject],
+      pages: [notionTestPage, selectedPage],
+      projects: [notionTestProject, secondProject],
       syncConfig: connectedConfig,
+      workspaces: [testNotionWorkspace],
     });
 
     const reloaded = await notionClient.reloadFromNotion({ force: true });
@@ -697,32 +700,34 @@ describe('project metadata', () => {
 
   test('manual reload keeps the selected page instead of choosing the first page', async () => {
     const secondProject: Project = {
-      ...baseProject,
+      ...notionTestProject,
       id: 'project-career',
       name: 'Career Prep',
     };
     const selectedPage: ProjectPage = {
-      ...basePage,
+      ...notionTestPage,
       id: 'page-career-selected',
       projectId: secondProject.id,
       title: 'LinkedIn Demo',
     };
     const firstPage: ProjectPage = {
-      ...basePage,
+      ...notionTestPage,
       id: 'page-career-first',
       projectId: secondProject.id,
       title: 'First page',
     };
     const store = useJottathingStore();
-    await seedStore(store, [basePage, selectedPage]);
-    store.projects = [baseProject, secondProject];
+    await seedStore(store, [notionTestPage, selectedPage]);
+    store.projects = [notionTestProject, secondProject];
     store.pages = [selectedPage, firstPage];
     store.currentProjectId = secondProject.id;
+    store.workspaces = [testNotionWorkspace];
+    store.currentWorkspaceId = testNotionWorkspace.id;
     store.currentPage = selectedPage;
     const reload = vi.spyOn(notionClient, 'reloadFromNotion').mockResolvedValue({
       currentProjectId: secondProject.id,
       pages: [firstPage, selectedPage],
-      projects: [baseProject, secondProject],
+      projects: [notionTestProject, secondProject],
       syncConfig: connectedConfig,
     });
     const listPages = vi.spyOn(notionClient, 'listProjectPages')
@@ -744,7 +749,7 @@ describe('project metadata', () => {
 
   test('reloadFromNotion refreshes for a structural change without stale or new sync rows', async () => {
     const remotePage: ProjectPage = {
-      ...basePage,
+      ...notionTestPage,
       id: 'page-created-elsewhere',
       title: 'Ravens Heart',
       notionPageId: 'thread-created-elsewhere',
@@ -759,25 +764,29 @@ describe('project metadata', () => {
       }))
       .mockResolvedValueOnce(jsonResponse({ hasPending: false }))
       .mockResolvedValueOnce(jsonResponse({
-        activePageIdsByProject: { [baseProject.id]: remotePage.id },
-        currentProjectId: baseProject.id,
+        activePageIdsByProject: { [notionTestProject.id]: remotePage.id },
+        currentProjectId: notionTestProject.id,
         pages: [remotePage],
-        projects: [baseProject],
+        projects: [notionTestProject],
         status: 'saved',
       }));
     vi.stubGlobal('fetch', fetchMock);
     resetBrowserStorage({
-      activePageIdsByProject: { [baseProject.id]: basePage.id },
-      currentProjectId: baseProject.id,
+      activePageIdsByProject: { [notionTestProject.id]: notionTestPage.id },
+      currentProjectId: notionTestProject.id,
+      currentProjectIdByWorkspace: { [testNotionWorkspace.id]: notionTestProject.id },
+      currentWorkspaceId: testNotionWorkspace.id,
       hasMigratedCapturesToPages: true,
-      pages: [basePage],
-      projects: [baseProject],
+      pages: [notionTestPage],
+      projects: [notionTestProject],
       syncConfig: connectedConfig,
+      workspaces: [testNotionWorkspace],
     });
 
     const reloaded = await notionClient.reloadFromNotion();
 
-    expect(reloaded.pages.map((page) => page.title)).toEqual(['Ravens Heart']);
+    expect(reloaded.pages.filter((page) => page.workspaceId === testNotionWorkspace.id)
+      .map((page) => page.title)).toEqual(['Ravens Heart']);
     expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
       'http://localhost:8787/sync/validate',
       'http://localhost:8787/sync/status',
@@ -797,16 +806,19 @@ describe('project metadata', () => {
         status: 'saved',
       })));
     resetBrowserStorage({
-      activePageIdsByProject: { 'project-jottathing': 'page-jottathing' },
-      currentProjectId: 'project-jottathing',
+      activePageIdsByProject: { [notionTestProject.id]: notionTestPage.id },
+      currentProjectId: notionTestProject.id,
+      currentProjectIdByWorkspace: { [testNotionWorkspace.id]: notionTestProject.id },
+      currentWorkspaceId: testNotionWorkspace.id,
       hasMigratedCapturesToPages: true,
-      pages: [basePage],
-      projects: [baseProject],
+      pages: [notionTestPage],
+      projects: [notionTestProject],
       syncConfig: {
         ...connectedConfig,
         selectedParentPageId: 'missing-parent',
         selectedParentPageTitle: 'Missing',
       },
+      workspaces: [testNotionWorkspace],
     });
 
     await notionClient.reloadFromNotion({ force: true });
