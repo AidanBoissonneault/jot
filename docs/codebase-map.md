@@ -207,7 +207,7 @@ Worker block mappings now use only `jottathingBlockId`; the duplicate `localNode
 
 Granular block operations now import the shared append, update, delete, conversion, and classification contracts from `managedBlocks.ts` rather than maintaining identical private copies. This removes 8 net lines; production duplication scan count falls from 368 to 336 reported duplicate lines across 15 files. Four managed-block and media suites pass (22 tests), with root and Worker typechecks clean.
 
-Project rename, metadata update, and source registration now rely on `applyProjectOrPageSyncState` for the project-list replacement they previously performed immediately before that helper replaced the same entry again. The helper now also keeps project order current after metadata changes. This removes 13 net lines; the focused rename, metadata, and capture-source store tests pass (3 tests), and root typecheck passes.
+An attempted cleanup removed duplicate project-list updates from rename, metadata, and source-registration paths. The full suite exposed project ordering and rename regressions, so that refactor was reverted and the original updates restored. The helper still handles the shared sync-state update; project-list ordering and immediate rename behavior remain covered by their focused store tests.
 
 IndexedDB pause, resume, and guarded writes now share `withWriteControl`, which reads and updates the deletion fence in one serialized transaction. The in-flight write, stale-context fence, and restart recovery semantics stay intact. This removes 12 lines; the cross-context fence and restart recovery tests pass (2 tests), and root plus Worker typechecks pass.
 
