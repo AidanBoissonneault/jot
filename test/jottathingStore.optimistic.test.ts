@@ -4,7 +4,6 @@ import { nextTick } from 'vue';
 import { applySyncResult, notionClient } from '@/src/services/notionClient';
 import { idbGetMany } from '@/src/services/idbStore';
 import {
-  addPendingSyncOps,
   addPendingProjectSyncEvent,
   compactPendingSyncOps,
   listPendingProjectSyncEvents,
@@ -2207,7 +2206,9 @@ describe('optimistic page creation', () => {
     const firstQueueWriteStarted = deferred<void>();
     const allowFirstQueueWrite = deferred<void>();
     let isFirstQueueWrite = true;
-    const originalAddPendingSyncOps = addPendingSyncOps;
+    const originalAddPendingSyncOps = (
+      await vi.importActual<typeof import('@/src/services/syncQueue')>('@/src/services/syncQueue')
+    ).addPendingSyncOps;
     const addOps = vi.spyOn(await import('@/src/services/syncQueue'), 'addPendingSyncOps')
       .mockImplementation(async (ops) => {
         if (isFirstQueueWrite) {
@@ -2319,7 +2320,9 @@ describe('optimistic page creation', () => {
     const firstQueueWriteStarted = deferred<void>();
     const allowFirstQueueWrite = deferred<void>();
     let isFirstQueueWrite = true;
-    const originalAddPendingSyncOps = addPendingSyncOps;
+    const originalAddPendingSyncOps = (
+      await vi.importActual<typeof import('@/src/services/syncQueue')>('@/src/services/syncQueue')
+    ).addPendingSyncOps;
     const addOps = vi.spyOn(await import('@/src/services/syncQueue'), 'addPendingSyncOps')
       .mockImplementation(async (ops) => {
         if (isFirstQueueWrite) {
