@@ -240,3 +240,5 @@ Sync push, page resync, and pull now share `readSyncPageRequestBody` for bounded
 Optimistic page replacement and restart recovery now use `readPageReplacementSnapshot` to read the temporary page, durable page, and active-page selection from one IndexedDB snapshot. The callers keep their distinct in-flight-save and newer-edit recovery rules. Both focused replacement cases pass, root typecheck passes, and Fallow's duplicate-line count falls from 22 to 12.
 
 The two durable queue-count helpers used only by `/sync/status` are private to the route module. Their tests now invoke the registered route, covering active counts, retained failures, and the database-error response; the queue-status and Worker security suites pass (37 tests), Worker typecheck passes, and Fallow's unused-export count falls from two to zero.
+
+Removed the `replaceTempPage` pass-through and routed both callers directly to `replacePageAtomically`. The temporary-ID restart recovery and queued edit replay tests pass (2 tests), with root typecheck clean.
