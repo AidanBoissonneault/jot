@@ -65,41 +65,42 @@ export function createWorkerStorePersistence(supabase: WorkerSupabaseClient) {
     return record;
   }
 
+  /** Transforms mapping entries while preserving malformed collection values. */
+  function mapBlockMappings(
+    value: unknown,
+    mapEntry: (entry: unknown) => unknown,
+  ): WorkerStore['blockMappings'] {
+    return Object.fromEntries(
+      Object.entries(safeRecord<unknown>(value)).map(([pageId, entries]) => [
+        pageId,
+        Array.isArray(entries) ? entries.map(mapEntry) : entries,
+      ]),
+    ) as WorkerStore['blockMappings'];
+  }
+
   /** Restores optional mapping values from an untrusted serialized store. */
   function normalizeBlockMappings(value: unknown): WorkerStore['blockMappings'] {
-    const mappings = safeRecord<unknown>(value);
-    return Object.fromEntries(Object.entries(mappings).map(([pageId, entries]) => [
-      pageId,
-      Array.isArray(entries)
-        ? entries.map((entry) => {
-            if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return entry;
-            const mapping = entry as Record<string, unknown>;
-            return {
-              ...mapping,
-              lastSyncedHash: typeof mapping.lastSyncedHash === 'string' ? mapping.lastSyncedHash : '',
-              newState: mapping.newState ?? null,
-              oldState: mapping.oldState ?? null,
-            };
-          })
-        : entries,
-    ])) as WorkerStore['blockMappings'];
+    return mapBlockMappings(value, (entry) => {
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return entry;
+      const mapping = entry as Record<string, unknown>;
+      return {
+        ...mapping,
+        lastSyncedHash: typeof mapping.lastSyncedHash === 'string' ? mapping.lastSyncedHash : '',
+        newState: mapping.newState ?? null,
+        oldState: mapping.oldState ?? null,
+      };
+    });
   }
 
   /** Keeps block identities remote while leaving content baselines in local storage. */
   function blockMappingsWithoutLocalBaselines(value: unknown): WorkerStore['blockMappings'] {
-    const mappings = safeRecord<unknown>(value);
-    return Object.fromEntries(Object.entries(mappings).map(([pageId, entries]) => [
-      pageId,
-      Array.isArray(entries)
-        ? entries.map((entry) => {
-            if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return entry;
-            const mapping = entry as Record<string, unknown>;
-            if (mapping.localBaselineAcknowledged !== true) return mapping;
-            const { newState: _newState, oldState: _oldState, lastSyncedHash: _hash, ...identity } = mapping;
-            return identity;
-          })
-        : entries,
-    ])) as WorkerStore['blockMappings'];
+    return mapBlockMappings(value, (entry) => {
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return entry;
+      const mapping = entry as Record<string, unknown>;
+      if (mapping.localBaselineAcknowledged !== true) return mapping;
+      const { newState: _newState, oldState: _oldState, lastSyncedHash: _hash, ...identity } = mapping;
+      return identity;
+    });
   }
 
   /** Loads and normalizes persisted synchronization state. */

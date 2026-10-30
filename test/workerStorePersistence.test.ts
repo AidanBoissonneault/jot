@@ -100,11 +100,45 @@ describe('worker sync-state persistence failures', () => {
     expect(({} as { title?: string }).title).toBeUndefined();
   });
 
+  it('normalizes mapping fields and preserves malformed serialized values', async () => {
+    const { client } = fakeSupabase(undefined, {
+      block_mappings_json: {
+        page: [null, 'invalid', { lastSyncedHash: 42 }],
+        malformedCollection: { retained: true },
+      },
+    });
+    const persistence = createWorkerStorePersistence(client);
+
+    const state = await persistence.readJottathingSyncState(42);
+
+    expect(state.blockMappings.page).toEqual([
+      null,
+      'invalid',
+      { lastSyncedHash: '', newState: null, oldState: null },
+    ]);
+    expect(state.blockMappings.malformedCollection).toEqual({ retained: true });
+  });
+
   it('writes synchronization state with one installation-keyed upsert', async () => {
     const { calls, client, upserts } = fakeSupabase();
     const persistence = createWorkerStorePersistence(client);
+    const mapping = (localBaselineAcknowledged: boolean) => ({
+      jottathingBlockId: 'block',
+      kind: 'paragraph',
+      lastSyncedHash: 'hash',
+      localNodeId: 'node',
+      localPageId: 'page',
+      localBaselineAcknowledged,
+      newState: { type: 'paragraph' } as never,
+      notionBlockId: 'notion-block',
+      oldState: { type: 'paragraph' } as never,
+      order: 0,
+    });
 
-    await persistence.writeStore(store);
+    await persistence.writeStore({
+      ...store,
+      blockMappings: { page: [mapping(true), mapping(false)] },
+    });
 
     expect(calls).toEqual(['write']);
     expect(upserts).toHaveLength(1);
@@ -112,11 +146,28 @@ describe('worker sync-state persistence failures', () => {
     expect(upserts[0]?.payload).toMatchObject({
       installation_id: 42,
       note_pages_json: {},
-      block_mappings_json: {},
+      block_mappings_json: {
+        page: [
+          { jottathingBlockId: 'block', localBaselineAcknowledged: true },
+          {
+            jottathingBlockId: 'block',
+            localBaselineAcknowledged: false,
+            lastSyncedHash: 'hash',
+            newState: { type: 'paragraph' },
+            oldState: { type: 'paragraph' },
+          },
+        ],
+      },
       parent_pages_json: {},
       project_pages_json: {},
       project_blocks_json: {},
       thread_blocks_json: {},
     });
+    const payload = upserts[0]?.payload as {
+      block_mappings_json: { page: Array<Record<string, unknown>> };
+    };
+    expect(payload.block_mappings_json.page[0]).not.toHaveProperty('lastSyncedHash');
+    expect(payload.block_mappings_json.page[0]).not.toHaveProperty('newState');
+    expect(payload.block_mappings_json.page[0]).not.toHaveProperty('oldState');
   });
 });
