@@ -429,7 +429,10 @@ function displayBlock(block?: DocumentContent): string {
     return `${type}: ${src || 'media'}`;
   }
   const text = textFrom(block).trim();
-  return text || (type === 'horizontalRule' ? 'Divider' : type);
+  if (text) return text;
+  if (type === 'horizontalRule') return 'Divider';
+  if (type === 'paragraph') return 'Empty paragraph';
+  return type;
 }
 
 function textFrom(block: DocumentContent): string {

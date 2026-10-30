@@ -59,6 +59,8 @@ Manual resync checks the active account, unblocks and redrives durable queue wor
 
 When a manual resync finds exactly one identical empty paragraph added on each side, it keeps Notion's block identity and removes the duplicate automatically. Multiple matching empty paragraphs remain in review because their spacing may be intentional.
 
+Conflict review displays the last shared block beside separately highlighted Jottathing and Notion changes. It lists only rows that need a user choice; added and removed text use distinct colors, and matching new blocks retain the keep-one-or-both choice.
+
 ## Simplification plan
 
 Keep each slice independently reviewable: one behavior change, focused tests, then a commit. Preserve current page content, source provenance, offline edits, conflict review, account isolation, and deletion safety.

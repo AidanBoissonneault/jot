@@ -22,6 +22,7 @@ const emit = defineEmits<{
 
 const rows = ref<ConflictRow[]>([]);
 const remoteUnavailableAcknowledged = ref(false);
+const reviewRows = computed(() => rows.value.filter((row) => row.needsChoice || row.duplicate));
 
 watch(() => props.conflict, (conflict) => {
   rows.value = createRows(conflict);
@@ -48,6 +49,12 @@ function displayBlock(block?: DocumentContent): string {
   return syncConflictBlockText(block);
 }
 
+function changeParts(base?: DocumentContent, version?: DocumentContent) {
+  if (!version && base) return [{ kind: 'removed' as const, text: displayBlock(base) }];
+  if (version && !base) return [{ kind: 'added' as const, text: displayBlock(version) }];
+  return diffParts(base, version);
+}
+
 function resolve() {
   const choices = Object.fromEntries(rows.value.map((row) => [row.id, row.choice]));
   emit('resolve', buildSyncConflictMerge(props.conflict, rows.value, choices));
@@ -59,8 +66,8 @@ function resolve() {
     <section class="modal sync-conflict-modal" :class="{ 'has-error': error }">
       <h2 id="sync-conflict-title">{{ conflict.reason === 'duplicates' ? 'Resolve duplicate blocks' : 'Merge sync changes' }}</h2>
       <p v-if="error" class="sync-conflict-error" role="alert">{{ error }}</p>
-      <p v-if="conflict.reason === 'duplicates'">{{ conflict.targetTitle }} has identical new blocks on both sides. Choose whether to keep the Jottathing copy, the Notion copy, or both.</p>
-      <p v-else>{{ conflict.targetTitle }} has content that needs review. New blocks are preserved; exact duplicates require a separate choice, and blocks changed on both sides show a diff.</p>
+      <p v-if="conflict.reason === 'duplicates'">{{ conflict.targetTitle }} has matching new blocks. Review the side-by-side changes and choose which copies to keep.</p>
+      <p v-else>{{ conflict.targetTitle }} has changes that need review. New blocks that do not conflict will be preserved automatically.</p>
 
       <div v-if="!conflict.remoteContent" class="sync-conflict-warning" role="alert">
         Notion contains blocks this editor cannot represent. The available resolution replaces the Notion content with the local version.
@@ -71,7 +78,16 @@ function resolve() {
       </div>
 
       <div v-else class="sync-conflict-rows">
-        <article v-for="row in rows" :key="row.id" class="sync-conflict-row">
+        <article
+          v-for="(row, index) in reviewRows"
+          :key="row.id"
+          class="sync-conflict-row"
+          :class="{ 'has-three-way': row.bothEdited || row.duplicate }"
+        >
+          <div class="sync-conflict-row-heading">
+            <strong>Block {{ index + 1 }}</strong>
+            <span>{{ row.duplicate ? 'Matching additions' : 'Change needs review' }}</span>
+          </div>
           <div class="sync-conflict-blocks">
             <div v-if="row.local && !row.internal" class="sync-conflict-side">
               <strong>Jottathing</strong>
@@ -85,23 +101,23 @@ function resolve() {
             <p v-if="row.localDeleted && row.notion && row.notionChanged" class="sync-conflict-deletion">Jottathing removed this block while Notion changed it.</p>
             <p v-if="row.notionDeleted && row.local && row.localChanged" class="sync-conflict-deletion">Notion removed this block while Jottathing changed it.</p>
           </div>
-          <div v-if="row.bothEdited && row.local && row.notion && !row.internal" class="sync-conflict-diff-wrap">
-            <p>Both sides changed since the last shared version. Compare each version with that baseline, then choose one.</p>
-            <div v-if="row.base" class="sync-conflict-three-way">
+          <div v-if="(row.bothEdited || row.duplicate) && row.local && row.notion && !row.internal" class="sync-conflict-diff-wrap">
+            <p>{{ row.duplicate ? 'Both blocks are new and have matching content.' : 'Compare each side with the last synced version.' }}</p>
+            <div class="sync-conflict-three-way">
               <div>
                 <strong>Last synced</strong>
-                <pre class="sync-conflict-diff">{{ displayBlock(row.base) }}</pre>
+                <pre class="sync-conflict-diff">{{ row.base ? displayBlock(row.base) : 'No shared version' }}</pre>
               </div>
               <div>
-                <strong>Jottathing changes</strong>
-                <pre class="sync-conflict-diff"><span v-for="(part, index) in diffParts(row.base, row.local)" :key="index" :class="part.kind">{{ part.text }}</span></pre>
+                <strong>Jottathing</strong>
+                <pre class="sync-conflict-diff"><span v-for="(part, index) in changeParts(row.base, row.local)" :key="index" :class="part.kind">{{ part.text }}</span></pre>
               </div>
               <div>
-                <strong>Notion changes</strong>
-                <pre class="sync-conflict-diff"><span v-for="(part, index) in diffParts(row.base, row.notion)" :key="index" :class="part.kind">{{ part.text }}</span></pre>
+                <strong>Notion</strong>
+                <pre class="sync-conflict-diff"><span v-for="(part, index) in changeParts(row.base, row.notion)" :key="index" :class="part.kind">{{ part.text }}</span></pre>
               </div>
             </div>
-            <div class="sync-conflict-diff-legend"><span class="removed">− Jottathing</span><span class="added">+ Notion</span></div>
+            <div class="sync-conflict-diff-legend"><span class="removed">\u2212 Removed</span><span class="added">+ Added</span><span>Unmarked text is unchanged</span></div>
             <pre class="sync-conflict-diff"><span v-for="(part, index) in diffParts(row.local, row.notion)" :key="index" :class="part.kind">{{ part.text }}</span></pre>
           </div>
           <p v-else-if="row.duplicate" class="sync-conflict-duplicate">

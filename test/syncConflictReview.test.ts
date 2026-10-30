@@ -259,6 +259,7 @@ describe('sync conflict block matching', () => {
 
   it('formats missing blocks and media using stable, readable labels', () => {
     expect(syncConflictBlockText()).toBe('Block deleted');
+    expect(syncConflictBlockText({ type: 'paragraph' })).toBe('Empty paragraph');
     expect(syncConflictBlockText({
       type: 'image',
       attrs: { src: 'https://files.example.test/page/image.png?expires=old' },
