@@ -154,3 +154,5 @@ The media extension no longer re-exports the YouTube URL utility; the editor and
 The Worker now defines `BlockPosition` once in `managedBlockIdentity.ts`; block operations and shared utilities import that type. Managed-block and queue-operation suites pass (16 tests), root and Worker typechecks pass, and Fallow no longer reports a duplicate `BlockPosition` export.
 
 The sync queue no longer contains its unused automatic project-rebase path or merge helpers (251 lines including tests). The active conflict path remains the user-reviewed merge, which persists a reviewed project snapshot before replacing blocked queue work. Queue payload, conflict review, auto-merge, and project-source suites pass (13 tests), with root and Worker typechecks clean.
+
+Legal version constants and acceptance-record builders/validators are now private to `src/services/legal.ts`; the app API is the current-acceptance read/write flow plus public policy URLs. The legal acceptance and page-route tests pass (4 tests), with root and Worker typechecks clean.
