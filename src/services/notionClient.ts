@@ -1279,21 +1279,35 @@ async function replacePageAtomically(tempPage: ProjectPage, realPage: ProjectPag
         ? 'saving'
         : currentRealPage?.syncState ?? realPage.syncState,
     };
-    const pages = storedPages.filter((page) => page.id !== tempPage.id && page.id !== realPage.id);
-    pages.push(replacement);
-    const activePageIdsByProject = {
-      ...((stored.activePageIdsByProject as Record<string, string> | undefined) ?? {}),
-    };
-    if (activePageIdsByProject[realPage.projectId] === tempPage.id) {
-      activePageIdsByProject[realPage.projectId] = realPage.id;
-    }
-
-    await idbSetMany({ pages, activePageIdsByProject });
-    workspaceWriteVersion += 1;
+    await persistPageReplacement(
+      storedPages,
+      stored.activePageIdsByProject as Record<string, string> | undefined,
+      tempPage.id,
+      replacement,
+    );
   });
   workspaceWriteQueue = write.then(() => undefined, () => undefined);
   await write;
   rememberPageIdAlias(tempPage.id, realPage.id);
+}
+
+/** Replaces a temporary page and repairs its active-page selection in one write. */
+async function persistPageReplacement(
+  storedPages: ProjectPage[],
+  storedActivePageIds: Record<string, string> | undefined,
+  temporaryPageId: string,
+  replacement: ProjectPage,
+): Promise<void> {
+  const pages = storedPages.filter((page) =>
+    page.id !== temporaryPageId && page.id !== replacement.id,
+  );
+  pages.push(replacement);
+  const activePageIdsByProject = { ...storedActivePageIds };
+  if (activePageIdsByProject[replacement.projectId] === temporaryPageId) {
+    activePageIdsByProject[replacement.projectId] = replacement.id;
+  }
+  await idbSetMany({ pages, activePageIdsByProject });
+  workspaceWriteVersion += 1;
 }
 
 async function persistRebasedProjectSnapshots(
@@ -3116,18 +3130,12 @@ async function removePersistedTemporaryPageDuplicate(
         })
       : currentDurablePage;
 
-    const pages = storedPages.filter((page) =>
-      page.id !== currentTempPage.id && page.id !== currentDurablePage.id,
+    await persistPageReplacement(
+      storedPages,
+      stored.activePageIdsByProject as Record<string, string> | undefined,
+      currentTempPage.id,
+      recoveredPage,
     );
-    pages.push(recoveredPage);
-    const activePageIdsByProject = {
-      ...((stored.activePageIdsByProject as Record<string, string> | undefined) ?? {}),
-    };
-    if (activePageIdsByProject[recoveredPage.projectId] === currentTempPage.id) {
-      activePageIdsByProject[recoveredPage.projectId] = recoveredPage.id;
-    }
-    await idbSetMany({ pages, activePageIdsByProject });
-    workspaceWriteVersion += 1;
     return { page: recoveredPage, changed: recoveredPage !== currentDurablePage };
   });
   workspaceWriteQueue = write.then(() => undefined, () => undefined);
