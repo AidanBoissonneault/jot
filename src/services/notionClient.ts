@@ -5901,35 +5901,27 @@ export const notionClient = {
   async archiveProjectPage(pageId: string): Promise<ProjectPage> {
     const { activePageIdsByProject, pages, projects, page, project } = await requirePageWithProject(pageId);
     pageId = page.id;
+    const nextPage = pages.find((storedPage) =>
+      storedPage.projectId === page.projectId &&
+      storedPage.id !== page.id &&
+      storedPage.status !== 'archived',
+    );
+    if (!nextPage) {
+      throw new Error('A project must keep at least one page. Create another page before deleting this one.');
+    }
 
     const archivedPage = markPageDirty({
       ...page,
       status: 'archived' as const,
     });
-    const pagesAfterArchive = pages.map((storedPage) =>
+    const nextPages = pages.map((storedPage) =>
       storedPage.id === archivedPage.id ? archivedPage : storedPage,
     );
-    const replacementPage =
-      pagesAfterArchive.find(
-        (storedPage) =>
-          storedPage.projectId === page.projectId && storedPage.status !== 'archived',
-      ) ?? {
-        ...createEmptyPage(page.projectId, 'Untitled Page'),
-        workspaceId: page.workspaceId,
-        syncMode: page.syncMode ?? project.syncMode ?? 'local',
-        syncAccountId: page.syncAccountId,
-        syncWorkspaceId: page.syncWorkspaceId,
-      };
-    const nextPages = pagesAfterArchive.some(
-      (storedPage) => storedPage.id === replacementPage.id,
-    )
-      ? pagesAfterArchive
-      : [...pagesAfterArchive, replacementPage];
 
     await writeStorage({
       activePageIdsByProject: {
         ...activePageIdsByProject,
-        [page.projectId]: replacementPage.id,
+        [page.projectId]: nextPage.id,
       },
       pages: nextPages,
     });
@@ -5949,12 +5941,12 @@ export const notionClient = {
       if (syncedArchivedPage.syncState === 'error') {
         throw new Error(syncedArchivedPage.syncMessage ?? 'Unable to archive this page in Notion.');
       }
-      if (replacementPage.syncMode === 'notion') {
-        await persistPage(await enqueuePageSync(replacementPage, project));
+      if (nextPage.syncMode === 'notion') {
+        await persistPage(await enqueuePageSync(nextPage, project));
       }
     }
 
-    return replacementPage;
+    return nextPage;
   },
 
   async updateProjectPage(page: ProjectPage): Promise<ProjectPage> {

@@ -55,6 +55,8 @@ The event queue carries opaque references; the page/block payload is held in an 
 
 Page moves have two paths. Moving within a project only changes page order. Moving across projects creates a new page identity in the destination and archives the source; if it was the source's last active page, a blank replacement keeps the source project usable. The operation also repairs active-page selections and pending sync work, and flushes/reloads first when leaving a Notion-backed source.
 
+Direct page archiving requires another active page in the same project. It rejects the last page before changing local storage and selects an existing sibling after an archive instead of creating a replacement.
+
 Manual resync checks the active account, unblocks and redrives durable queue work, sends unbaselined project snapshots, reconciles dirty or failed pages, then flushes again. It reloads the Notion workspace only after local queues settle with no conflicts or failed uploads; otherwise it leaves remote reload pending.
 
 When a manual resync finds exactly one identical empty paragraph added on each side, it keeps Notion's block identity and removes the duplicate automatically. Multiple matching empty paragraphs remain in review because their spacing may be intentional.

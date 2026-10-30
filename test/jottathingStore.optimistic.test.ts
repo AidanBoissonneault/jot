@@ -2080,6 +2080,61 @@ describe('project metadata', () => {
   });
 });
 
+describe('project page archive invariant', () => {
+  function storageForPages(pages: ProjectPage[]) {
+    const project = {
+      ...baseProject,
+      workspaceId: testLocalWorkspace.id,
+      syncMode: 'local' as const,
+    };
+    const scopedPages = pages.map((page) => localWorkspacePage({
+      ...page,
+      projectId: project.id,
+    }));
+    return {
+      ...localWorkspaceStorage(scopedPages[0] ?? localWorkspacePage(basePage), project),
+      activePageIdsByProject: { [project.id]: scopedPages[0]?.id ?? '' },
+      currentProjectId: project.id,
+      currentProjectIdByWorkspace: { [testLocalWorkspace.id]: project.id },
+      currentWorkspaceId: testLocalWorkspace.id,
+      hasMigratedCapturesToPages: true,
+      pages: scopedPages,
+      projects: [project],
+      syncConfig: connectedConfig,
+      workspaces: [testLocalWorkspace],
+    };
+  }
+
+  test('rejects archiving a project\'s last active page without changing storage', async () => {
+    const onlyPage = { ...basePage, id: 'only-page' };
+    resetBrowserStorage(storageForPages([onlyPage]));
+
+    await expect(notionClient.archiveProjectPage(onlyPage.id))
+      .rejects.toThrow('A project must keep at least one page.');
+
+    expect((readBrowserStorage().pages as ProjectPage[])).toMatchObject([
+      { id: onlyPage.id, status: 'active' },
+    ]);
+  });
+
+  test('archives one page and selects the remaining page without creating a replacement', async () => {
+    const firstPage = { ...basePage, id: 'first-page' };
+    const secondPage = { ...basePage, id: 'second-page' };
+    resetBrowserStorage(storageForPages([firstPage, secondPage]));
+
+    const selectedPage = await notionClient.archiveProjectPage(firstPage.id);
+    const stored = readBrowserStorage();
+
+    expect(selectedPage.id).toBe(secondPage.id);
+    expect(stored.activePageIdsByProject).toMatchObject({ [baseProject.id]: secondPage.id });
+    expect(stored.pages).toMatchObject([
+      { id: firstPage.id, status: 'archived' },
+      { id: secondPage.id, status: 'active' },
+    ]);
+    expect(stored.pages).toHaveLength(2);
+  });
+});
+
 describe('optimistic page creation', () => {
   test('appears and is selected immediately with an empty document', async () => {
     const pageSync = deferred<Response>();
