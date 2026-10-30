@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import {
-  DIRECT_MEDIA_UPLOAD_LEASE_MS,
   isDirectMediaUploadActive,
   mergeUploadedMediaAttributes,
   markUnrecoverableTransientMedia,
@@ -13,7 +12,7 @@ describe('media content helpers', () => {
   it('keeps active direct uploads out of the retry queue, then retries stale upload leases', () => {
     const now = 1_000_000;
     expect(isDirectMediaUploadActive({ uploadState: 'uploading', uploadStartedAt: now - 1000 }, now)).toBe(true);
-    expect(isDirectMediaUploadActive({ uploadState: 'uploading', uploadStartedAt: now - DIRECT_MEDIA_UPLOAD_LEASE_MS }, now)).toBe(false);
+    expect(isDirectMediaUploadActive({ uploadState: 'uploading', uploadStartedAt: now - 120_000 }, now)).toBe(false);
     expect(isDirectMediaUploadActive({ uploadState: 'local', uploadStartedAt: now - 1000 }, now)).toBe(false);
   });
 

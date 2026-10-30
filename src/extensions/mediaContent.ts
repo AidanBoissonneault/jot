@@ -1,7 +1,7 @@
 import type { DocumentContent } from '@/src/types/capture';
 
 const TRANSIENT_URL_PATTERN = /^(blob:|data:)/i;
-export const DIRECT_MEDIA_UPLOAD_LEASE_MS = 2 * 60 * 1000;
+const DIRECT_MEDIA_UPLOAD_LEASE_MS = 2 * 60 * 1000;
 
 /** Prevents the sync queue from uploading a file already being sent by the editor. */
 export function isDirectMediaUploadActive(
