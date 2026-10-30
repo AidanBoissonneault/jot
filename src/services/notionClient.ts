@@ -1262,10 +1262,12 @@ async function appendPageAtomically(page: ProjectPage): Promise<ProjectPage> {
 /** Replaces an optimistic page against the latest snapshot without dropping concurrent creates. */
 async function replacePageAtomically(tempPage: ProjectPage, realPage: ProjectPage): Promise<void> {
   const write = workspaceWriteQueue.then(async () => {
-    const stored = await idbGetMany(['pages', 'activePageIdsByProject']);
-    const storedPages = (stored.pages as ProjectPage[] | undefined) ?? [];
-    const currentTempPage = storedPages.find((page) => page.id === tempPage.id);
-    const currentRealPage = storedPages.find((page) => page.id === realPage.id);
+    const {
+      pages: storedPages,
+      activePageIdsByProject,
+      temporaryPage: currentTempPage,
+      durablePage: currentRealPage,
+    } = await readPageReplacementSnapshot(tempPage.id, realPage.id);
     const currentPage = currentTempPage ?? currentRealPage;
     const replacement: ProjectPage = {
       ...(currentPage ?? tempPage),
@@ -1281,7 +1283,7 @@ async function replacePageAtomically(tempPage: ProjectPage, realPage: ProjectPag
     };
     await persistPageReplacement(
       storedPages,
-      stored.activePageIdsByProject as Record<string, string> | undefined,
+      activePageIdsByProject,
       tempPage.id,
       replacement,
     );
@@ -1289,6 +1291,18 @@ async function replacePageAtomically(tempPage: ProjectPage, realPage: ProjectPag
   workspaceWriteQueue = write.then(() => undefined, () => undefined);
   await write;
   rememberPageIdAlias(tempPage.id, realPage.id);
+}
+
+/** Reads both replacement candidates and active-page selection from one IndexedDB snapshot. */
+async function readPageReplacementSnapshot(temporaryPageId: string, durablePageId: string) {
+  const stored = await idbGetMany(['pages', 'activePageIdsByProject']);
+  const pages = (stored.pages as ProjectPage[] | undefined) ?? [];
+  return {
+    pages,
+    activePageIdsByProject: stored.activePageIdsByProject as Record<string, string> | undefined,
+    temporaryPage: pages.find((page) => page.id === temporaryPageId),
+    durablePage: pages.find((page) => page.id === durablePageId),
+  };
 }
 
 /** Replaces a temporary page and repairs its active-page selection in one write. */
@@ -3099,10 +3113,12 @@ async function removePersistedTemporaryPageDuplicate(
   durablePage: ProjectPage,
 ): Promise<{ page: ProjectPage; changed: boolean }> {
   const write = workspaceWriteQueue.then(async () => {
-    const stored = await idbGetMany(['pages', 'activePageIdsByProject']);
-    const storedPages = (stored.pages as ProjectPage[] | undefined) ?? [];
-    const currentTempPage = storedPages.find((page) => page.id === tempPage.id);
-    const currentDurablePage = storedPages.find((page) => page.id === durablePage.id);
+    const {
+      pages: storedPages,
+      activePageIdsByProject,
+      temporaryPage: currentTempPage,
+      durablePage: currentDurablePage,
+    } = await readPageReplacementSnapshot(tempPage.id, durablePage.id);
     if (!currentTempPage || !currentDurablePage) {
       return { page: currentDurablePage ?? durablePage, changed: false };
     }
@@ -3132,7 +3148,7 @@ async function removePersistedTemporaryPageDuplicate(
 
     await persistPageReplacement(
       storedPages,
-      stored.activePageIdsByProject as Record<string, string> | undefined,
+      activePageIdsByProject,
       currentTempPage.id,
       recoveredPage,
     );
