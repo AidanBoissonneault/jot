@@ -975,6 +975,120 @@ function hasSameReloadTarget(first: SyncConfig, second: SyncConfig): boolean {
     first.selectedParentPageId === second.selectedParentPageId;
 }
 
+type ReloadedWorkspaceStorage = Pick<
+  Required<JottathingStorage>,
+  'activePageIdsByProject' | 'currentProjectId' | 'pages' | 'projects' | 'syncConfig' | 'notionHydrationSource'
+>;
+
+/** Combines the Notion snapshot with local-only data and retained editor state. */
+function buildReloadedWorkspaceStorage(
+  response: SyncReloadResponse,
+  local: Required<JottathingStorage>,
+  syncConfig: SyncConfig,
+  nextSyncConfig: SyncConfig,
+): ReloadedWorkspaceStorage {
+  const notionWorkspaceId = local.workspaces.find((workspace) =>
+    workspace.kind === 'notion' && workspace.accountId === syncConfig.userId &&
+    workspace.notionWorkspaceId === syncConfig.workspaceId,
+  )?.id;
+  const localProjectsById = new Map(local.projects.map((project) => [project.id, project]));
+  const localConflictsByProjectId = new Map(local.projects.map((project) => [
+    project.id,
+    project.syncConflicts,
+  ]));
+  const movedBackToLocalProjectIds = new Set(local.projects
+    .filter((project) => project.syncMode === 'local' && project.status !== 'archived')
+    .map((project) => project.id));
+  const notionProjects = response.projects
+    .filter((project) => !movedBackToLocalProjectIds.has(project.id))
+    .map((project) => {
+      const normalized = normalizeProject(project);
+      const localProject = localProjectsById.get(normalized.id);
+      const syncConflicts = localConflictsByProjectId.get(normalized.id);
+      return {
+        ...normalized,
+        stateSyncBaselineContent: localProject?.stateSyncBaselineContent ?? normalized.stateContent,
+        workspaceId: notionWorkspaceId,
+        syncMode: 'notion' as const,
+        ...(syncConflicts?.length ? { syncConflicts } : {}),
+      };
+    })
+    .sort(sortProjectsByUpdatedDesc);
+
+  const localPagesById = new Map(local.pages.map((page) => [page.id, page]));
+  const notionPages = response.pages
+    .filter((page) => !movedBackToLocalProjectIds.has(page.projectId))
+    .map((remotePage) => {
+      const normalized = normalizeStoredPage(
+        remotePage,
+        'notion',
+        syncConfig.userId,
+        syncConfig.workspaceId,
+      );
+      const localPage = localPagesById.get(normalized.id);
+      return {
+        ...normalized,
+        syncBaselineContent: localPage?.syncBaselineContent ?? normalized.content,
+        ...(typeof localPage?.pageOrder === 'number' ? { pageOrder: localPage.pageOrder } : {}),
+        workspaceId: notionWorkspaceId,
+        syncMode: 'notion' as const,
+        syncAccountId: syncConfig.userId,
+        syncWorkspaceId: syncConfig.workspaceId,
+        ...(localPage
+          ? {
+            content: preserveLocalMediaSources(localPage.content, normalized.content),
+            localRevision: localPage.localRevision ?? normalized.localRevision,
+          }
+          : {}),
+      };
+    });
+
+  const notionPageIds = new Set(notionPages.map((page) => page.id));
+  const localOnlyPages = local.pages.filter(
+    (page) => page.syncMode === 'local' && !notionPageIds.has(page.id),
+  );
+  const pages = [...notionPages, ...localOnlyPages];
+  const notionProjectIds = new Set(notionProjects.map((project) => project.id));
+  const localOnlyProjectIds = new Set(localOnlyPages.map((page) => page.projectId));
+  const localOnlyProjects = local.projects.filter(
+    (project) => localOnlyProjectIds.has(project.id) && !notionProjectIds.has(project.id),
+  );
+  const activePageIds = new Set(
+    pages.filter((page) => page.status !== 'archived').map((page) => page.id),
+  );
+  const projects = [...notionProjects, ...localOnlyProjects]
+    .map((project) => {
+      const syncConflicts = project.syncConflicts?.filter((conflict) =>
+        conflict.targetType !== 'page' || activePageIds.has(conflict.targetId),
+      );
+      return {
+        ...project,
+        ...(syncConflicts?.length ? { syncConflicts } : { syncConflicts: undefined }),
+      };
+    })
+    .sort(sortProjectsByUpdatedDesc);
+  const activePageIdsByProject = createCompatibleActivePageIds(
+    projects,
+    pages,
+    { ...(response.activePageIdsByProject ?? {}), ...local.activePageIdsByProject },
+  );
+  const activeProjects = projects.filter((project) => project.status !== 'archived');
+  const currentProjectId = activeProjects.some((project) => project.id === local.currentProjectId)
+    ? local.currentProjectId
+    : activeProjects.some((project) => project.id === response.currentProjectId)
+      ? response.currentProjectId ?? ''
+      : activeProjects[0]?.id ?? '';
+
+  return {
+    activePageIdsByProject,
+    currentProjectId,
+    pages,
+    projects,
+    syncConfig: nextSyncConfig,
+    notionHydrationSource: hydrationSource(nextSyncConfig),
+  };
+}
+
 function syncQueueBelongsToActiveAccount(syncConfig: SyncConfig): boolean {
   return syncConfig.syncQueueOwnerUserId !== null && (
     syncConfig.syncQueueOwnerUserId === undefined ||
@@ -5217,111 +5331,12 @@ export const notionClient = {
     }
 
     const localStorageToPreserve = await readStorage();
-    const notionWorkspaceId = localStorageToPreserve.workspaces.find((workspace) =>
-      workspace.kind === 'notion' && workspace.accountId === syncConfig.userId &&
-      workspace.notionWorkspaceId === syncConfig.workspaceId,
-    )?.id;
-    const localConflictsByProjectId = new Map(localStorageToPreserve.projects.map((project) => [
-      project.id,
-      project.syncConflicts,
-    ]));
-    const localProjectsById = new Map(localStorageToPreserve.projects.map((project) => [
-      project.id,
-      project,
-    ]));
-    const movedBackToLocalProjectIds = new Set(localStorageToPreserve.projects
-      .filter((project) => project.syncMode === 'local' && project.status !== 'archived')
-      .map((project) => project.id));
-    const notionProjects = response.projects.filter((project) =>
-      !movedBackToLocalProjectIds.has(project.id),
-    ).map((project) => {
-      const normalized = normalizeProject(project);
-      const localProject = localProjectsById.get(normalized.id);
-      const syncConflicts = localConflictsByProjectId.get(normalized.id);
-      return {
-        ...normalized,
-        stateSyncBaselineContent: localProject?.stateSyncBaselineContent ?? normalized.stateContent,
-        workspaceId: notionWorkspaceId,
-        syncMode: 'notion' as const,
-        ...(syncConflicts?.length ? { syncConflicts } : {}),
-      };
-    }).sort(sortProjectsByUpdatedDesc);
-    const localPagesById = new Map(localStorageToPreserve.pages.map((page) => [page.id, page]));
-    const notionPages = response.pages.filter((remotePage) =>
-      !movedBackToLocalProjectIds.has(remotePage.projectId),
-    ).map((remotePage) => {
-      const normalized = normalizeStoredPage(
-        remotePage,
-        'notion',
-        syncConfig.userId,
-        syncConfig.workspaceId,
-      );
-      const localPage = localPagesById.get(normalized.id);
-      return {
-        ...normalized,
-        syncBaselineContent: localPage?.syncBaselineContent ?? normalized.content,
-        ...(typeof localPage?.pageOrder === 'number' ? { pageOrder: localPage.pageOrder } : {}),
-        workspaceId: notionWorkspaceId,
-        syncMode: 'notion' as const,
-        syncAccountId: syncConfig.userId,
-        syncWorkspaceId: syncConfig.workspaceId,
-        ...(localPage
-          ? {
-            content: preserveLocalMediaSources(localPage.content, normalized.content),
-            localRevision: localPage.localRevision ?? normalized.localRevision,
-          }
-          : {}),
-      };
-    });
-    const notionPageIds = new Set(notionPages.map((page) => page.id));
-    const localOnlyPages = localStorageToPreserve.pages.filter(
-      (page) => page.syncMode === 'local' && !notionPageIds.has(page.id),
+    const reloadedStorage = buildReloadedWorkspaceStorage(
+      response,
+      localStorageToPreserve,
+      syncConfig,
+      nextSyncConfig,
     );
-    const pages = [...notionPages, ...localOnlyPages];
-    const notionProjectIds = new Set(notionProjects.map((project) => project.id));
-    const localOnlyProjectIds = new Set(localOnlyPages.map((page) => page.projectId));
-    const localOnlyProjects = localStorageToPreserve.projects.filter(
-      (project) => localOnlyProjectIds.has(project.id) && !notionProjectIds.has(project.id),
-    );
-    const activePageIds = new Set(
-      pages.filter((page) => page.status !== 'archived').map((page) => page.id),
-    );
-    const projects = [...notionProjects, ...localOnlyProjects]
-      .map((project) => {
-        const syncConflicts = project.syncConflicts?.filter((conflict) =>
-          conflict.targetType !== 'page' || activePageIds.has(conflict.targetId),
-        );
-        return {
-          ...project,
-          ...(syncConflicts?.length ? { syncConflicts } : { syncConflicts: undefined }),
-        };
-      })
-      .sort(sortProjectsByUpdatedDesc);
-    const activePageIdsByProject = createCompatibleActivePageIds(
-      projects,
-      pages,
-      {
-        ...(response.activePageIdsByProject ?? {}),
-        ...localStorageToPreserve.activePageIdsByProject,
-      },
-    );
-    const activeProjects = projects.filter((project) => project.status !== 'archived');
-    const nextCurrentProjectId = activeProjects.some(
-      (project) => project.id === localStorageToPreserve.currentProjectId,
-    )
-      ? localStorageToPreserve.currentProjectId
-      : activeProjects.some((project) => project.id === response.currentProjectId)
-        ? response.currentProjectId ?? ''
-        : activeProjects[0]?.id ?? '';
-    const localProjectsToPreserve = localStorageToPreserve.projects;
-    const reloadedStorage = {
-      activePageIdsByProject,
-      currentProjectId: nextCurrentProjectId,
-      pages,
-      projects,
-      syncConfig: nextSyncConfig,
-      notionHydrationSource: hydrationSource(nextSyncConfig),
-    };
     let applied = await writeStorage(reloadedStorage, {
       expectedVersion: startingWorkspaceWriteVersion,
     });
@@ -5345,11 +5360,12 @@ export const notionClient = {
         };
       }
 
+      const activeProjects = reloadedStorage.projects.filter((project) => project.status !== 'archived');
       const retryStorage = {
         ...reloadedStorage,
         activePageIdsByProject: createCompatibleActivePageIds(
-          projects,
-          pages,
+          reloadedStorage.projects,
+          reloadedStorage.pages,
           {
             ...(response.activePageIdsByProject ?? {}),
             ...latestStorage.activePageIdsByProject,
@@ -5359,7 +5375,7 @@ export const notionClient = {
           (project) => project.id === latestStorage.currentProjectId,
         )
           ? latestStorage.currentProjectId
-          : nextCurrentProjectId,
+          : reloadedStorage.currentProjectId,
         syncConfig: response.clearSelectedParentPage
           ? nextSyncConfig
           : latestStorage.syncConfig,
@@ -5376,7 +5392,8 @@ export const notionClient = {
       }
     }
     const blockedProjectIds = new Set(await listBlockedProjectSyncIds());
-    const blockedLocalProjects = localProjectsToPreserve.filter((project) => blockedProjectIds.has(project.id));
+    const blockedLocalProjects = localStorageToPreserve.projects
+      .filter((project) => blockedProjectIds.has(project.id));
     if (blockedLocalProjects.length) {
       const blockedIds = new Set(blockedLocalProjects.map((project) => project.id));
       await persistRebasedProjectSnapshots(
