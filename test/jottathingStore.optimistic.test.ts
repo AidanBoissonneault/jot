@@ -1727,12 +1727,10 @@ describe('project metadata', () => {
     );
     const OriginalEventSource = globalThis.EventSource;
     resetBrowserStorage({
-      activePageIdsByProject: { 'project-jottathing': 'page-jottathing' },
-      currentProjectId: 'project-jottathing',
+      ...localWorkspaceStorage(localPage),
+      hasExplicitlyLoggedOut: false,
       hasMigratedCapturesToPages: true,
       notionHydrationSource: 'http://localhost:8787::',
-      pages: [localPage],
-      projects: [baseProject],
       syncConfig: connectedConfig,
     });
 
@@ -2940,16 +2938,15 @@ describe('offline queue lifecycle', () => {
       title: 'Second local page',
       content: docWithText('untouched sibling content'),
     };
+    const notionStorage = notionWorkspaceStorage(
+      'workspace-first-sync',
+      [baseProject, secondProject],
+      [basePage, secondPage],
+    );
     resetBrowserStorage({
-      activePageIdsByProject: {
-        'project-jottathing': 'page-jottathing',
-        [secondProject.id]: secondPage.id,
-      },
-      currentProjectId: 'project-jottathing',
+      ...notionStorage,
       hasMigratedCapturesToPages: true,
-      pages: [basePage, secondPage],
-      projects: [baseProject, secondProject],
-      syncConfig: { ...connectedConfig, connected: false },
+      syncConfig: { ...notionStorage.syncConfig, connected: false },
     });
     await notionClient.updateProjectPage({
       ...basePage,
@@ -2965,21 +2962,21 @@ describe('offline queue lifecycle', () => {
     const projectEvents = await listPendingProjectSyncEvents();
     const pageOps = await listPendingSyncOps();
     expect(projectEvents.map((event) => event.projectId).sort()).toEqual([
-      'project-jottathing',
-      'project-local-two',
+      baseProject.id,
+      secondProject.id,
     ]);
     expect(new Set(pageOps.map((op) => op.pageId))).toEqual(new Set([
-      'page-jottathing',
+      basePage.id,
       'page-local-two',
     ]));
     expect(pageOps).toHaveLength(4);
-    for (const pageId of ['page-jottathing', 'page-local-two']) {
+    for (const pageId of [basePage.id, 'page-local-two']) {
       const ops = pageOps.filter((op) => op.pageId === pageId);
       expect(ops.map((op) => op.type)).toEqual(['blocks_reset', 'block_create']);
       expect(ops.every((op) => !('content' in op.payload.page))).toBe(true);
     }
     expect(readBrowserStorage().notionHydrationSource).toBe(
-      'http://localhost:8787::workspace-first-sync',
+      'http://localhost:8787::notion:test-user::workspace-first-sync',
     );
     expect(await notionClient.needsInitialNotionHydration()).toBe(false);
     expect(await notionClient.prepareLocalWorkspaceForFirstSync()).toBe(false);
@@ -2993,18 +2990,20 @@ describe('offline queue lifecycle', () => {
       value: { onLine: false },
     });
     const offlineConfig = { ...connectedConfig, connected: false };
+    const notionStorage = notionWorkspaceStorage(
+      'workspace-test',
+      [notionTestProject],
+      [{ ...notionTestPage, content: emptyDocument() }],
+    );
     resetBrowserStorage({
-      activePageIdsByProject: { 'project-jottathing': 'page-jottathing' },
-      currentProjectId: 'project-jottathing',
+      ...notionStorage,
       hasMigratedCapturesToPages: true,
-      pages: [basePage],
-      projects: [baseProject],
-      syncConfig: offlineConfig,
+      syncConfig: { ...offlineConfig, workspaceId: 'workspace-test' },
     });
 
     try {
       const offlineContent = docWithText('available after reload');
-      await notionClient.updateProjectPage({ ...basePage, content: offlineContent });
+      await notionClient.updateProjectPage({ ...notionTestPage, content: offlineContent });
 
       setActivePinia(createPinia());
       const reloadedStore = useJottathingStore();
@@ -3036,12 +3035,8 @@ describe('offline queue lifecycle', () => {
       })]),
     };
     resetBrowserStorage({
-      activePageIdsByProject: { 'project-jottathing': 'page-jottathing' },
-      currentProjectId: 'project-jottathing',
+      ...notionWorkspaceStorage('workspace-media', [baseProject], [localMediaPage]),
       hasMigratedCapturesToPages: true,
-      pages: [localMediaPage],
-      projects: [baseProject],
-      syncConfig: { ...connectedConfig, workspaceId: 'workspace-media' },
     });
     const fetchMock = vi.fn(async (url: string, _init?: RequestInit) => {
       if (String(url).endsWith('/media/upload')) {
@@ -3064,6 +3059,7 @@ describe('offline queue lifecycle', () => {
     expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
       'http://localhost:8787/sync/project',
       'http://localhost:8787/media/upload',
+      'http://localhost:8787/sync/retry?deliveryPendingOnly=true',
       'http://localhost:8787/sync/push',
     ]);
     expect(serializedPush).not.toContain('data:image/png');
@@ -3105,6 +3101,7 @@ describe('offline queue lifecycle', () => {
       expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
         'http://localhost:8787/session',
         'http://localhost:8787/sync/project',
+        'http://localhost:8787/sync/retry?deliveryPendingOnly=true',
         'http://localhost:8787/sync/push',
         'http://localhost:8787/sync/validate',
       ]);
@@ -3455,6 +3452,53 @@ function localWorkspacePage(page: ProjectPage): ProjectPage {
     syncMode: 'local',
     syncAccountId: testLocalWorkspace.accountId,
     syncWorkspaceId: undefined,
+  };
+}
+
+function notionWorkspaceStorage(
+  notionWorkspaceId: string,
+  projects: Project[],
+  pages: ProjectPage[],
+  accountId = connectedConfig.userId ?? 'notion:test-user',
+) {
+  const workspace: Workspace = {
+    ...testNotionWorkspace,
+    id: `workspace-notion-${encodeURIComponent(accountId)}-${notionWorkspaceId}`,
+    accountId,
+    notionWorkspaceId,
+  };
+  const scopedProjects = projects.map((project) => ({
+    ...project,
+    workspaceId: workspace.id,
+    syncMode: 'notion' as const,
+  }));
+  const scopedPages = pages.map((page) => ({
+    ...page,
+    workspaceId: workspace.id,
+    syncMode: 'notion' as const,
+    syncAccountId: accountId,
+    syncWorkspaceId: notionWorkspaceId,
+  }));
+  const activePageIdsByProject = Object.fromEntries(scopedProjects.map((project) => [
+    project.id,
+    scopedPages.find((page) => page.projectId === project.id)?.id ?? '',
+  ]));
+  const currentProjectId = scopedProjects[0]?.id ?? '';
+
+  return {
+    activePageIdsByProject,
+    currentProjectId,
+    currentProjectIdByWorkspace: { [workspace.id]: currentProjectId },
+    currentWorkspaceId: workspace.id,
+    pages: scopedPages,
+    projects: scopedProjects,
+    syncConfig: {
+      ...connectedConfig,
+      userId: accountId,
+      syncQueueOwnerUserId: accountId,
+      workspaceId: notionWorkspaceId,
+    },
+    workspaces: [workspace],
   };
 }
 

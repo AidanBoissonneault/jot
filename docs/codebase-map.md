@@ -258,3 +258,5 @@ Session refresh now waits for in-flight queue delivery and cancels a pending del
 The connection lifecycle test teardown now resumes and adopts the current IndexedDB writer generation after stale-context deletion tests, so a deliberate stale-writer simulation cannot silently disable persistence for later tests. All 27 lifecycle cases pass in file order.
 
 Startup now preserves the validation error and local page when the sync server cannot validate the cache; it avoids replacing that useful error with a second failed reload request. The startup regression case passes with an explicit local-workspace fixture, and root plus Worker typechecks pass.
+
+The optimistic-store fixtures now use explicit Notion scope for offline queued work and local-media upload, and verify the account plus workspace in the first-hydration marker. Queue-delivery assertions include the delivery-pending retry request. All four focused cases and root plus Worker typechecks pass.
