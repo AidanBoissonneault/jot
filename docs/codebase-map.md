@@ -235,7 +235,7 @@ Project metadata updates and capture-source registration now use `replaceProject
 
 Temporary-ID replacement and restart duplicate recovery now share `persistPageReplacement` for removing both IDs, repairing active-page selection, and persisting the result with one workspace-version increment. The overlapping-save and persisted-temp-duplicate tests pass (2), and root typecheck passes. This keeps the two recovery paths aligned; the Fallow duplication count is unchanged.
 
-Sync push, page resync, and pull now share `readSyncPageRequestBody` for bounded JSON parsing. It rejects oversized bodies with the existing 413 response and normalizes absent or invalid JSON to `{}`; route-specific validation remains in each route. The new parser tests and Worker security/request utility suites pass (41 tests total), and Worker typecheck passes.
+Sync push, page resync, and pull now share `readSyncPageRequestBody` for bounded JSON parsing. It rejects oversized bodies with the existing 413 response and normalizes absent or invalid JSON to `{}`; route-specific validation remains in each route. Push reads `ops` directly after the size guard establishes a body object. The parser tests and Worker security/request utility suites pass (41 tests total), and Worker typecheck passes.
 
 Optimistic page replacement and restart recovery now use `readPageReplacementSnapshot` to read the temporary page, durable page, and active-page selection from one IndexedDB snapshot. The callers keep their distinct in-flight-save and newer-edit recovery rules. Both focused replacement cases pass, root typecheck passes, and Fallow's duplicate-line count falls from 22 to 12.
 
