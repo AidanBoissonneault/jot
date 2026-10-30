@@ -168,3 +168,5 @@ The Worker HMAC signer is private to `notionAuth.ts`; security tests now generat
 `/sync/status` now counts active and dead-lettered queue payloads through one shared query builder. The unused boolean payload probe is removed; queue-status and Worker queue tests pass (6 tests), and the Worker typecheck passes.
 
 The direct-media upload lease duration is private to `mediaContent.ts`; its boundary remains covered at the 2-minute expiry. All media-content tests pass (14), with root and Worker typechecks clean.
+
+The IndexedDB proxy-cloning helper is private to `idbStore.ts`; the provenance test now verifies it through the public `idbSet`/`idbGet` boundary. Source-provenance tests pass (11), with root and Worker typechecks clean.
