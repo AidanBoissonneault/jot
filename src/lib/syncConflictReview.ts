@@ -238,6 +238,7 @@ function changedConflictBlocks(
   return [];
 }
 
+/** Builds a readable token diff, falling back to replacement for large comparisons. */
 export function syncConflictDiffParts(
   local?: DocumentContent,
   notion?: DocumentContent,

@@ -4,9 +4,9 @@ import type { DocumentContent } from '@/src/types/capture';
 import type { SyncContentConflict } from '@/src/types/sync';
 import { normalizeJottathingBlockIds } from '@/src/extensions/jottathingBlockIds';
 import { isProjectStateMetadataNode } from '@/src/extensions/sourceRegistry';
+import { syncConflictDiffParts as diffParts } from '@/src/lib/syncConflictReview';
 
 type Choice = 'local' | 'notion' | 'both' | '';
-type DiffPart = { kind: 'added' | 'context' | 'removed'; text: string };
 type ConflictRow = {
   id: string;
   base?: DocumentContent;
@@ -200,58 +200,6 @@ function displayBlock(block?: DocumentContent): string {
 
 function textFrom(block: DocumentContent): string {
   return (block.text ?? '') + (block.content ?? []).map(textFrom).join('');
-}
-
-function diffParts(local?: DocumentContent, notion?: DocumentContent): DiffPart[] {
-  const before = displayBlock(local);
-  const after = displayBlock(notion);
-  if (before === after) return [{ kind: 'context', text: before }];
-
-  const left = before.match(/\s+|[^\s]+/g) ?? [];
-  const right = after.match(/\s+|[^\s]+/g) ?? [];
-  if (left.length * right.length > 160_000) {
-    return [
-      { kind: 'removed', text: before },
-      { kind: 'added', text: after },
-    ];
-  }
-
-  const width = right.length + 1;
-  const table = new Uint32Array((left.length + 1) * width);
-  for (let row = left.length - 1; row >= 0; row -= 1) {
-    for (let column = right.length - 1; column >= 0; column -= 1) {
-      const cell = row * width + column;
-      table[cell] = left[row] === right[column]
-        ? table[(row + 1) * width + column + 1] + 1
-        : Math.max(table[(row + 1) * width + column], table[row * width + column + 1]);
-    }
-  }
-
-  const operations: DiffPart[] = [];
-  let row = 0;
-  let column = 0;
-  while (row < left.length || column < right.length) {
-    let kind: DiffPart['kind'];
-    let text: string;
-    if (row < left.length && column < right.length && left[row] === right[column]) {
-      kind = 'context';
-      text = left[row++];
-      column += 1;
-    } else if (
-      row < left.length &&
-      (column >= right.length || table[(row + 1) * width + column] >= table[row * width + column + 1])
-    ) {
-      kind = 'removed';
-      text = left[row++];
-    } else {
-      kind = 'added';
-      text = right[column++];
-    }
-    const previous = operations.at(-1);
-    if (previous?.kind === kind) previous.text += text;
-    else operations.push({ kind, text });
-  }
-  return operations;
 }
 
 function resolve() {

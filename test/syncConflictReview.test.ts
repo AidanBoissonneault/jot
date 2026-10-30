@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildSyncConflictMerge,
+  syncConflictDiffParts,
   type SyncConflictRow,
 } from '@/src/lib/syncConflictReview';
 import type { SyncContentConflict } from '@/src/types/sync';
@@ -86,6 +87,32 @@ describe('buildSyncConflictMerge', () => {
 
     expect(merged.attrs?.jottathingDeleteNotionBlockIds).toEqual(['notion-delete']);
     expect(merged.content).toEqual([]);
+  });
+});
+
+describe('syncConflictDiffParts', () => {
+  it('keeps identical content as one context part', () => {
+    expect(syncConflictDiffParts(block('same', 'same text'), block('same', 'same text')))
+      .toEqual([{ kind: 'context', text: 'same text' }]);
+  });
+
+  it('preserves surrounding words and spaces around a replacement', () => {
+    expect(syncConflictDiffParts(block('local', 'The quick fox'), block('notion', 'The brave fox')))
+      .toEqual([
+        { kind: 'context', text: 'The ' },
+        { kind: 'removed', text: 'quick' },
+        { kind: 'added', text: 'brave' },
+        { kind: 'context', text: ' fox' },
+      ]);
+  });
+
+  it('bounds large comparisons by showing a whole-block replacement', () => {
+    const localText = 'old '.repeat(401);
+    const notionText = 'new '.repeat(401);
+    expect(syncConflictDiffParts(block('local', localText), block('notion', notionText))).toEqual([
+      { kind: 'removed', text: localText.trim() },
+      { kind: 'added', text: notionText.trim() },
+    ]);
   });
 });
 
