@@ -185,4 +185,6 @@ Worker database-value and discovery parsing now share the documented `nestedStri
 
 Workspace-menu page drag handling now resolves the dragged page once through a documented helper used by hover and drop actions. The existing project expansion, page-slot ordering, and move events remain in their callers. Root plus Worker typechecks and the extension production build pass.
 
+Project metadata and source sync now share the documented `deliverProjectSyncEvent` lifecycle for delivery-blocked work, offline state, request errors, conflict persistence, and retry scheduling. Callers retain their distinct parent-page and source-baseline success handling. Four focused project-sync cases, three queue-payload tests, and root plus Worker typechecks pass.
+
 The latest full test run reports 434 passing and 40 failing tests across 60 files. Failures remain confined to `connectionLifecycle.test.ts` and `jottathingStore.optimistic.test.ts`, covering stale queue-status fixtures, account-ownership expectations, and workspace/reload/timer assumptions. Focused conflict-review and Worker suites, root plus Worker typechecks, and the extension production build pass; keep the full-suite failures visible as unresolved test debt.

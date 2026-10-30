@@ -1331,62 +1331,12 @@ async function syncProject(project: Project): Promise<Project | undefined> {
     notionProject,
     syncConfig.selectedParentPageId,
   );
-
-  if (queuedEvent.deliveryBlocked) {
-    return withProjectSyncStatus(notionProject, 'error', queuedEvent.deliveryBlocked.message);
-  }
-
-  triggerQueueDelivery();
-
-  if (!syncConfig.connected || isBrowserOffline()) {
-    return withProjectSyncStatus(
-      notionProject,
-      'stale',
-      syncConfig.connected
-        ? 'Saved locally. Will sync when a connection is available.'
-        : 'Saved locally. Connect Notion to sync this project.',
-    );
-  }
-
-  try {
-    const response = await requestQueuedProjectSync(queuedEvent, syncConfig);
-
-    if (response.parentPage) {
-      await updateStoredSyncConfig({
-        selectedParentPageId: response.parentPage.id,
-        selectedParentPageTitle: response.parentPage.title,
-      });
+  return deliverProjectSyncEvent(project, notionProject, queuedEvent, syncConfig, (response) => {
+    if (response.project) {
+      return { ...response.project, syncMode: 'notion', syncConflicts: project.syncConflicts };
     }
-
-    if (response.status === 'error') {
-      throw new Error(response.message ?? 'Unable to sync this project.');
-    }
-
-    await removePendingProjectSyncEvents([queuedEvent.eventId]);
-    await clearProjectConflictResolutionMarkers(project.id);
-    resetQueueDeliveryBackoff();
-    return response.project
-      ? { ...response.project, syncMode: 'notion', syncConflicts: project.syncConflicts }
-      : withProjectSyncStatus(notionProject, 'saved');
-  } catch (error) {
-    if (isUnmappedContentConflict(error)) {
-      await blockPendingProjectSyncEvents(project.id, {
-        code: 'unmapped_notion_content',
-        message: error.message,
-        ...(error.diff ? { diff: { ...error.diff, localContent: project.stateContent } } : {}),
-      });
-      return withProjectSyncStatus(notionProject, 'error', error.message);
-    }
-
-    recordQueueDeliveryFailure(error);
-    scheduleNextQueueDelivery(queueDeliveryRetryDelayMs);
-
-    return withProjectSyncStatus(
-      notionProject,
-      'stale',
-      'Saved locally. Will sync when a connection is available.',
-    );
-  }
+    return withProjectSyncStatus(notionProject, 'saved');
+  });
 }
 
 async function syncProjectSource(
@@ -1407,10 +1357,28 @@ async function syncProjectSource(
     syncConfig.selectedParentPageId,
   );
 
-  if (queuedEvent.deliveryBlocked) {
-    return withProjectSyncStatus(notionProject, 'error', queuedEvent.deliveryBlocked.message);
-  }
+  return deliverProjectSyncEvent(project, notionProject, queuedEvent, syncConfig, (response) =>
+    withProjectSyncStatus({
+      ...notionProject,
+      ...(response.project?.stateSyncBaselineContent
+        ? { stateSyncBaselineContent: response.project.stateSyncBaselineContent }
+        : {}),
+    }, 'saved'),
+  );
+}
 
+/** Applies shared delivery, retry, and conflict handling for project-related events. */
+async function deliverProjectSyncEvent(
+  project: Project,
+  notionProject: Project,
+  event: ProjectSyncEvent,
+  syncConfig: SyncConfig,
+  onSuccess: (response: SyncProjectResponse) => Project | Promise<Project>,
+): Promise<Project> {
+  const target = event.type === 'project_source_upsert' ? 'source' : 'project';
+  if (event.deliveryBlocked) {
+    return withProjectSyncStatus(notionProject, 'error', event.deliveryBlocked.message);
+  }
   triggerQueueDelivery();
 
   if (!syncConfig.connected || isBrowserOffline()) {
@@ -1419,24 +1387,25 @@ async function syncProjectSource(
       'stale',
       syncConfig.connected
         ? 'Saved locally. Will sync when a connection is available.'
-        : 'Saved locally. Connect Notion to sync this source.',
+        : `Saved locally. Connect Notion to sync this ${target}.`,
     );
   }
 
   try {
-    const response = await requestQueuedProjectSync(queuedEvent, syncConfig);
-    if (response.status === 'error') {
-      throw new Error(response.message ?? 'Unable to sync this source.');
+    const response = await requestQueuedProjectSync(event, syncConfig);
+    if (event.type !== 'project_source_upsert' && response.parentPage) {
+      await updateStoredSyncConfig({
+        selectedParentPageId: response.parentPage.id,
+        selectedParentPageTitle: response.parentPage.title,
+      });
     }
-    await removePendingProjectSyncEvents([queuedEvent.eventId]);
+    if (response.status === 'error') {
+      throw new Error(response.message ?? `Unable to sync this ${target}.`);
+    }
+    await removePendingProjectSyncEvents([event.eventId]);
     await clearProjectConflictResolutionMarkers(project.id);
     resetQueueDeliveryBackoff();
-    return withProjectSyncStatus({
-      ...notionProject,
-      ...(response.project?.stateSyncBaselineContent
-        ? { stateSyncBaselineContent: response.project.stateSyncBaselineContent }
-        : {}),
-    }, 'saved');
+    return await onSuccess(response);
   } catch (error) {
     if (isUnmappedContentConflict(error)) {
       await blockPendingProjectSyncEvents(project.id, {
