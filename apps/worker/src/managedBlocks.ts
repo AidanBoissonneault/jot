@@ -43,7 +43,6 @@ export type UnmappedNotionContentDiff = {
 
 /** A safe-to-stop sync conflict caused by remote blocks absent from local mappings. */
 export class UnmappedNotionContentError extends Error {
-  readonly code = UNMAPPED_NOTION_CONTENT_CODE;
   readonly diff: UnmappedNotionContentDiff;
 
   constructor(diff: UnmappedNotionContentDiff) {

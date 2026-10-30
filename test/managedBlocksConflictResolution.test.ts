@@ -271,7 +271,6 @@ describe('granular conflict resolution races', () => {
 
     await expect(result).rejects.toMatchObject({
       name: 'UnmappedNotionContentError',
-      code: 'unmapped_notion_content',
     });
     expect(updateManagedBlock).not.toHaveBeenCalled();
   });
