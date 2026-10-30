@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { JottathingYoutube, youtubeEmbedUrl } from '@/src/extensions/media';
+import { JottathingYoutube } from '@/src/extensions/media';
+import { youtubeEmbedUrl } from '@/src/lib/youtubeUtils';
 
 describe('media extensions', () => {
   it('does not treat hostnames that only end with youtu.be as YouTube links', () => {

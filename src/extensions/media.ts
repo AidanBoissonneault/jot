@@ -7,7 +7,6 @@ import { JOTTATHING_IMAGE_MOVE_MIME, rememberJottathingImageMovePayload } from '
 import { notionClient } from '@/src/services/notionClient';
 import { cleanSyncServerUrl } from '@/src/lib/syncServerUrl';
 import { youtubeEmbedUrl } from '@/src/lib/youtubeUtils';
-export { youtubeEmbedUrl } from '@/src/lib/youtubeUtils';
 
 const YOUTUBE_ALLOW =
   'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share';
