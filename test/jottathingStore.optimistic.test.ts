@@ -84,6 +84,14 @@ const testNotionWorkspace: Workspace = {
   createdAt: '2026-01-01T00:00:00.000Z',
   updatedAt: '2026-01-01T00:00:00.000Z',
 };
+const testLocalWorkspace: Workspace = {
+  id: 'workspace-local-notion%3Atest-user',
+  name: 'Local workspace',
+  kind: 'local',
+  accountId: 'notion:test-user',
+  createdAt: '2026-01-01T00:00:00.000Z',
+  updatedAt: '2026-01-01T00:00:00.000Z',
+};
 const notionTestProject: Project = {
   ...baseProject,
   workspaceId: testNotionWorkspace.id,
@@ -1621,21 +1629,20 @@ describe('project metadata', () => {
   });
 
   test('initial hydration keeps the starter project when the remote workspace is new', async () => {
+    const localProject = { ...baseProject, workspaceId: testLocalWorkspace.id, syncMode: 'local' as const };
+    const localPage = localWorkspacePage(basePage);
     vi.stubGlobal('fetch', vi.fn()
       .mockResolvedValueOnce(jsonResponse({ hasPending: false }))
       .mockResolvedValueOnce(jsonResponse({
-      activePageIdsByProject: {},
-      currentProjectId: '',
-      pages: [],
-      projects: [],
-      status: 'saved',
+        activePageIdsByProject: {},
+        currentProjectId: '',
+        pages: [],
+        projects: [],
+        status: 'saved',
       })));
     resetBrowserStorage({
-      activePageIdsByProject: { 'project-jottathing': 'page-jottathing' },
-      currentProjectId: 'project-jottathing',
+      ...localWorkspaceStorage(localPage, localProject),
       hasMigratedCapturesToPages: true,
-      pages: [basePage],
-      projects: [baseProject],
       syncConfig: {
         ...connectedConfig,
         workspaceId: 'workspace-new',
@@ -1651,7 +1658,7 @@ describe('project metadata', () => {
     expect((readBrowserStorage().projects as Project[]).map((project) => project.id))
       .toEqual(['project-jottathing']);
     expect(readBrowserStorage().notionHydrationSource).toBe(
-      'http://localhost:8787::workspace-new',
+      'http://localhost:8787::notion:test-user::workspace-new',
     );
   });
 
@@ -1664,12 +1671,9 @@ describe('project metadata', () => {
       content: docWithText('cached local notes'),
     };
     resetBrowserStorage({
-      activePageIdsByProject: { 'project-jottathing': 'page-jottathing' },
-      currentProjectId: 'project-jottathing',
+      ...localWorkspaceStorage(localPage),
       hasExplicitlyLoggedOut: false,
       hasMigratedCapturesToPages: true,
-      pages: [localPage],
-      projects: [baseProject],
       syncConfig: connectedConfig,
     });
 
@@ -1695,12 +1699,9 @@ describe('project metadata', () => {
       content: docWithText('still available offline'),
     };
     resetBrowserStorage({
-      activePageIdsByProject: { 'project-jottathing': 'page-jottathing' },
-      currentProjectId: 'project-jottathing',
+      ...localWorkspaceStorage(localPage),
       hasExplicitlyLoggedOut: false,
       hasMigratedCapturesToPages: true,
-      pages: [localPage],
-      projects: [baseProject],
       syncConfig: connectedConfig,
     });
 
@@ -3423,6 +3424,34 @@ async function setupStoreWithPages(
     syncConfig: connectedConfig,
   });
   await seedStore(store, pages);
+}
+
+function localWorkspacePage(page: ProjectPage): ProjectPage {
+  return {
+    ...page,
+    workspaceId: testLocalWorkspace.id,
+    syncMode: 'local',
+    syncAccountId: testLocalWorkspace.accountId,
+    syncWorkspaceId: undefined,
+  };
+}
+
+function localWorkspaceStorage(page: ProjectPage, project = baseProject) {
+  const localProject = {
+    ...project,
+    workspaceId: testLocalWorkspace.id,
+    syncMode: 'local' as const,
+  };
+  const localPage = localWorkspacePage(page);
+  return {
+    activePageIdsByProject: { [localProject.id]: localPage.id },
+    currentProjectId: localProject.id,
+    currentProjectIdByWorkspace: { [testLocalWorkspace.id]: localProject.id },
+    currentWorkspaceId: testLocalWorkspace.id,
+    pages: [localPage],
+    projects: [localProject],
+    workspaces: [testLocalWorkspace],
+  };
 }
 
 async function seedStore(
