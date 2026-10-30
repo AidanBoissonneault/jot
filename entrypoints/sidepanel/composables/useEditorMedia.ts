@@ -2,6 +2,7 @@
 import { ref, type Ref, type ShallowRef } from 'vue';
 import type { Editor } from '@tiptap/core';
 import { notionClient } from '@/src/services/notionClient';
+import { bytesToBase64 } from '@/src/lib/base64';
 import type { useJottathingStore } from '@/src/stores/jottathing';
 import { createJottathingBlockId } from '@/src/extensions/jottathingBlockIds';
 import {
@@ -239,10 +240,5 @@ function isHttpAudioUrl(value: string) {
 
 async function fileToDataUrl(file: File, mimeType = file.type): Promise<string> {
   const bytes = new Uint8Array(await file.arrayBuffer());
-  let binary = '';
-  const chunkSize = 8192;
-  for (let index = 0; index < bytes.length; index += chunkSize) {
-    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
-  }
-  return `data:${mimeType || 'application/octet-stream'};base64,${btoa(binary)}`;
+  return `data:${mimeType || 'application/octet-stream'};base64,${bytesToBase64(bytes)}`;
 }

@@ -28,6 +28,7 @@ import type {
   SourceOpenPayload,
 } from '@/src/types/messages';
 import { normalizeCodeLanguage } from '@/src/lib/codeLanguages';
+import { bytesToBase64 } from '@/src/lib/base64';
 import { cleanSyncServerUrl } from '@/src/lib/syncServerUrl';
 import { pruneOrphanedProjectStateSources } from '@/src/lib/projectStateSources';
 import { stripSyncConflictBlocks } from '@/src/lib/syncConflictReview';
@@ -1889,17 +1890,11 @@ async function uploadMediaBlob(
   filename: string,
   syncConfig: SyncConfig,
 ): Promise<string> {
-  const buf = await blob.arrayBuffer();
-  const bytes = new Uint8Array(buf);
-  let binary = '';
-  const chunkSize = 8192;
-  for (let index = 0; index < bytes.length; index += chunkSize) {
-    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
-  }
+  const bytes = new Uint8Array(await blob.arrayBuffer());
 
   const response = await requestServer<MediaUploadResponse>('/media/upload', {
     method: 'POST',
-    body: JSON.stringify({ dataBase64: btoa(binary), mimeType, filename }),
+    body: JSON.stringify({ dataBase64: bytesToBase64(bytes), mimeType, filename }),
   }, syncConfig);
 
   if (!response.fileUploadId) {
