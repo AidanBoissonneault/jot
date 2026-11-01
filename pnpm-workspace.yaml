@@ -26,7 +26,7 @@ overrides:
 
 allowBuilds:
   esbuild: true
-  fallow: set this to true or false
+  fallow: true
   sharp: set this to true or false
   spawn-sync: true
   workerd: true
