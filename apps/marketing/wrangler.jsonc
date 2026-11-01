@@ -1,0 +1,7 @@
+{
+  "name": "jottathing",
+  "compatibility_date": "2026-10-31",
+  "assets": {
+    "directory": "./dist"
+  }
+}
